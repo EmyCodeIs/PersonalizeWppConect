@@ -37,6 +37,10 @@ function mapList(name) {
     }, {});
 }
 
+const serviceLabelLetreiro = process.env.SERVICE_LABEL_LETREIRO || 'Orçamento letreiro';
+const serviceLabelPlotagem = process.env.SERVICE_LABEL_PLOTAGEM || 'Plotagens';
+const serviceLabelOutros = process.env.SERVICE_LABEL_OUTROS || 'Outros';
+
 const env = {
   sessionName: process.env.WPP_SESSION_NAME || 'personalize-wppconnect',
   mockMode: bool('MOCK_MODE', false),
@@ -50,8 +54,15 @@ const env = {
   stopNonLetteringFlow: bool('STOP_NON_LETTERING_FLOW', true),
   enableContactNotes: bool('ENABLE_CONTACT_NOTES', true),
   enableContactLabels: bool('ENABLE_CONTACT_LABELS', true),
-  awaitingQuoteLabelName: process.env.AWAITING_QUOTE_LABEL_NAME || 'Aguardando orçamento',
+  awaitingQuoteLabelName: process.env.AWAITING_QUOTE_LABEL_NAME || serviceLabelLetreiro,
   awaitingQuoteLabelColor: process.env.AWAITING_QUOTE_LABEL_COLOR || 'green',
+  serviceLabelLetreiro,
+  serviceLabelPlotagem,
+  serviceLabelOutros,
+  serviceLabelLetreiroColor: process.env.SERVICE_LABEL_LETREIRO_COLOR || 'green',
+  serviceLabelPlotagemColor: process.env.SERVICE_LABEL_PLOTAGEM_COLOR || 'gray',
+  serviceLabelOutrosColor: process.env.SERVICE_LABEL_OUTROS_COLOR || 'red',
+  serviceLabelReplaceGroup: list('SERVICE_LABEL_REPLACE_GROUP', [serviceLabelLetreiro, serviceLabelPlotagem, serviceLabelOutros]),
   enableUnreadBootstrap: bool('ENABLE_UNREAD_BOOTSTRAP', true),
   unreadBootstrapDelayMs: Math.max(1000, num('UNREAD_BOOTSTRAP_DELAY_MS', 6000)),
   unreadBootstrapMaxChats: Math.max(1, num('UNREAD_BOOTSTRAP_MAX_CHATS', 30)),
