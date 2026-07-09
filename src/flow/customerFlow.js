@@ -154,7 +154,7 @@ async function processCustomerMessage({ clientId, text, channel }) {
   const input = String(text || '').trim();
   if (!session || !input) return session;
 
-  if (/^\/resetarsys$/i.test(input)) {
+  if (env.enableTestCommands && /^\/resetarsys$/i.test(input)) {
     const result = Store.resetSystem();
     await channel.sendText(
       clientId,
@@ -169,7 +169,7 @@ async function processCustomerMessage({ clientId, text, channel }) {
   if (foundName && !d.nome) d.nome = foundName;
   if (foundPhone && !d.telefone) d.telefone = foundPhone;
 
-  if (/^\/(reset|reiniciar)$/i.test(input)) {
+  if (env.enableTestCommands && /^\/(reset|reiniciar)$/i.test(input)) {
     const fresh = Store.resetSession(clientId);
     await channel.sendText(clientId, 'Atendimento reiniciado para teste. Envie uma nova mensagem para começar.');
     return fresh;
