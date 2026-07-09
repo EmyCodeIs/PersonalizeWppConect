@@ -1,6 +1,7 @@
 'use strict';
 
 const { messages } = require('../core/messages');
+const { sendMenu } = require('../core/menuCatalog');
 const { detectInitialContext } = require('../core/intent');
 const { parseMeasure, splitColors, normalizeText, extractName, extractPhone } = require('../core/parsers');
 const Store = require('../services/leadStore');
@@ -113,6 +114,14 @@ async function markAwaitingQuote(channel, clientId, session) {
   }
 }
 
+async function askTipoAcrilico(channel, clientId) {
+  await sendMenu(channel, clientId, 'tipoAcrilico');
+}
+
+async function askConfirmarFluxo(channel, clientId) {
+  await sendMenu(channel, clientId, 'confirmarFluxo');
+}
+
 async function processCustomerMessage({ clientId, text, channel }) {
   const session = Store.getSession(clientId);
   const input = String(text || '').trim();
@@ -154,13 +163,13 @@ async function processCustomerMessage({ clientId, text, channel }) {
       session.etapa = 'tipo_acrilico';
       Store.saveSession(session);
       await channel.sendText(clientId, messages.mostruario);
-      await channel.sendText(clientId, messages.askAcrylicType);
+      await askTipoAcrilico(channel, clientId);
       return session;
     }
 
     session.etapa = 'confirmar_fluxo';
     Store.saveSession(session);
-    await channel.sendText(clientId, messages.askFlow);
+    await askConfirmarFluxo(channel, clientId);
     return session;
   }
 
@@ -171,7 +180,7 @@ async function processCustomerMessage({ clientId, text, channel }) {
       session.etapa = 'tipo_acrilico';
       Store.saveSession(session);
       await channel.sendText(clientId, messages.mostruario);
-      await channel.sendText(clientId, messages.askAcrylicType);
+      await askTipoAcrilico(channel, clientId);
       return session;
     }
     if (opt === 2) {
@@ -183,14 +192,14 @@ async function processCustomerMessage({ clientId, text, channel }) {
       await channel.sendText(clientId, messages.nonLettering);
       return { ...session, lead };
     }
-    await channel.sendText(clientId, messages.askFlow);
+    await askConfirmarFluxo(channel, clientId);
     return session;
   }
 
   if (session.etapa === 'tipo_acrilico') {
     const tipo = acrylicTypeFromText(input);
     if (!tipo) {
-      await channel.sendText(clientId, messages.askAcrylicType);
+      await askTipoAcrilico(channel, clientId);
       return session;
     }
     d.tipoAcrilico = tipo;
@@ -202,7 +211,7 @@ async function processCustomerMessage({ clientId, text, channel }) {
     }
     session.etapa = 'qtd_cores';
     Store.saveSession(session);
-    await channel.sendText(clientId, messages.askColorCount);
+    await sendMenu(channel, clientId, 'quantidadeCores');
     return session;
   }
 
@@ -210,14 +219,14 @@ async function processCustomerMessage({ clientId, text, channel }) {
     d.pantoneDescricao = input;
     session.etapa = 'espessura_personalizada';
     Store.saveSession(session);
-    await channel.sendText(clientId, messages.askPersonalizedThickness);
+    await sendMenu(channel, clientId, 'espessuraPersonalizada');
     return session;
   }
 
   if (session.etapa === 'qtd_cores') {
     const n = optionNumber(input);
     if (!n || n < 1 || n > 5) {
-      await channel.sendText(clientId, messages.askColorCount);
+      await sendMenu(channel, clientId, 'quantidadeCores');
       return session;
     }
     d.corBasicaQtd = n;
@@ -237,40 +246,40 @@ async function processCustomerMessage({ clientId, text, channel }) {
     session.etapa = 'profundidade';
     Store.saveSession(session);
     await channel.sendText(clientId, messages.fixed3mm);
-    await channel.sendText(clientId, messages.askDepth);
+    await sendMenu(channel, clientId, 'profundidade');
     return session;
   }
 
   if (session.etapa === 'profundidade') {
     const depth = depthFromText(input);
     if (!depth) {
-      await channel.sendText(clientId, messages.askDepth);
+      await sendMenu(channel, clientId, 'profundidade');
       return session;
     }
     d.espessura = depth;
     session.etapa = 'arte';
     Store.saveSession(session);
-    await channel.sendText(clientId, messages.askArt);
+    await sendMenu(channel, clientId, 'arte');
     return session;
   }
 
   if (session.etapa === 'espessura_personalizada') {
     const thickness = personalizedThicknessFromText(input);
     if (!thickness) {
-      await channel.sendText(clientId, messages.askPersonalizedThickness);
+      await sendMenu(channel, clientId, 'espessuraPersonalizada');
       return session;
     }
     d.espessura = thickness;
     session.etapa = 'arte';
     Store.saveSession(session);
-    await channel.sendText(clientId, messages.askArt);
+    await sendMenu(channel, clientId, 'arte');
     return session;
   }
 
   if (session.etapa === 'arte') {
     const art = artFromText(input);
     if (!art) {
-      await channel.sendText(clientId, messages.askArt);
+      await sendMenu(channel, clientId, 'arte');
       return session;
     }
     d.arte = art;
@@ -298,14 +307,14 @@ async function processCustomerMessage({ clientId, text, channel }) {
     d.cidade = input;
     session.etapa = 'envio';
     Store.saveSession(session);
-    await channel.sendText(clientId, messages.askDelivery);
+    await sendMenu(channel, clientId, 'envio');
     return session;
   }
 
   if (session.etapa === 'envio') {
     const delivery = deliveryFromText(input);
     if (!delivery) {
-      await channel.sendText(clientId, messages.askDelivery);
+      await sendMenu(channel, clientId, 'envio');
       return session;
     }
     d.envio = delivery;
