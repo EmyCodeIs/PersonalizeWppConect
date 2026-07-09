@@ -6,9 +6,9 @@ A intenção desta base é portar o fluxo do cliente para o canal não oficial, 
 
 - cliente manda uma ou várias mensagens;
 - sistema agrupa com buffer;
-- tenta identificar origem/landing, nome, telefone e intenção;
-- se for letreiro, segue o fluxo de letreiro;
-- se for outro serviço, salva lead e orienta atendimento humano;
+- primeira resposta do bot é saudação + lista de serviços;
+- se o cliente escolher **Letreiro de acrílico**, envia o mostruário e segue o fluxo de letreiro;
+- se escolher **Plotagem** ou **Outros**, salva lead e orienta atendimento humano;
 - salva sessões e leads em arquivos locais;
 - quando o pré-atendimento de letreiro fica pronto para orçamento, grava uma nota no contato e tenta aplicar a etiqueta verde **Aguardando orçamento**.
 
@@ -32,6 +32,59 @@ npm start
 
 Depois leia o QR Code que aparecer no terminal/navegador.
 
+## Entrada do fluxo
+
+A primeira resposta após o buffer é:
+
+```txt
+Olá, {nome}! 👋
+Bem-vindo(a) ao Canal de Atendimento da Personalize!
+```
+
+Depois o bot envia a lista:
+
+```txt
+🔸
+Qual dos nossos serviço deseja?
+
+* Letreiro de acrílico
+* Plotagem
+* Outros
+```
+
+Ao clicar em **Letreiro de acrílico**, ele envia o mostruário e depois a lista de tipo de acrílico.
+
+## Assets do mostruário
+
+Salve a imagem do mostruário em uma destas opções:
+
+```txt
+assets/Mostruario_Letreiro.png
+assets/Mostruario_Letreiro.jpg
+assets/Mostruario_Letreiro.jpeg
+assets/Mostruario_Letreiro.webp
+```
+
+Se o PDF ficar online, configure no `.env`:
+
+```env
+MOSTRUARIO_LETREIRO_PDF_URL=https://seu-link-do-pdf-aqui
+```
+
+Se quiser enviar PDF local, use:
+
+```txt
+assets/Mostruario_Letreiro.pdf
+```
+
+ou configure:
+
+```env
+MOSTRUARIO_LETREIRO_PDF_PATH=assets/Mostruario_Letreiro.pdf
+```
+
+No WPPConnect, botão CTA de URL como na API oficial pode não estar disponível de forma estável. Por isso o sistema envia a imagem e depois envia o link do PDF como fallback seguro.
+
 ## Nota e etiqueta no WhatsApp Business
 
 Ao finalizar a coleta de letreiro, o sistema salva o lead localmente e tenta registrar no contato:
@@ -54,15 +107,18 @@ A aplicação usa tentativa segura porque o suporte a notas/etiquetas pode varia
 
 ```txt
 src/
-  config/env.js              Configuracao de ambiente
-  core/bufferManager.js      Buffer de multiplas mensagens
-  core/intent.js             Identificacao inicial: letreiro, landing, outro servico
-  core/messages.js           Textos do fluxo cliente
-  core/parsers.js            Extracao de nome, telefone e medidas
-  flow/customerFlow.js       Maquina de estados do pre-atendimento
-  services/leadStore.js      Persistencia local de sessoes/leads
+  config/env.js                Configuracao de ambiente
+  core/bufferManager.js        Buffer de multiplas mensagens
+  core/intent.js               Identificacao inicial: landing, nome, telefone e intenção
+  core/menuCatalog.js          Menus/listas interativas com fallback texto
+  core/messages.js             Textos do fluxo cliente
+  core/mostruario.js           Envio do mostruario por imagem/PDF/link
+  core/parsers.js              Extracao de nome, telefone e medidas
+  flow/customerFlow.js         Maquina de estados do pre-atendimento
+  services/leadStore.js        Persistencia local de sessoes/leads
   services/wppconnectClient.js Adaptador do WPPConnect
-scripts/test-flow.js         Simulador de conversa no terminal
+assets/                         Imagens/PDFs locais do fluxo
+scripts/test-flow.js            Simulador de conversa no terminal
 ```
 
 ## Comandos uteis
