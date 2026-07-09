@@ -74,22 +74,43 @@ function buildLead(session, reason) {
   };
 }
 
-async function maybeSetBusinessNote(channel, clientId, session, reason = 'lead') {
-  if (!env.enableContactNotes || !channel?.setContactNote) return;
+function buildBusinessNote(session, reason = 'lead') {
   const d = session.dados || {};
-  const note = [
-    'Cliente veio pelo bot WPPConnect',
+  return [
+    reason === 'letreiro_aguardando_orcamento'
+      ? '🟢 Aguardando orçamento - Bot WPPConnect'
+      : 'Cliente veio pelo bot WPPConnect',
     `Motivo: ${reason}`,
+    d.origem ? `Origem: ${d.origem}` : null,
     d.nome ? `Nome: ${d.nome}` : null,
     d.telefone ? `Telefone: ${d.telefone}` : null,
     d.flow ? `Fluxo: ${d.flow}` : null,
     d.tipoAcrilico ? `Tipo: ${d.tipoAcrilico}` : null,
+    d.pantoneDescricao ? `Pantone/cor personalizada: ${d.pantoneDescricao}` : null,
     d.coresSelecionadas?.length ? `Cores: ${d.coresSelecionadas.join(', ')}` : null,
+    d.corBasicaQtd ? `Qtd. cores: ${d.corBasicaQtd}` : null,
+    d.espessura ? `Espessura/acréscimo: ${d.espessura}` : null,
+    d.arte ? `Arte: ${d.arte}` : null,
     d.medida?.descricao ? `Medida: ${d.medida.descricao}` : null,
     d.cidade ? `Cidade: ${d.cidade}` : null,
     d.envio ? `Envio: ${d.envio}` : null,
+    d.endereco ? `Endereço: ${d.endereco}` : null,
   ].filter(Boolean).join('\n');
-  await channel.setContactNote(clientId, note).catch(() => null);
+}
+
+async function maybeSetBusinessNote(channel, clientId, session, reason = 'lead') {
+  if (!env.enableContactNotes || !channel?.setContactNote) return;
+  await channel.setContactNote(clientId, buildBusinessNote(session, reason)).catch(() => null);
+}
+
+async function markAwaitingQuote(channel, clientId, session) {
+  await maybeSetBusinessNote(channel, clientId, session, 'letreiro_aguardando_orcamento');
+  if (env.enableContactLabels && channel?.applyContactLabel) {
+    await channel.applyContactLabel(clientId, {
+      name: env.awaitingQuoteLabelName,
+      color: env.awaitingQuoteLabelColor,
+    }).catch(() => null);
+  }
 }
 
 async function processCustomerMessage({ clientId, text, channel }) {
@@ -293,7 +314,7 @@ async function processCustomerMessage({ clientId, text, channel }) {
       session.completed = true;
       Store.saveSession(session);
       const lead = Store.appendLead(buildLead(session, 'letreiro_pre_atendimento_completo'));
-      await maybeSetBusinessNote(channel, clientId, session, 'letreiro_completo');
+      await markAwaitingQuote(channel, clientId, session);
       await channel.sendText(clientId, messages.pickupAddress);
       await channel.sendText(clientId, messages.forwardQuote);
       return { ...session, lead };
@@ -313,7 +334,7 @@ async function processCustomerMessage({ clientId, text, channel }) {
     session.completed = true;
     Store.saveSession(session);
     const lead = Store.appendLead(buildLead(session, 'letreiro_pre_atendimento_completo'));
-    await maybeSetBusinessNote(channel, clientId, session, 'letreiro_completo');
+    await markAwaitingQuote(channel, clientId, session);
     await channel.sendText(clientId, messages.forwardQuote);
     return { ...session, lead };
   }
@@ -322,4 +343,4 @@ async function processCustomerMessage({ clientId, text, channel }) {
   return session;
 }
 
-module.exports = { processCustomerMessage };
+module.exports = { processCustomerMessage, buildBusinessNote };
