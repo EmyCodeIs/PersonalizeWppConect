@@ -37,35 +37,53 @@ function normalizeClientId(clientId) {
   return String(clientId || '').replace(/\D/g, '');
 }
 
+function createSession(id) {
+  return {
+    id,
+    clientId: id,
+    etapa: 'inicio',
+    dados: {},
+    createdAt: nowIso(),
+    updatedAt: nowIso(),
+    completed: false,
+  };
+}
+
+function migrateSession(session, id) {
+  const next = session && typeof session === 'object' ? session : createSession(id);
+  next.id = next.id || id;
+  next.clientId = next.clientId || id;
+  next.etapa = next.etapa || next.step || 'inicio';
+  next.dados = next.dados || next.data || {};
+  next.createdAt = next.createdAt || nowIso();
+  next.updatedAt = next.updatedAt || nowIso();
+  return next;
+}
+
 function getSession(clientId) {
   const id = normalizeClientId(clientId);
   if (!id) return null;
-  if (!state.sessions[id]) {
-    state.sessions[id] = {
-      clientId: id,
-      step: 'initial',
-      data: {},
-      createdAt: nowIso(),
-      updatedAt: nowIso(),
-      finished: false,
-    };
-  }
+  state.sessions[id] = migrateSession(state.sessions[id], id);
   return state.sessions[id];
 }
 
 function saveSession(session) {
-  if (!session?.clientId) return null;
-  session.updatedAt = nowIso();
-  state.sessions[session.clientId] = session;
+  if (!session?.clientId && !session?.id) return null;
+  const id = normalizeClientId(session.clientId || session.id);
+  const next = migrateSession(session, id);
+  next.updatedAt = nowIso();
+  state.sessions[id] = next;
   state.lastSavedAt = nowIso();
   writeJson(SESSIONS_PATH, state);
-  return session;
+  return next;
 }
 
 function resetSession(clientId) {
   const id = normalizeClientId(clientId);
-  if (id) delete state.sessions[id];
+  if (!id) return null;
+  state.sessions[id] = createSession(id);
   writeJson(SESSIONS_PATH, state);
+  return state.sessions[id];
 }
 
 function appendLead(payload = {}) {
