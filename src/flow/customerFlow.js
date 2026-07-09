@@ -2,7 +2,12 @@
 
 const { messages } = require('../core/messages');
 const { sendMenu } = require('../core/menuCatalog');
-const { sendMostruarioLetreiro } = require('../core/mostruario');
+const {
+  sendMostruarioLetreiro,
+  sendTabelaCores,
+  sendTabelaEspessura,
+  sendTabelaProfundidade,
+} = require('../core/mostruario');
 const { replaceServiceLabel } = require('../core/serviceLabels');
 const { detectInitialContext } = require('../core/intent');
 const { parseMeasure, splitColors, normalizeText, extractName, extractPhone } = require('../core/parsers');
@@ -215,10 +220,12 @@ async function processCustomerMessage({ clientId, text, channel }) {
       session.etapa = 'pantone';
       Store.saveSession(session);
       await channel.sendText(clientId, messages.askPantone);
+      await sendTabelaEspessura(channel, clientId);
       return session;
     }
     session.etapa = 'qtd_cores';
     Store.saveSession(session);
+    await sendTabelaCores(channel, clientId);
     await sendMenu(channel, clientId, 'quantidadeCores');
     return session;
   }
@@ -254,6 +261,7 @@ async function processCustomerMessage({ clientId, text, channel }) {
     session.etapa = 'profundidade';
     Store.saveSession(session);
     await channel.sendText(clientId, messages.fixed3mm);
+    await sendTabelaProfundidade(channel, clientId);
     await sendMenu(channel, clientId, 'profundidade');
     return session;
   }
