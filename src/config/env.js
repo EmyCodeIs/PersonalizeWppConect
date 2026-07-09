@@ -16,6 +16,8 @@ function num(name, fallback) {
 const env = {
   sessionName: process.env.WPP_SESSION_NAME || 'personalize-wppconnect',
   mockMode: bool('MOCK_MODE', false),
+  // false por padrão para abrir uma janela visível do Chrome/WhatsApp Web no teste real.
+  wppHeadless: bool('WPP_HEADLESS', false),
   businessName: process.env.BUSINESS_NAME || 'Personalize',
   sellerName: process.env.SELLER_NAME || 'Vendedor Personalize',
   bufferMs: Math.max(1000, num('BUFFER_MS', 4500)),
