@@ -15,7 +15,8 @@ function num(name, fallback) {
 
 function list(name, fallback = []) {
   const raw = process.env[name];
-  if (!raw) return fallback;
+  if (raw === undefined || raw === null) return fallback;
+  if (String(raw).trim() === '') return [];
   return String(raw)
     .split(/[;,\n]/)
     .map((item) => item.trim())
@@ -55,8 +56,8 @@ const env = {
   unreadBootstrapDelayMs: Math.max(1000, num('UNREAD_BOOTSTRAP_DELAY_MS', 6000)),
   unreadBootstrapMaxChats: Math.max(1, num('UNREAD_BOOTSTRAP_MAX_CHATS', 30)),
   unreadBootstrapMaxMessagesPerChat: Math.max(1, num('UNREAD_BOOTSTRAP_MAX_MESSAGES_PER_CHAT', 8)),
-  // Whitelist temporária de teste: vazio = atende qualquer contato. Durante teste, use só seu número.
-  allowedClientNumbers: list('ALLOWED_CLIENT_NUMBERS', ['31971386091']),
+  // Whitelist temporária de teste: vazio = atende qualquer contato.
+  allowedClientNumbers: list('ALLOWED_CLIENT_NUMBERS', []),
   allowedChatIds: list('ALLOWED_CHAT_IDS', []),
   // Mapeamento manual quando o WhatsApp só entrega @lid e não expõe o telefone.
   // Ex: 18885055098907@lid=31971386091
