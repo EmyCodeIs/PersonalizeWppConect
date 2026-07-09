@@ -26,7 +26,106 @@ function createMockChannel() {
     async setContactNote(clientId, note) {
       console.log(`\n[NOTA ${clientId}]\n${note}\n`);
     },
+    async applyContactLabel(clientId, label) {
+      console.log(`\n[ETIQUETA ${clientId}] ${label?.name || label} (${label?.color || 'green'})\n`);
+    },
   };
+}
+
+async function tryClientLabelApi(client, chatId, labelName, color) {
+  const methods = [
+    async () => {
+      if (typeof client.getAllLabels !== 'function') return false;
+      const labels = await client.getAllLabels();
+      const found = Array.isArray(labels)
+        ? labels.find((item) => String(item?.name || item?.label || '').toLowerCase() === labelName.toLowerCase())
+        : null;
+      let label = found;
+      if (!label && typeof client.createLabel === 'function') {
+        label = await client.createLabel(labelName, color);
+      }
+      const labelId = label?.id || label?.labelId || label?.hexColor || label?.name || labelName;
+      if (!labelId) return false;
+      if (typeof client.addChatWLabels === 'function') {
+        await client.addChatWLabels(chatId, [labelId]);
+        return true;
+      }
+      if (typeof client.addOrRemoveLabels === 'function') {
+        await client.addOrRemoveLabels([chatId], [labelId], []);
+        return true;
+      }
+      if (typeof client.addLabelToChat === 'function') {
+        await client.addLabelToChat(chatId, labelId);
+        return true;
+      }
+      return false;
+    },
+    async () => {
+      if (typeof client.addChatWLabels !== 'function') return false;
+      await client.addChatWLabels(chatId, [labelName]);
+      return true;
+    },
+  ];
+
+  for (const run of methods) {
+    try {
+      const ok = await run();
+      if (ok) return true;
+    } catch (_) {}
+  }
+  return false;
+}
+
+async function tryPageLabelApi(client, chatId, labelName, color) {
+  if (!client?.page?.evaluate) return false;
+  try {
+    return await client.page.evaluate(async ({ chatId, labelName, color }) => {
+      const lower = String(labelName || '').toLowerCase();
+      const WPP = window.WPP || null;
+      if (!WPP) return false;
+
+      async function getLabels() {
+        if (WPP.labels?.getAllLabels) return WPP.labels.getAllLabels();
+        if (WPP.label?.getAllLabels) return WPP.label.getAllLabels();
+        if (WPP.chat?.getLabels) return WPP.chat.getLabels();
+        return [];
+      }
+
+      async function createLabel() {
+        if (WPP.labels?.create) return WPP.labels.create(labelName, { color });
+        if (WPP.label?.create) return WPP.label.create(labelName, { color });
+        if (WPP.labels?.addLabel) return WPP.labels.addLabel(labelName, color);
+        return null;
+      }
+
+      const labels = await getLabels().catch(() => []);
+      const list = Array.isArray(labels) ? labels : Object.values(labels || {});
+      let label = list.find((item) => String(item?.name || item?.label || '').toLowerCase() === lower) || null;
+      if (!label) label = await createLabel().catch(() => null);
+      const labelId = label?.id || label?.labelId || label?.name || labelName;
+      if (!labelId) return false;
+
+      if (WPP.chat?.addLabels) {
+        await WPP.chat.addLabels(chatId, [labelId]);
+        return true;
+      }
+      if (WPP.chat?.addLabel) {
+        await WPP.chat.addLabel(chatId, labelId);
+        return true;
+      }
+      if (WPP.labels?.addChatLabels) {
+        await WPP.labels.addChatLabels(chatId, [labelId]);
+        return true;
+      }
+      if (WPP.label?.addChatLabels) {
+        await WPP.label.addChatLabels(chatId, [labelId]);
+        return true;
+      }
+      return false;
+    }, { chatId, labelName, color });
+  } catch (_) {
+    return false;
+  }
 }
 
 async function createWppChannel({ onMessage, onQr } = {}) {
@@ -69,6 +168,21 @@ async function createWppChannel({ onMessage, onQr } = {}) {
       } catch (err) {
         console.warn('[WPPConnect] nao foi possivel salvar nota:', err?.message || err);
       }
+    },
+    async applyContactLabel(clientId, label = {}) {
+      if (!env.enableContactLabels) return false;
+      const chatId = normalizeChatId(clientId);
+      const labelName = String(label.name || env.awaitingQuoteLabelName || 'Aguardando orçamento').trim();
+      const color = String(label.color || env.awaitingQuoteLabelColor || 'green').trim();
+      if (!chatId || !labelName) return false;
+
+      const ok = await tryClientLabelApi(client, chatId, labelName, color)
+        || await tryPageLabelApi(client, chatId, labelName, color);
+
+      if (!ok) {
+        console.warn(`[WPPConnect] nao foi possivel aplicar etiqueta "${labelName}" em ${chatId}. Verifique suporte da versao/sessao Business.`);
+      }
+      return ok;
     },
   };
 
