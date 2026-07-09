@@ -1,5 +1,13 @@
 'use strict';
 
+function normalizeBufferId(clientId) {
+  const raw = String(clientId || '').trim();
+  if (!raw) return '';
+  // Preserva IDs reais do WhatsApp, incluindo @c.us, @lid e @g.us.
+  // Converter para apenas dígitos quebra conversas novas/LID e causa erro "No LID for user" ao responder.
+  return raw;
+}
+
 class BufferManager {
   constructor({ delayMs, onFlush }) {
     this.delayMs = Math.max(500, Number(delayMs || 4500));
@@ -8,10 +16,10 @@ class BufferManager {
   }
 
   push(clientId, message) {
-    const id = String(clientId || '').replace(/\D/g, '');
+    const id = normalizeBufferId(clientId);
     if (!id) return;
     const item = this.map.get(id) || { messages: [], timer: null };
-    item.messages.push(message);
+    item.messages.push({ ...message, chatId: id });
     if (item.timer) clearTimeout(item.timer);
     item.timer = setTimeout(async () => {
       const current = this.map.get(id);
@@ -34,4 +42,4 @@ function mergeMessages(messages = []) {
     .join('\n');
 }
 
-module.exports = { BufferManager, mergeMessages };
+module.exports = { BufferManager, mergeMessages, normalizeBufferId };
