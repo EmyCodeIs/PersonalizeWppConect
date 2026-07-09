@@ -93,22 +93,28 @@ function buildLead(session, reason) {
 
 function buildBusinessNote(session, reason = 'lead') {
   const d = session.dados || {};
+  const demanda = d.demanda || {};
   return [
     reason === 'letreiro_aguardando_orcamento'
-      ? '🟢 Aguardando orçamento - Bot WPPConnect'
-      : 'Cliente veio pelo bot WPPConnect',
+      ? '🟢 Orçamento letreiro - Bot WPPConnect'
+      : `Atendimento ${d.flow || 'cliente'} - Bot WPPConnect`,
     `Motivo: ${reason}`,
     d.origem ? `Origem: ${d.origem}` : null,
     d.nome ? `Nome: ${d.nome}` : null,
     d.telefone ? `Telefone: ${d.telefone}` : null,
-    d.flow ? `Fluxo: ${d.flow}` : null,
+    d.flow ? `Serviço: ${d.flow}` : null,
+    demanda.descricao ? `Demanda: ${demanda.descricao}` : null,
+    demanda.medida ? `Medida: ${demanda.medida}` : null,
+    demanda.local ? `Local/aplicação: ${demanda.local}` : null,
+    demanda.referencia ? `Referência/detalhes: ${demanda.referencia}` : null,
+    demanda.prazo ? `Prazo: ${demanda.prazo}` : null,
     d.tipoAcrilico ? `Tipo: ${d.tipoAcrilico}` : null,
     d.pantoneDescricao ? `Pantone/cor personalizada: ${d.pantoneDescricao}` : null,
     d.coresSelecionadas?.length ? `Cores: ${d.coresSelecionadas.join(', ')}` : null,
     d.corBasicaQtd ? `Qtd. cores: ${d.corBasicaQtd}` : null,
     d.espessura ? `Espessura/acréscimo: ${d.espessura}` : null,
     d.arte ? `Arte: ${d.arte}` : null,
-    d.medida?.descricao ? `Medida: ${d.medida.descricao}` : null,
+    d.medida?.descricao ? `Medida letreiro: ${d.medida.descricao}` : null,
     d.cidade ? `Cidade: ${d.cidade}` : null,
     d.envio ? `Envio: ${d.envio}` : null,
     d.endereco ? `Endereço: ${d.endereco}` : null,
@@ -123,6 +129,20 @@ async function maybeSetBusinessNote(channel, clientId, session, reason = 'lead')
 async function markAwaitingQuote(channel, clientId, session) {
   await maybeSetBusinessNote(channel, clientId, session, 'letreiro_aguardando_orcamento');
   await replaceServiceLabel(channel, clientId, 'letreiro').catch(() => null);
+}
+
+async function markSellerHandoff(channel, clientId, session, service, reason) {
+  session.completed = true;
+  session.dados.botDone = true;
+  session.dados.pausedBySeller = true;
+  session.etapa = `aguardando_vendedor_${service}`;
+  Store.saveSession(session);
+  const lead = Store.appendLead(buildLead(session, reason));
+  await replaceServiceLabel(channel, clientId, service).catch(() => null);
+  await maybeSetBusinessNote(channel, clientId, session, reason);
+  await channel.sendText(clientId, messages.handoffSeller);
+  if (channel?.markUnread) await channel.markUnread(clientId).catch(() => null);
+  return { ...session, lead };
 }
 
 async function askTipoAcrilico(channel, clientId) {
@@ -143,21 +163,36 @@ async function startLetteringFlow(channel, clientId, session) {
   return session;
 }
 
-async function handoffOtherService(channel, clientId, session, service, reason) {
-  session.dados.flow = service;
-  session.etapa = `aguardando_vendedor_${service}`;
+async function startPlotagemFlow(channel, clientId, session) {
+  session.dados.flow = 'plotagem';
+  session.dados.demanda = session.dados.demanda || {};
+  session.etapa = 'plotagem_descricao';
   Store.saveSession(session);
-  const lead = Store.appendLead(buildLead(session, reason));
-  await replaceServiceLabel(channel, clientId, service).catch(() => null);
-  await maybeSetBusinessNote(channel, clientId, session, service);
-  await channel.sendText(clientId, service === 'plotagem' ? messages.plotagem : messages.otherService);
-  return { ...session, lead };
+  await replaceServiceLabel(channel, clientId, 'plotagem').catch(() => null);
+  await channel.sendText(clientId, messages.plotagem);
+  await channel.sendText(clientId, messages.askPlotagemDescricao);
+  return session;
+}
+
+async function startOtherFlow(channel, clientId, session) {
+  session.dados.flow = 'outros';
+  session.dados.demanda = session.dados.demanda || {};
+  session.etapa = 'outros_descricao';
+  Store.saveSession(session);
+  await replaceServiceLabel(channel, clientId, 'outros').catch(() => null);
+  await channel.sendText(clientId, messages.otherService);
+  await channel.sendText(clientId, messages.askOtherDescricao);
+  return session;
 }
 
 async function processCustomerMessage({ clientId, text, channel }) {
   const session = Store.getSession(clientId);
   const input = String(text || '').trim();
   if (!session || !input) return session;
+
+  if (session.dados?.botDone || session.dados?.pausedBySeller) {
+    return session;
+  }
 
   if (env.enableTestCommands && /^\/resetarsys$/i.test(input)) {
     const result = Store.resetSystem();
@@ -200,13 +235,70 @@ async function processCustomerMessage({ clientId, text, channel }) {
       return startLetteringFlow(channel, clientId, session);
     }
     if (service === 'plotagem') {
-      return handoffOtherService(channel, clientId, session, 'plotagem', 'plotagem_selecionada');
+      return startPlotagemFlow(channel, clientId, session);
     }
     if (service === 'outros') {
-      return handoffOtherService(channel, clientId, session, 'outros', 'outros_selecionado');
+      return startOtherFlow(channel, clientId, session);
     }
     await askService(channel, clientId);
     return session;
+  }
+
+  if (session.etapa === 'plotagem_descricao') {
+    d.demanda = d.demanda || {};
+    d.demanda.descricao = input;
+    session.etapa = 'plotagem_medida';
+    Store.saveSession(session);
+    await channel.sendText(clientId, messages.askPlotagemMedida);
+    return session;
+  }
+
+  if (session.etapa === 'plotagem_medida') {
+    d.demanda = d.demanda || {};
+    d.demanda.medida = input;
+    session.etapa = 'plotagem_local';
+    Store.saveSession(session);
+    await channel.sendText(clientId, messages.askPlotagemLocal);
+    return session;
+  }
+
+  if (session.etapa === 'plotagem_local') {
+    d.demanda = d.demanda || {};
+    d.demanda.local = input;
+    session.etapa = 'plotagem_prazo';
+    Store.saveSession(session);
+    await channel.sendText(clientId, messages.askPlotagemPrazo);
+    return session;
+  }
+
+  if (session.etapa === 'plotagem_prazo') {
+    d.demanda = d.demanda || {};
+    d.demanda.prazo = input;
+    return markSellerHandoff(channel, clientId, session, 'plotagem', 'plotagem_pre_triagem_completa');
+  }
+
+  if (session.etapa === 'outros_descricao') {
+    d.demanda = d.demanda || {};
+    d.demanda.descricao = input;
+    session.etapa = 'outros_referencia';
+    Store.saveSession(session);
+    await channel.sendText(clientId, messages.askOtherReferencia);
+    return session;
+  }
+
+  if (session.etapa === 'outros_referencia') {
+    d.demanda = d.demanda || {};
+    d.demanda.referencia = input;
+    session.etapa = 'outros_prazo';
+    Store.saveSession(session);
+    await channel.sendText(clientId, messages.askOtherPrazo);
+    return session;
+  }
+
+  if (session.etapa === 'outros_prazo') {
+    d.demanda = d.demanda || {};
+    d.demanda.prazo = input;
+    return markSellerHandoff(channel, clientId, session, 'outros', 'outros_pre_triagem_completa');
   }
 
   if (session.etapa === 'tipo_acrilico') {
@@ -337,11 +429,13 @@ async function processCustomerMessage({ clientId, text, channel }) {
     if (delivery === 'Retirada') {
       session.etapa = 'lead_completo';
       session.completed = true;
+      d.botDone = true;
       Store.saveSession(session);
       const lead = Store.appendLead(buildLead(session, 'letreiro_pre_atendimento_completo'));
       await markAwaitingQuote(channel, clientId, session);
       await channel.sendText(clientId, messages.pickupAddress);
       await channel.sendText(clientId, messages.forwardQuote);
+      if (channel?.markUnread) await channel.markUnread(clientId).catch(() => null);
       return { ...session, lead };
     }
     if (delivery === 'Instalação') {
@@ -357,10 +451,12 @@ async function processCustomerMessage({ clientId, text, channel }) {
     d.endereco = input;
     session.etapa = 'lead_completo';
     session.completed = true;
+    d.botDone = true;
     Store.saveSession(session);
     const lead = Store.appendLead(buildLead(session, 'letreiro_pre_atendimento_completo'));
     await markAwaitingQuote(channel, clientId, session);
     await channel.sendText(clientId, messages.forwardQuote);
+    if (channel?.markUnread) await channel.markUnread(clientId).catch(() => null);
     return { ...session, lead };
   }
 
