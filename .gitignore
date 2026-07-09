@@ -1,0 +1,8 @@
+node_modules/
+.env
+.wppconnect_auth/
+tokens/
+data/*.json
+data/*.jsonl
+npm-debug.log*
+.DS_Store
