@@ -34,7 +34,9 @@ function nowIso() {
 }
 
 function normalizeClientId(clientId) {
-  return String(clientId || '').replace(/\D/g, '');
+  const raw = String(clientId || '').trim();
+  const digits = raw.replace(/\D/g, '');
+  return digits || raw;
 }
 
 function createSession(id) {
@@ -101,10 +103,36 @@ function listSessions() {
   return Object.values(state.sessions || {});
 }
 
+function resetSystem() {
+  const previousSessionCount = Object.keys(state.sessions || {}).length;
+  let previousLeadCount = 0;
+
+  try {
+    if (fs.existsSync(LEADS_PATH)) {
+      const raw = fs.readFileSync(LEADS_PATH, 'utf8');
+      previousLeadCount = raw.split('\n').filter((line) => line.trim()).length;
+    }
+  } catch (_) {}
+
+  state.sessions = {};
+  state.lastSavedAt = nowIso();
+  writeJson(SESSIONS_PATH, state);
+
+  ensureDataDir();
+  fs.writeFileSync(LEADS_PATH, '', 'utf8');
+
+  return {
+    resetAt: state.lastSavedAt,
+    previousSessionCount,
+    previousLeadCount,
+  };
+}
+
 module.exports = {
   getSession,
   saveSession,
   resetSession,
+  resetSystem,
   appendLead,
   listSessions,
   normalizeClientId,
