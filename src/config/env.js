@@ -23,6 +23,9 @@ const env = {
   maxReplyDelayMs: Math.max(0, num('MAX_REPLY_DELAY_MS', 4200)),
   stopNonLetteringFlow: bool('STOP_NON_LETTERING_FLOW', true),
   enableContactNotes: bool('ENABLE_CONTACT_NOTES', true),
+  enableContactLabels: bool('ENABLE_CONTACT_LABELS', true),
+  awaitingQuoteLabelName: process.env.AWAITING_QUOTE_LABEL_NAME || 'Aguardando orçamento',
+  awaitingQuoteLabelColor: process.env.AWAITING_QUOTE_LABEL_COLOR || 'green',
 };
 
 if (env.maxReplyDelayMs < env.minReplyDelayMs) {
