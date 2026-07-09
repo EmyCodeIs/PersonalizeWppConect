@@ -11,9 +11,16 @@ function lastDigits(value, size = 11) {
   return digits.slice(-size);
 }
 
-function collectCandidateValues({ from, raw } = {}) {
+function collectCandidateValues({ from, raw, resolvedNumber } = {}) {
+  const lidMap = env.lidNumberMap || {};
+  const fromKey = String(from || '').trim().toLowerCase();
+  const mappedNumber = fromKey ? lidMap[fromKey] : null;
+
   const candidates = [
     from,
+    resolvedNumber,
+    mappedNumber,
+    raw?.resolvedNumber,
     raw?.from,
     raw?.chatId,
     raw?.sender?.id,
@@ -45,7 +52,7 @@ function collectCandidateValues({ from, raw } = {}) {
     .filter(Boolean);
 }
 
-function isAllowedClient({ from, raw } = {}) {
+function isAllowedClient({ from, raw, resolvedNumber } = {}) {
   const allowedNumbers = env.allowedClientNumbers || [];
   const allowedChatIds = env.allowedChatIds || [];
 
@@ -53,7 +60,7 @@ function isAllowedClient({ from, raw } = {}) {
     return { allowed: true, reason: 'sem_whitelist' };
   }
 
-  const candidates = collectCandidateValues({ from, raw });
+  const candidates = collectCandidateValues({ from, raw, resolvedNumber });
   const normalizedAllowedChatIds = allowedChatIds.map((item) => String(item || '').trim().toLowerCase()).filter(Boolean);
   const normalizedAllowedNumbers = allowedNumbers
     .map((item) => onlyDigits(item))
@@ -84,7 +91,7 @@ function isAllowedClient({ from, raw } = {}) {
   return {
     allowed: false,
     reason: 'fora_da_whitelist',
-    candidates: candidates.slice(0, 6),
+    candidates: candidates.slice(0, 8),
   };
 }
 
