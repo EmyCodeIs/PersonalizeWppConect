@@ -9,7 +9,8 @@ A intenção desta base é portar o fluxo do cliente para o canal não oficial, 
 - tenta identificar origem/landing, nome, telefone e intenção;
 - se for letreiro, segue o fluxo de letreiro;
 - se for outro serviço, salva lead e orienta atendimento humano;
-- salva sessões e leads em arquivos locais.
+- salva sessões e leads em arquivos locais;
+- quando o pré-atendimento de letreiro fica pronto para orçamento, grava uma nota no contato e tenta aplicar a etiqueta verde **Aguardando orçamento**.
 
 > Este projeto não substitui o repositório `Personalize` e não mexe na API oficial.
 
@@ -30,6 +31,24 @@ npm start
 ```
 
 Depois leia o QR Code que aparecer no terminal/navegador.
+
+## Nota e etiqueta no WhatsApp Business
+
+Ao finalizar a coleta de letreiro, o sistema salva o lead localmente e tenta registrar no contato:
+
+- Nota com dados coletados: nome, telefone, origem, tipo, cores, medida, cidade, envio e endereço.
+- Etiqueta verde: `Aguardando orçamento`.
+
+Essas opções ficam no `.env`:
+
+```env
+ENABLE_CONTACT_NOTES=true
+ENABLE_CONTACT_LABELS=true
+AWAITING_QUOTE_LABEL_NAME=Aguardando orçamento
+AWAITING_QUOTE_LABEL_COLOR=green
+```
+
+A aplicação usa tentativa segura porque o suporte a notas/etiquetas pode variar conforme versão do WPPConnect/WA-JS e conforme a sessão estar conectada a uma conta WhatsApp Business. Se não funcionar, o fluxo continua e mostra aviso no terminal.
 
 ## Estrutura
 
