@@ -62,6 +62,10 @@ const env = {
   // Mapeamento manual quando o WhatsApp só entrega @lid e não expõe o telefone.
   // Ex: 18885055098907@lid=31971386091
   lidNumberMap: mapList('LID_NUMBER_MAP'),
+  assetsDir: process.env.ASSETS_DIR || 'assets',
+  mostruarioLetreiroImageBaseName: process.env.MOSTRUARIO_LETREIRO_IMAGE_BASENAME || 'Mostruario_Letreiro',
+  mostruarioLetreiroPdfPath: process.env.MOSTRUARIO_LETREIRO_PDF_PATH || '',
+  mostruarioLetreiroPdfUrl: process.env.MOSTRUARIO_LETREIRO_PDF_URL || '',
 };
 
 if (env.maxReplyDelayMs < env.minReplyDelayMs) {
