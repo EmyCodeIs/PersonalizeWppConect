@@ -7,92 +7,80 @@ const DATA_DIR = path.join(process.cwd(), 'data');
 const SESSIONS_PATH = path.join(DATA_DIR, 'sessions.json');
 const LEADS_PATH = path.join(DATA_DIR, 'leads.jsonl');
 
-function ensureDir() {
+function ensureDataDir() {
   fs.mkdirSync(DATA_DIR, { recursive: true });
 }
 
-function readJson(file, fallback) {
+function readJson(filePath, fallback) {
   try {
-    if (!fs.existsSync(file)) return fallback;
-    return JSON.parse(fs.readFileSync(file, 'utf8'));
+    if (!fs.existsSync(filePath)) return fallback;
+    return JSON.parse(fs.readFileSync(filePath, 'utf8'));
   } catch (_) {
     return fallback;
   }
 }
 
-function writeJson(file, value) {
-  ensureDir();
-  const tmp = `${file}.tmp`;
-  fs.writeFileSync(tmp, JSON.stringify(value, null, 2), 'utf8');
-  fs.renameSync(tmp, file);
+function writeJson(filePath, data) {
+  ensureDataDir();
+  fs.writeFileSync(`${filePath}.tmp`, JSON.stringify(data, null, 2), 'utf8');
+  fs.renameSync(`${filePath}.tmp`, filePath);
 }
 
-let sessions = readJson(SESSIONS_PATH, {});
-
-function normalizeClientId(id) {
-  return String(id || '').replace(/\D/g, '');
-}
+const state = readJson(SESSIONS_PATH, { sessions: {}, lastSavedAt: null });
+if (!state.sessions || typeof state.sessions !== 'object') state.sessions = {};
 
 function nowIso() {
   return new Date().toISOString();
 }
 
+function normalizeClientId(clientId) {
+  return String(clientId || '').replace(/\D/g, '');
+}
+
 function getSession(clientId) {
   const id = normalizeClientId(clientId);
   if (!id) return null;
-  if (!sessions[id]) {
-    sessions[id] = {
-      id,
-      etapa: 'inicio',
-      dados: {},
+  if (!state.sessions[id]) {
+    state.sessions[id] = {
+      clientId: id,
+      step: 'initial',
+      data: {},
       createdAt: nowIso(),
       updatedAt: nowIso(),
-      completed: false,
+      finished: false,
     };
-    saveSessions();
   }
-  return sessions[id];
+  return state.sessions[id];
 }
 
 function saveSession(session) {
-  if (!session?.id) return null;
+  if (!session?.clientId) return null;
   session.updatedAt = nowIso();
-  sessions[session.id] = session;
-  saveSessions();
+  state.sessions[session.clientId] = session;
+  state.lastSavedAt = nowIso();
+  writeJson(SESSIONS_PATH, state);
   return session;
 }
 
 function resetSession(clientId) {
   const id = normalizeClientId(clientId);
-  if (!id) return null;
-  sessions[id] = {
-    id,
-    etapa: 'inicio',
-    dados: {},
+  if (id) delete state.sessions[id];
+  writeJson(SESSIONS_PATH, state);
+}
+
+function appendLead(payload = {}) {
+  ensureDataDir();
+  const lead = {
+    id: `lead_${Date.now()}_${Math.random().toString(16).slice(2)}`,
     createdAt: nowIso(),
-    updatedAt: nowIso(),
-    completed: false,
+    ...payload,
   };
-  saveSessions();
-  return sessions[id];
-}
-
-function saveSessions() {
-  writeJson(SESSIONS_PATH, sessions);
-}
-
-function appendLead(lead) {
-  ensureDir();
-  const payload = {
-    ...lead,
-    savedAt: nowIso(),
-  };
-  fs.appendFileSync(LEADS_PATH, JSON.stringify(payload) + '\n', 'utf8');
-  return payload;
+  fs.appendFileSync(LEADS_PATH, JSON.stringify(lead) + '\n', 'utf8');
+  return lead;
 }
 
 function listSessions() {
-  return Object.values(sessions);
+  return Object.values(state.sessions || {});
 }
 
 module.exports = {
