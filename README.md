@@ -76,36 +76,28 @@ Antes de usar com clientes reais, coloque:
 ENABLE_TEST_COMMANDS=false
 ```
 
-## Assets do mostruário
+## Assets usados no fluxo
 
-Salve a imagem do mostruário em uma destas opções:
-
-```txt
-assets/Mostruario_Letreiro.png
-assets/Mostruario_Letreiro.jpg
-assets/Mostruario_Letreiro.jpeg
-assets/Mostruario_Letreiro.webp
-```
-
-Se o PDF ficar online, configure no `.env`:
-
-```env
-MOSTRUARIO_LETREIRO_PDF_URL=https://seu-link-do-pdf-aqui
-```
-
-Se quiser enviar PDF local, use:
+O bot procura os arquivos dentro de `assets/` usando estes nomes base:
 
 ```txt
-assets/Mostruario_Letreiro.pdf
+assets/capa-mostruario.png|jpg|jpeg|webp
+assets/mostruario.pdf
+assets/tabela-cores-v2.png|jpg|jpeg|webp
+assets/tabela-espessura.png|jpg|jpeg|webp
+assets/tabela-profundidade-3mm.png|jpg|jpeg|webp
 ```
 
-ou configure:
+Uso atual no fluxo:
 
-```env
-MOSTRUARIO_LETREIRO_PDF_PATH=assets/Mostruario_Letreiro.pdf
-```
+- `capa-mostruario`: enviada quando o cliente escolhe **Letreiro de acrílico**.
+- `mostruario.pdf`: enviado logo depois da capa, se existir localmente. Se o PDF estiver online, use `MOSTRUARIO_LETREIRO_PDF_URL`.
+- `tabela-cores-v2`: enviada antes de perguntar a quantidade/cores do letreiro colorido.
+- `tabela-espessura`: enviada quando o cliente escolhe acrílico personalizado/Pantone.
+- `tabela-profundidade-3mm`: enviada antes da pergunta de acréscimo/profundidade.
+- `ticket-logo`: por enquanto não é usado no fluxo de coleta do orçamento.
 
-No WPPConnect, botão CTA de URL como na API oficial pode não estar disponível de forma estável. Por isso o sistema envia a imagem e depois envia o link do PDF como fallback seguro.
+No WPPConnect, botão CTA de URL como na API oficial pode não estar disponível de forma estável. Por isso o sistema envia a imagem e depois envia o link/PDF como fallback seguro.
 
 ## Nota e etiqueta no WhatsApp Business
 
