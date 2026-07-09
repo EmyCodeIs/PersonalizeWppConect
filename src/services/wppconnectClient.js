@@ -131,17 +131,20 @@ async function tryPageLabelApi(client, chatId, labelName, color) {
 async function createWppChannel({ onMessage, onQr } = {}) {
   const wppconnect = require('@wppconnect-team/wppconnect');
 
+  console.log(`[WPPConnect] Chrome visível: ${env.wppHeadless ? 'não (headless)' : 'sim'}`);
+
   const client = await wppconnect.create({
     session: env.sessionName,
     catchQR: (base64Qr, asciiQR, attempts, urlCode) => {
-      console.log('\n[WPPConnect] Escaneie o QR Code abaixo com o WhatsApp Business:\n');
+      console.log('\n[WPPConnect] Escaneie o QR Code com o WhatsApp Business.');
+      console.log('[WPPConnect] Se a janela do Chrome abrir, leia o QR por ela. Também deixei o QR abaixo como fallback:\n');
       console.log(asciiQR);
       if (typeof onQr === 'function') onQr({ base64Qr, asciiQR, attempts, urlCode });
     },
     statusFind: (statusSession, session) => {
       console.log('[WPPConnect]', session, statusSession);
     },
-    headless: true,
+    headless: env.wppHeadless,
     useChrome: true,
     autoClose: 0,
     folderNameToken: 'tokens',
@@ -154,8 +157,6 @@ async function createWppChannel({ onMessage, onQr } = {}) {
       await client.sendText(normalizeChatId(clientId), String(text || ''));
     },
     async setContactNote(clientId, note) {
-      // WPPConnect/WA-JS pode mudar esses métodos conforme versão.
-      // Mantemos tentativa segura: se não existir, apenas ignora.
       const chatId = normalizeChatId(clientId);
       try {
         if (client?.page?.evaluate) {
