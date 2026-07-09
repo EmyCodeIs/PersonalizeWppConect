@@ -13,6 +13,15 @@ function num(name, fallback) {
   return Number.isFinite(value) ? value : fallback;
 }
 
+function list(name, fallback = []) {
+  const raw = process.env[name];
+  if (!raw) return fallback;
+  return String(raw)
+    .split(/[;,\n]/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
 const env = {
   sessionName: process.env.WPP_SESSION_NAME || 'personalize-wppconnect',
   mockMode: bool('MOCK_MODE', false),
@@ -32,6 +41,9 @@ const env = {
   unreadBootstrapDelayMs: Math.max(1000, num('UNREAD_BOOTSTRAP_DELAY_MS', 6000)),
   unreadBootstrapMaxChats: Math.max(1, num('UNREAD_BOOTSTRAP_MAX_CHATS', 30)),
   unreadBootstrapMaxMessagesPerChat: Math.max(1, num('UNREAD_BOOTSTRAP_MAX_MESSAGES_PER_CHAT', 8)),
+  // Whitelist temporária de teste: vazio = atende qualquer contato. Durante teste, use só seu número.
+  allowedClientNumbers: list('ALLOWED_CLIENT_NUMBERS', ['31971386091']),
+  allowedChatIds: list('ALLOWED_CHAT_IDS', []),
 };
 
 if (env.maxReplyDelayMs < env.minReplyDelayMs) {
