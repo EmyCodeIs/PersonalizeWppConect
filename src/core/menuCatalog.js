@@ -11,6 +11,17 @@ function normalizeChatId(clientId) {
 }
 
 const menus = {
+  servicos: {
+    title: 'Serviços',
+    description: '🔸\nQual dos nossos serviço deseja?',
+    buttonText: 'Selecionar serviço',
+    fallbackText: messages.askService,
+    rows: [
+      { id: '1', title: 'Letreiro de acrílico', description: 'Orçamento de letreiro e cores' },
+      { id: '2', title: 'Plotagem', description: 'Encaminhar para vendedor' },
+      { id: '3', title: 'Outros', description: 'Encaminhar para vendedor' },
+    ],
+  },
   confirmarFluxo: {
     title: 'Tipo de orçamento',
     description: 'Para eu te atender melhor, seu orçamento é para letreiro em acrílico?',
@@ -23,8 +34,8 @@ const menus = {
   },
   tipoAcrilico: {
     title: 'Tipo de acrílico',
-    description: 'Qual tipo de acrílico você deseja?',
-    buttonText: 'Ver tipos',
+    description: 'Selecione o tipo de acrílico do seu letreiro:',
+    buttonText: 'Selecionar Acrílico',
     fallbackText: messages.askAcrylicType,
     rows: [
       { id: '1', title: 'Colorido', description: 'Cores sólidas: preto, branco, dourado, prata...' },
