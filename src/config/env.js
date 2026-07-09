@@ -76,9 +76,13 @@ const env = {
   // Ex: 18885055098907@lid=31971386091
   lidNumberMap: mapList('LID_NUMBER_MAP'),
   assetsDir: process.env.ASSETS_DIR || 'assets',
-  mostruarioLetreiroImageBaseName: process.env.MOSTRUARIO_LETREIRO_IMAGE_BASENAME || 'Mostruario_Letreiro',
+  mostruarioLetreiroImageBaseName: process.env.MOSTRUARIO_LETREIRO_IMAGE_BASENAME || 'capa-mostruario',
+  mostruarioLetreiroPdfBaseName: process.env.MOSTRUARIO_LETREIRO_PDF_BASENAME || 'mostruario',
   mostruarioLetreiroPdfPath: process.env.MOSTRUARIO_LETREIRO_PDF_PATH || '',
   mostruarioLetreiroPdfUrl: process.env.MOSTRUARIO_LETREIRO_PDF_URL || '',
+  assetTabelaCoresBaseName: process.env.ASSET_TABELA_CORES_BASENAME || 'tabela-cores-v2',
+  assetTabelaEspessuraBaseName: process.env.ASSET_TABELA_ESPESSURA_BASENAME || 'tabela-espessura',
+  assetTabelaProfundidadeBaseName: process.env.ASSET_TABELA_PROFUNDIDADE_BASENAME || 'tabela-profundidade-3mm',
 };
 
 if (env.maxReplyDelayMs < env.minReplyDelayMs) {
