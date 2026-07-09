@@ -61,6 +61,10 @@ function createMockChannel() {
     async applyContactLabel(clientId, label) {
       console.log(`\n[ETIQUETA ${clientId}] ${label?.name || label} (${label?.color || 'green'})\n`);
     },
+    async markUnread(clientId) {
+      console.log(`\n[MARCAR NÃO LIDO ${clientId}]\n`);
+      return true;
+    },
   };
 }
 
@@ -365,6 +369,54 @@ async function createWppChannel({ onMessage, onQr } = {}) {
       } catch (err) {
         console.warn('[WPPConnect] nao foi possivel salvar nota:', err?.message || err);
       }
+    },
+    async markUnread(clientId) {
+      const chatId = normalizeChatId(clientId);
+      const attempts = [
+        async () => {
+          if (typeof client.markUnseenMessage !== 'function') return false;
+          await client.markUnseenMessage(chatId);
+          return true;
+        },
+        async () => {
+          if (typeof client.markUnread !== 'function') return false;
+          await client.markUnread(chatId);
+          return true;
+        },
+        async () => {
+          if (!client?.page?.evaluate) return false;
+          return client.page.evaluate(async ({ chatId }) => {
+            const WPP = window.WPP || null;
+            if (WPP?.chat?.markIsUnread) {
+              await WPP.chat.markIsUnread(chatId);
+              return true;
+            }
+            if (WPP?.chat?.markUnread) {
+              await WPP.chat.markUnread(chatId);
+              return true;
+            }
+            const Store = window.Store || null;
+            const chat = Store?.Chat?.get?.(chatId) || Store?.Chat?.find?.(chatId);
+            if (chat?.markUnread) {
+              await chat.markUnread();
+              return true;
+            }
+            return false;
+          }, { chatId });
+        },
+      ];
+
+      for (const attempt of attempts) {
+        try {
+          const ok = await attempt();
+          if (ok) {
+            console.log(`[WPPConnect] marcado como não lido: ${chatId}`);
+            return true;
+          }
+        } catch (_) {}
+      }
+      console.warn(`[WPPConnect] não consegui marcar como não lido: ${chatId}`);
+      return false;
     },
     async applyContactLabel(clientId, label = {}) {
       if (!env.enableContactLabels) return false;
