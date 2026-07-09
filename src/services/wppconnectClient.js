@@ -1,5 +1,6 @@
 'use strict';
 
+const path = require('path');
 const { env } = require('../config/env');
 
 function wait(ms) {
@@ -45,6 +46,14 @@ function createMockChannel() {
   return {
     async sendText(clientId, text) {
       console.log(`\n[BOT -> ${clientId}] ${text}\n`);
+    },
+    async sendImage(clientId, filePath, caption = '') {
+      console.log(`\n[IMAGEM -> ${clientId}] ${filePath}\n${caption}\n`);
+      return true;
+    },
+    async sendDocument(clientId, filePath, fileName, caption = '') {
+      console.log(`\n[DOCUMENTO -> ${clientId}] ${fileName || path.basename(filePath)}: ${filePath}\n${caption}\n`);
+      return true;
     },
     async setContactNote(clientId, note) {
       console.log(`\n[NOTA ${clientId}]\n${note}\n`);
@@ -326,6 +335,22 @@ async function createWppChannel({ onMessage, onQr } = {}) {
         console.error(`[WPPConnect] erro ao enviar mensagem para ${chatId}:`, err?.message || err);
         throw err;
       }
+    },
+    async sendImage(clientId, filePath, caption = '') {
+      const chatId = normalizeChatId(clientId);
+      const fullPath = path.resolve(process.cwd(), filePath);
+      await wait(randomDelay());
+      if (typeof client.sendImage !== 'function') return false;
+      await client.sendImage(chatId, fullPath, path.basename(fullPath), String(caption || ''));
+      return true;
+    },
+    async sendDocument(clientId, filePath, fileName, caption = '') {
+      const chatId = normalizeChatId(clientId);
+      const fullPath = path.resolve(process.cwd(), filePath);
+      await wait(randomDelay());
+      if (typeof client.sendFile !== 'function') return false;
+      await client.sendFile(chatId, fullPath, fileName || path.basename(fullPath), String(caption || ''));
+      return true;
     },
     async setContactNote(clientId, note) {
       const chatId = normalizeChatId(clientId);
