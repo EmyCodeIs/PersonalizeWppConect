@@ -46,6 +46,8 @@ const env = {
   mockMode: bool('MOCK_MODE', false),
   // false por padrão para abrir uma janela visível do Chrome/WhatsApp Web no teste real.
   wppHeadless: bool('WPP_HEADLESS', false),
+  // Comandos de teste como /reset e /resetarsys. Desative em produção.
+  enableTestCommands: bool('ENABLE_TEST_COMMANDS', true),
   businessName: process.env.BUSINESS_NAME || 'Personalize',
   sellerName: process.env.SELLER_NAME || 'Vendedor Personalize',
   bufferMs: Math.max(1000, num('BUFFER_MS', 4500)),
