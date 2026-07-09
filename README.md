@@ -54,6 +54,28 @@ Qual dos nossos serviço deseja?
 
 Ao clicar em **Letreiro de acrílico**, ele envia o mostruário e depois a lista de tipo de acrílico.
 
+## Comandos de teste
+
+Com `ENABLE_TEST_COMMANDS=true`, estes comandos funcionam pelo WhatsApp:
+
+```txt
+/reset
+```
+
+Reinicia somente a sessão do contato atual.
+
+```txt
+/resetarsys
+```
+
+Reseta o sistema local de teste: limpa todas as sessões em `data/sessions.json` e apaga os leads em `data/leads.jsonl`. Depois disso, o próximo contato começa como primeiro atendimento.
+
+Antes de usar com clientes reais, coloque:
+
+```env
+ENABLE_TEST_COMMANDS=false
+```
+
 ## Assets do mostruário
 
 Salve a imagem do mostruário em uma destas opções:
@@ -97,7 +119,7 @@ Essas opções ficam no `.env`:
 ```env
 ENABLE_CONTACT_NOTES=true
 ENABLE_CONTACT_LABELS=true
-AWAITING_QUOTE_LABEL_NAME=Aguardando orçamento
+A WAITING_QUOTE_LABEL_NAME=Aguardando orçamento
 AWAITING_QUOTE_LABEL_COLOR=green
 ```
 
