@@ -3,6 +3,7 @@
 const { messages } = require('../core/messages');
 const { sendMenu } = require('../core/menuCatalog');
 const { sendMostruarioLetreiro } = require('../core/mostruario');
+const { replaceServiceLabel } = require('../core/serviceLabels');
 const { detectInitialContext } = require('../core/intent');
 const { parseMeasure, splitColors, normalizeText, extractName, extractPhone } = require('../core/parsers');
 const Store = require('../services/leadStore');
@@ -116,12 +117,7 @@ async function maybeSetBusinessNote(channel, clientId, session, reason = 'lead')
 
 async function markAwaitingQuote(channel, clientId, session) {
   await maybeSetBusinessNote(channel, clientId, session, 'letreiro_aguardando_orcamento');
-  if (env.enableContactLabels && channel?.applyContactLabel) {
-    await channel.applyContactLabel(clientId, {
-      name: env.awaitingQuoteLabelName,
-      color: env.awaitingQuoteLabelColor,
-    }).catch(() => null);
-  }
+  await replaceServiceLabel(channel, clientId, 'letreiro').catch(() => null);
 }
 
 async function askTipoAcrilico(channel, clientId) {
@@ -136,6 +132,7 @@ async function startLetteringFlow(channel, clientId, session) {
   session.dados.flow = 'letreiro';
   session.etapa = 'tipo_acrilico';
   Store.saveSession(session);
+  await replaceServiceLabel(channel, clientId, 'letreiro').catch(() => null);
   await sendMostruarioLetreiro(channel, clientId);
   await askTipoAcrilico(channel, clientId);
   return session;
@@ -146,6 +143,7 @@ async function handoffOtherService(channel, clientId, session, service, reason) 
   session.etapa = `aguardando_vendedor_${service}`;
   Store.saveSession(session);
   const lead = Store.appendLead(buildLead(session, reason));
+  await replaceServiceLabel(channel, clientId, service).catch(() => null);
   await maybeSetBusinessNote(channel, clientId, session, service);
   await channel.sendText(clientId, service === 'plotagem' ? messages.plotagem : messages.otherService);
   return { ...session, lead };
