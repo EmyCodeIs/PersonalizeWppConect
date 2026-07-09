@@ -13,9 +13,15 @@ function randomDelay() {
 }
 
 function normalizeChatId(clientId) {
-  const id = String(clientId || '').replace(/\D/g, '');
-  if (!id) return '';
-  return id.endsWith('@c.us') ? id : `${id}@c.us`;
+  const raw = String(clientId || '').trim();
+  if (!raw) return '';
+
+  // IDs novos do WhatsApp podem chegar como @lid. Se trocar para @c.us,
+  // o WA-JS pode falhar com "No LID for user". Por isso preservamos o sufixo real.
+  if (/@(c\.us|g\.us|lid)$/i.test(raw)) return raw;
+
+  const digits = raw.replace(/\D/g, '');
+  return digits ? `${digits}@c.us` : raw;
 }
 
 function createMockChannel() {
@@ -146,15 +152,21 @@ async function createWppChannel({ onMessage, onQr } = {}) {
     },
     headless: env.wppHeadless,
     useChrome: true,
-    autoClose: 0,
+    autoClose: false,
     folderNameToken: 'tokens',
   });
 
   const channel = {
     client,
     async sendText(clientId, text) {
+      const chatId = normalizeChatId(clientId);
       await wait(randomDelay());
-      await client.sendText(normalizeChatId(clientId), String(text || ''));
+      try {
+        await client.sendText(chatId, String(text || ''));
+      } catch (err) {
+        console.error(`[WPPConnect] erro ao enviar mensagem para ${chatId}:`, err?.message || err);
+        throw err;
+      }
     },
     async setContactNote(clientId, note) {
       const chatId = normalizeChatId(clientId);
@@ -187,11 +199,19 @@ async function createWppChannel({ onMessage, onQr } = {}) {
     },
   };
 
+  client.onStateChange((state) => {
+    console.log('[WPPConnect] estado:', state);
+  });
+
   client.onMessage(async (message) => {
     if (message?.fromMe) return;
-    const from = String(message?.from || '').replace(/@c\.us$/i, '').replace(/\D/g, '');
+    if (message?.isGroupMsg) return;
+
+    const from = String(message?.from || message?.chatId || '').trim();
     const text = message?.body || message?.caption || '';
     if (!from || !text) return;
+
+    console.log(`[WPPConnect] mensagem recebida de ${from}`);
     await onMessage?.({ from, text, raw: message, channel });
   });
 
