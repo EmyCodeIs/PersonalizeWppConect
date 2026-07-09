@@ -119,7 +119,7 @@ Essas opções ficam no `.env`:
 ```env
 ENABLE_CONTACT_NOTES=true
 ENABLE_CONTACT_LABELS=true
-A WAITING_QUOTE_LABEL_NAME=Aguardando orçamento
+AWAITING_QUOTE_LABEL_NAME=Aguardando orçamento
 AWAITING_QUOTE_LABEL_COLOR=green
 ```
 
