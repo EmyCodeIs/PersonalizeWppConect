@@ -2,6 +2,7 @@
 
 const { messages } = require('../core/messages');
 const { sendMenu } = require('../core/menuCatalog');
+const { sendMostruarioLetreiro } = require('../core/mostruario');
 const { detectInitialContext } = require('../core/intent');
 const { parseMeasure, splitColors, normalizeText, extractName, extractPhone } = require('../core/parsers');
 const Store = require('../services/leadStore');
@@ -13,6 +14,15 @@ function optionNumber(text) {
   if (m) return Number(m[1]);
   if (/sim|letreiro|acrilico|acrílico/.test(raw)) return 1;
   if (/nao|não|outro/.test(raw)) return 2;
+  return null;
+}
+
+function serviceFromText(text) {
+  const n = optionNumber(text);
+  const raw = normalizeText(text);
+  if (n === 1 || /letreiro|acrilico|acrílico/.test(raw)) return 'letreiro';
+  if (n === 2 || /plotagem|plotar/.test(raw)) return 'plotagem';
+  if (n === 3 || /outro|outros|demais|adesivo|banner|placa|papel/.test(raw)) return 'outros';
   return null;
 }
 
@@ -118,8 +128,27 @@ async function askTipoAcrilico(channel, clientId) {
   await sendMenu(channel, clientId, 'tipoAcrilico');
 }
 
-async function askConfirmarFluxo(channel, clientId) {
-  await sendMenu(channel, clientId, 'confirmarFluxo');
+async function askService(channel, clientId) {
+  await sendMenu(channel, clientId, 'servicos');
+}
+
+async function startLetteringFlow(channel, clientId, session) {
+  session.dados.flow = 'letreiro';
+  session.etapa = 'tipo_acrilico';
+  Store.saveSession(session);
+  await sendMostruarioLetreiro(channel, clientId);
+  await askTipoAcrilico(channel, clientId);
+  return session;
+}
+
+async function handoffOtherService(channel, clientId, session, service, reason) {
+  session.dados.flow = service;
+  session.etapa = `aguardando_vendedor_${service}`;
+  Store.saveSession(session);
+  const lead = Store.appendLead(buildLead(session, reason));
+  await maybeSetBusinessNote(channel, clientId, session, service);
+  await channel.sendText(clientId, service === 'plotagem' ? messages.plotagem : messages.otherService);
+  return { ...session, lead };
 }
 
 async function processCustomerMessage({ clientId, text, channel }) {
@@ -147,52 +176,24 @@ async function processCustomerMessage({ clientId, text, channel }) {
     if (initial.phone && !d.telefone) d.telefone = initial.phone;
 
     await channel.sendText(clientId, messages.welcome(d.nome));
-
-    if (initial.flow === 'outro_servico') {
-      d.flow = 'outro_servico';
-      session.etapa = 'aguardando_vendedor_outro_servico';
-      Store.saveSession(session);
-      const lead = Store.appendLead(buildLead(session, 'outro_servico_primeira_mensagem'));
-      await maybeSetBusinessNote(channel, clientId, session, 'outro_servico');
-      await channel.sendText(clientId, messages.nonLettering);
-      return { ...session, lead };
-    }
-
-    if (initial.flow === 'letreiro') {
-      d.flow = 'letreiro';
-      session.etapa = 'tipo_acrilico';
-      Store.saveSession(session);
-      await channel.sendText(clientId, messages.mostruario);
-      await askTipoAcrilico(channel, clientId);
-      return session;
-    }
-
-    session.etapa = 'confirmar_fluxo';
+    session.etapa = 'escolher_servico';
     Store.saveSession(session);
-    await askConfirmarFluxo(channel, clientId);
+    await askService(channel, clientId);
     return session;
   }
 
-  if (session.etapa === 'confirmar_fluxo') {
-    const opt = optionNumber(input);
-    if (opt === 1) {
-      d.flow = 'letreiro';
-      session.etapa = 'tipo_acrilico';
-      Store.saveSession(session);
-      await channel.sendText(clientId, messages.mostruario);
-      await askTipoAcrilico(channel, clientId);
-      return session;
+  if (session.etapa === 'escolher_servico') {
+    const service = serviceFromText(input);
+    if (service === 'letreiro') {
+      return startLetteringFlow(channel, clientId, session);
     }
-    if (opt === 2) {
-      d.flow = 'outro_servico';
-      session.etapa = 'aguardando_vendedor_outro_servico';
-      Store.saveSession(session);
-      const lead = Store.appendLead(buildLead(session, 'outro_servico_confirmado'));
-      await maybeSetBusinessNote(channel, clientId, session, 'outro_servico');
-      await channel.sendText(clientId, messages.nonLettering);
-      return { ...session, lead };
+    if (service === 'plotagem') {
+      return handoffOtherService(channel, clientId, session, 'plotagem', 'plotagem_selecionada');
     }
-    await askConfirmarFluxo(channel, clientId);
+    if (service === 'outros') {
+      return handoffOtherService(channel, clientId, session, 'outros', 'outros_selecionado');
+    }
+    await askService(channel, clientId);
     return session;
   }
 
