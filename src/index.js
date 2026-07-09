@@ -37,6 +37,9 @@ async function main() {
     const allowed = isAllowedClient({ from, raw });
     if (!allowed.allowed) {
       console.log(`[PersonalizeWppConect] ignorado (${source}) fora da whitelist: ${from}`);
+      if (allowed.candidates?.length) {
+        console.log(`[PersonalizeWppConect] candidatos analisados: ${allowed.candidates.join(' | ')}`);
+      }
       return;
     }
 
