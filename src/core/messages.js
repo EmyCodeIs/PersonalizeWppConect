@@ -8,10 +8,14 @@ function welcome(name) {
 
 const messages = {
   welcome,
+  askService: '🔸\nQual dos nossos serviço deseja?\n\n* Letreiro de acrílico\n* Plotagem\n* Outros',
   askFlow: 'Para eu te atender melhor, seu orçamento é para *letreiro em acrílico*?\n\n1️⃣ Sim, quero letreiro\n2️⃣ Não, é outro serviço',
-  nonLettering: 'Entendi! Esse atendimento automático agora está preparado para orçamento de *letreiro*.\n\nVou salvar seus dados para um vendedor continuar seu atendimento.',
-  mostruario: 'Confira nosso mostruário de *Letreiros* e *Cores* e veja alguns modelos para te inspirar!\n\nIrei dar início ao seu orçamento logo abaixo:',
-  askAcrylicType: 'Qual tipo de acrílico você deseja?\n\n1️⃣ Colorido (cores sólidas)\n2️⃣ Personalizado / Pantone',
+  nonLettering: 'Entendi! Vou salvar seus dados para um vendedor continuar seu atendimento.',
+  plotagem: 'Entendi! Vou salvar seu atendimento de *Plotagem* para um vendedor continuar por aqui.',
+  otherService: 'Entendi! Vou salvar seu atendimento para um vendedor continuar por aqui.',
+  mostruario: 'Confira nosso mostruário de *Letreiros e Cores* e veja alguns modelos para te inspirar!\n\nIrei dar início ao seu orçamento logo abaixo:',
+  mostruarioLink: '🔗 Ver Mostruário',
+  askAcrylicType: 'Selecione o tipo de acrílico do seu letreiro:',
   askColorCount: 'Quantas cores terá seu letreiro?\n\n1️⃣ 1 cor\n2️⃣ 2 cores\n3️⃣ 3 cores\n4️⃣ 4 cores\n5️⃣ 5 cores',
   askSolidColors: 'Me informe as cores do seu letreiro.\n\nCores sólidas: preto, branco, cinza, azul, verde, vermelho, amarelo, roxo, rosa.\nEspelhadas: dourado, prata, rose, vermelho, verde, azul.\n\nPode responder separando por vírgula.',
   askPantone: 'Me envie a cor personalizada/Pantone desejada. Pode mandar o código, descrição ou anexo de referência.',
