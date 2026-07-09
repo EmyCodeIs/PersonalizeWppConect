@@ -3,13 +3,24 @@
 const { env } = require('./config/env');
 const { BufferManager, mergeMessages } = require('./core/bufferManager');
 const { processCustomerMessage } = require('./flow/customerFlow');
-const { createWppChannel, createMockChannel } = require('./services/wppconnectClient');
+const { createWppChannel, createMockChannel, collectUnreadMessages } = require('./services/wppconnectClient');
+
+function wait(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function messageKey(message) {
+  const rawId = message?.id?._serialized || message?.id || message?.messageId || message?.key?.id;
+  if (rawId) return String(rawId);
+  return `${message?.from || message?.chatId || 'unknown'}:${message?.text || message?.body || ''}:${message?.timestamp || ''}`;
+}
 
 async function main() {
   console.log('[PersonalizeWppConect] iniciando...');
   console.log(`[PersonalizeWppConect] modo: ${env.mockMode ? 'mock/local' : 'WPPConnect'}`);
 
   let channel = null;
+  const processedMessageIds = new Set();
 
   const buffer = new BufferManager({
     delayMs: env.bufferMs,
@@ -21,8 +32,13 @@ async function main() {
     },
   });
 
-  const onMessage = async ({ from, text }) => {
-    buffer.push(from, { text });
+  const onMessage = async ({ from, text, raw, source = 'event' }) => {
+    const key = messageKey(raw || { from, text });
+    if (processedMessageIds.has(key)) return;
+    processedMessageIds.add(key);
+
+    console.log(`[PersonalizeWppConect] mensagem enfileirada (${source}) de ${from}`);
+    buffer.push(from, { text, raw, source });
   };
 
   if (env.mockMode) {
@@ -33,6 +49,26 @@ async function main() {
 
   channel = await createWppChannel({ onMessage });
   console.log('[PersonalizeWppConect] conectado. Aguardando mensagens...');
+
+  if (env.enableUnreadBootstrap) {
+    console.log(`[PersonalizeWppConect] buscando mensagens não lidas em ${env.unreadBootstrapDelayMs}ms...`);
+    setTimeout(async () => {
+      try {
+        const unread = await collectUnreadMessages(channel.client);
+        console.log(`[PersonalizeWppConect] mensagens não lidas encontradas: ${unread.length}`);
+        for (const item of unread) {
+          await onMessage({
+            from: item.from,
+            text: item.text,
+            raw: item.raw,
+            source: 'unread-bootstrap',
+          });
+        }
+      } catch (err) {
+        console.warn('[PersonalizeWppConect] não foi possível buscar mensagens não lidas:', err?.message || err);
+      }
+    }, env.unreadBootstrapDelayMs).unref?.();
+  }
 }
 
 main().catch((err) => {
