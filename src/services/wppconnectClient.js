@@ -24,6 +24,23 @@ function normalizeChatId(clientId) {
   return digits ? `${digits}@c.us` : raw;
 }
 
+function getMessageText(message) {
+  return String(message?.body || message?.caption || message?.text || message?.content || '').trim();
+}
+
+function getMessageFrom(message, fallbackChatId = '') {
+  return String(message?.from || message?.chatId || message?.sender?.id || fallbackChatId || '').trim();
+}
+
+function normalizeUnreadMessage(message, fallbackChatId = '') {
+  const from = getMessageFrom(message, fallbackChatId);
+  const text = getMessageText(message);
+  if (!from || !text) return null;
+  if (message?.fromMe) return null;
+  if (message?.isGroupMsg || /@g\.us$/i.test(from)) return null;
+  return { from, text, raw: message };
+}
+
 function createMockChannel() {
   return {
     async sendText(clientId, text) {
@@ -134,6 +151,148 @@ async function tryPageLabelApi(client, chatId, labelName, color) {
   }
 }
 
+async function collectViaUnreadMethods(client) {
+  const methodNames = ['getUnreadMessages', 'getAllUnreadMessages'];
+  for (const name of methodNames) {
+    if (typeof client?.[name] !== 'function') continue;
+    try {
+      const result = await client[name]();
+      const list = Array.isArray(result) ? result : Object.values(result || {});
+      const normalized = list.map((msg) => normalizeUnreadMessage(msg)).filter(Boolean);
+      if (normalized.length) {
+        console.log(`[WPPConnect] não lidas coletadas via ${name}: ${normalized.length}`);
+        return normalized;
+      }
+    } catch (err) {
+      console.warn(`[WPPConnect] ${name} falhou:`, err?.message || err);
+    }
+  }
+  return [];
+}
+
+async function collectViaChats(client) {
+  const getChats = typeof client.getAllChats === 'function'
+    ? () => client.getAllChats()
+    : typeof client.getAllChatsWithMessages === 'function'
+      ? () => client.getAllChatsWithMessages()
+      : null;
+
+  if (!getChats) return [];
+
+  const chats = await getChats().catch((err) => {
+    console.warn('[WPPConnect] não foi possível listar chats:', err?.message || err);
+    return [];
+  });
+
+  const chatList = (Array.isArray(chats) ? chats : Object.values(chats || {}))
+    .filter((chat) => !chat?.isGroup && !chat?.isGroupMsg && !/@g\.us$/i.test(String(chat?.id?._serialized || chat?.id || '')))
+    .filter((chat) => Number(chat?.unreadCount || chat?.unread || chat?.unreadMessages || 0) > 0)
+    .slice(0, env.unreadBootstrapMaxChats);
+
+  const output = [];
+
+  for (const chat of chatList) {
+    const chatId = String(chat?.id?._serialized || chat?.id || chat?.contact?.id?._serialized || '').trim();
+    const unreadCount = Number(chat?.unreadCount || chat?.unread || chat?.unreadMessages || 0) || env.unreadBootstrapMaxMessagesPerChat;
+    const limit = Math.min(env.unreadBootstrapMaxMessagesPerChat, unreadCount || env.unreadBootstrapMaxMessagesPerChat);
+
+    let messages = Array.isArray(chat?.msgs) ? chat.msgs : Array.isArray(chat?.messages) ? chat.messages : [];
+
+    if (!messages.length && chatId && typeof client.getAllMessagesInChat === 'function') {
+      try {
+        messages = await client.getAllMessagesInChat(chatId, true, false);
+      } catch (err) {
+        console.warn(`[WPPConnect] getAllMessagesInChat falhou para ${chatId}:`, err?.message || err);
+      }
+    }
+
+    const recent = (Array.isArray(messages) ? messages : Object.values(messages || {})).slice(-limit);
+    for (const message of recent) {
+      const normalized = normalizeUnreadMessage(message, chatId);
+      if (normalized) output.push(normalized);
+    }
+  }
+
+  if (output.length) console.log(`[WPPConnect] não lidas coletadas via chats: ${output.length}`);
+  return output;
+}
+
+async function collectViaPage(client) {
+  if (!client?.page?.evaluate) return [];
+
+  try {
+    const result = await client.page.evaluate(({ maxChats, maxMessages }) => {
+      const WPP = window.WPP || null;
+      if (!WPP) return [];
+
+      function readId(value) {
+        if (!value) return '';
+        if (typeof value === 'string') return value;
+        return value._serialized || value.id?._serialized || value.user || value.toString?.() || '';
+      }
+
+      function readText(message) {
+        return String(message?.body || message?.caption || message?.text || '').trim();
+      }
+
+      const stores = window.Store || {};
+      const chatCollection = WPP.chat?.getModelsArray?.() || stores.Chat?.models || stores.Chat?._models || [];
+      const chats = Array.from(chatCollection || [])
+        .filter((chat) => Number(chat?.unreadCount || chat?.unread || 0) > 0)
+        .filter((chat) => !chat?.isGroup && !/@g\.us$/i.test(readId(chat?.id)))
+        .slice(0, maxChats);
+
+      const out = [];
+      for (const chat of chats) {
+        const chatId = readId(chat?.id);
+        const unread = Number(chat?.unreadCount || chat?.unread || 0) || maxMessages;
+        const limit = Math.min(maxMessages, unread || maxMessages);
+        const msgs = Array.from(chat?.msgs?.models || chat?.msgs?._models || chat?.messages || [])
+          .slice(-limit);
+
+        for (const msg of msgs) {
+          const from = readId(msg?.from) || chatId;
+          const text = readText(msg);
+          if (!from || !text || msg?.fromMe || /@g\.us$/i.test(from)) continue;
+          out.push({ from, text, id: readId(msg?.id), timestamp: msg?.t || msg?.timestamp || null });
+        }
+      }
+      return out;
+    }, {
+      maxChats: env.unreadBootstrapMaxChats,
+      maxMessages: env.unreadBootstrapMaxMessagesPerChat,
+    });
+
+    const normalized = (Array.isArray(result) ? result : [])
+      .map((msg) => normalizeUnreadMessage({ ...msg, id: msg.id, timestamp: msg.timestamp }, msg.from))
+      .filter(Boolean);
+
+    if (normalized.length) console.log(`[WPPConnect] não lidas coletadas via page.evaluate: ${normalized.length}`);
+    return normalized;
+  } catch (err) {
+    console.warn('[WPPConnect] busca de não lidas via page.evaluate falhou:', err?.message || err);
+    return [];
+  }
+}
+
+async function collectUnreadMessages(client) {
+  const all = [];
+
+  for (const collect of [collectViaUnreadMethods, collectViaChats, collectViaPage]) {
+    const found = await collect(client);
+    for (const item of found) all.push(item);
+    if (all.length) break;
+  }
+
+  const seen = new Set();
+  return all.filter((item) => {
+    const key = item?.raw?.id?._serialized || item?.raw?.id || `${item.from}:${item.text}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
 async function createWppChannel({ onMessage, onQr } = {}) {
   const wppconnect = require('@wppconnect-team/wppconnect');
 
@@ -208,7 +367,7 @@ async function createWppChannel({ onMessage, onQr } = {}) {
     if (message?.isGroupMsg) return;
 
     const from = String(message?.from || message?.chatId || '').trim();
-    const text = message?.body || message?.caption || '';
+    const text = getMessageText(message);
     if (!from || !text) return;
 
     console.log(`[WPPConnect] mensagem recebida de ${from}`);
@@ -218,4 +377,9 @@ async function createWppChannel({ onMessage, onQr } = {}) {
   return channel;
 }
 
-module.exports = { createWppChannel, createMockChannel, normalizeChatId };
+module.exports = {
+  createWppChannel,
+  createMockChannel,
+  normalizeChatId,
+  collectUnreadMessages,
+};
