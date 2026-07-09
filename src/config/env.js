@@ -22,6 +22,20 @@ function list(name, fallback = []) {
     .filter(Boolean);
 }
 
+function mapList(name) {
+  const raw = process.env[name];
+  if (!raw) return {};
+  return String(raw)
+    .split(/[;,\n]/)
+    .map((item) => item.trim())
+    .filter(Boolean)
+    .reduce((acc, item) => {
+      const [key, value] = item.split('=').map((part) => String(part || '').trim());
+      if (key && value) acc[key.toLowerCase()] = value;
+      return acc;
+    }, {});
+}
+
 const env = {
   sessionName: process.env.WPP_SESSION_NAME || 'personalize-wppconnect',
   mockMode: bool('MOCK_MODE', false),
@@ -44,6 +58,9 @@ const env = {
   // Whitelist temporária de teste: vazio = atende qualquer contato. Durante teste, use só seu número.
   allowedClientNumbers: list('ALLOWED_CLIENT_NUMBERS', ['31971386091']),
   allowedChatIds: list('ALLOWED_CHAT_IDS', []),
+  // Mapeamento manual quando o WhatsApp só entrega @lid e não expõe o telefone.
+  // Ex: 18885055098907@lid=31971386091
+  lidNumberMap: mapList('LID_NUMBER_MAP'),
 };
 
 if (env.maxReplyDelayMs < env.minReplyDelayMs) {
