@@ -154,6 +154,15 @@ async function processCustomerMessage({ clientId, text, channel }) {
   const input = String(text || '').trim();
   if (!session || !input) return session;
 
+  if (/^\/resetarsys$/i.test(input)) {
+    const result = Store.resetSystem();
+    await channel.sendText(
+      clientId,
+      `Sistema resetado para teste.\n\nSessões apagadas: ${result.previousSessionCount}\nLeads apagados: ${result.previousLeadCount}\n\nMe envie uma nova mensagem para começar como primeiro contato.`
+    );
+    return Store.resetSession(clientId);
+  }
+
   const d = session.dados;
   const foundName = extractName(input);
   const foundPhone = extractPhone(input);
