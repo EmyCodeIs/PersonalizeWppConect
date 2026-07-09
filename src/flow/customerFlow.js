@@ -35,10 +35,14 @@ function acrylicTypeFromText(text) {
 function depthFromText(text) {
   const n = optionNumber(text);
   const raw = normalizeText(text);
-  if (n === 1 || /3mm|sem|seguir/.test(raw)) return '3mm';
-  if (n === 2 || /\+?3/.test(raw)) return '+3mm';
-  if (n === 3 || /\+?6/.test(raw)) return '+6mm';
-  if (n === 4 || /\+?10/.test(raw)) return '+10mm';
+  if (n === 1) return '3mm';
+  if (n === 2) return '+3mm';
+  if (n === 3) return '+6mm';
+  if (n === 4) return '+10mm';
+  if (/seguir|sem acrescimo|sem acréscimo|3mm/.test(raw)) return '3mm';
+  if (/\+\s*3/.test(raw)) return '+3mm';
+  if (/\+\s*6/.test(raw)) return '+6mm';
+  if (/\+\s*10/.test(raw)) return '+10mm';
   return null;
 }
 
@@ -91,7 +95,7 @@ async function maybeSetBusinessNote(channel, clientId, session, reason = 'lead')
 async function processCustomerMessage({ clientId, text, channel }) {
   const session = Store.getSession(clientId);
   const input = String(text || '').trim();
-  if (!input) return session;
+  if (!session || !input) return session;
 
   const d = session.dados;
   const foundName = extractName(input);
