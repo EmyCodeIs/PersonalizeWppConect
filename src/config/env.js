@@ -28,6 +28,10 @@ const env = {
   enableContactLabels: bool('ENABLE_CONTACT_LABELS', true),
   awaitingQuoteLabelName: process.env.AWAITING_QUOTE_LABEL_NAME || 'Aguardando orçamento',
   awaitingQuoteLabelColor: process.env.AWAITING_QUOTE_LABEL_COLOR || 'green',
+  enableUnreadBootstrap: bool('ENABLE_UNREAD_BOOTSTRAP', true),
+  unreadBootstrapDelayMs: Math.max(1000, num('UNREAD_BOOTSTRAP_DELAY_MS', 6000)),
+  unreadBootstrapMaxChats: Math.max(1, num('UNREAD_BOOTSTRAP_MAX_CHATS', 30)),
+  unreadBootstrapMaxMessagesPerChat: Math.max(1, num('UNREAD_BOOTSTRAP_MAX_MESSAGES_PER_CHAT', 8)),
 };
 
 if (env.maxReplyDelayMs < env.minReplyDelayMs) {
