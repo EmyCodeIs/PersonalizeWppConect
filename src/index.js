@@ -4,10 +4,7 @@ const { env } = require('./config/env');
 const { BufferManager, mergeMessages } = require('./core/bufferManager');
 const { processCustomerMessage } = require('./flow/customerFlow');
 const { createWppChannel, createMockChannel, collectUnreadMessages } = require('./services/wppconnectClient');
-
-function wait(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
+const { isAllowedClient } = require('./core/allowedClient');
 
 function messageKey(message) {
   const rawId = message?.id?._serialized || message?.id || message?.messageId || message?.key?.id;
@@ -18,6 +15,10 @@ function messageKey(message) {
 async function main() {
   console.log('[PersonalizeWppConect] iniciando...');
   console.log(`[PersonalizeWppConect] modo: ${env.mockMode ? 'mock/local' : 'WPPConnect'}`);
+
+  if (env.allowedClientNumbers?.length || env.allowedChatIds?.length) {
+    console.log(`[PersonalizeWppConect] whitelist ativa: números=${env.allowedClientNumbers.join(', ') || '-'} chatIds=${env.allowedChatIds.join(', ') || '-'}`);
+  }
 
   let channel = null;
   const processedMessageIds = new Set();
@@ -33,6 +34,12 @@ async function main() {
   });
 
   const onMessage = async ({ from, text, raw, source = 'event' }) => {
+    const allowed = isAllowedClient({ from, raw });
+    if (!allowed.allowed) {
+      console.log(`[PersonalizeWppConect] ignorado (${source}) fora da whitelist: ${from}`);
+      return;
+    }
+
     const key = messageKey(raw || { from, text });
     if (processedMessageIds.has(key)) return;
     processedMessageIds.add(key);
