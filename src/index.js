@@ -10,11 +10,16 @@ const {
 const { installMessageExperience } = require('./core/messageExperience');
 const { isAllowedClient } = require('./core/allowedClient');
 const { extractName, normalizeText, titleCase } = require('./core/parsers');
+const {
+  initializeServiceLabels,
+  replaceServiceLabel,
+} = require('./core/serviceLabels');
 const Store = require('./services/leadStore');
 const Identity = require('./services/contactIdentity');
 const { env } = require('./config/env');
 
-const BUILD_ID = 'welcome-image-caption-no-typing-2026-07-10-03';
+const BUILD_ID = 'restore-active-service-labels-2026-07-10-04';
+const ACTIVE_SERVICE_FLOWS = new Set(['letreiro', 'plotagem', 'outros']);
 const MULTI_MESSAGE_STAGES = new Set([
   'plotagem_descricao',
   'plotagem_medida',
@@ -150,6 +155,70 @@ function resolveBufferDelay(clientId, raw, interactiveId) {
   return env.bufferMs;
 }
 
+function getActiveServiceFlow(session) {
+  if (!session || session.completed || session.dados?.botDone) return null;
+  const flow = String(session.dados?.flow || '').trim().toLowerCase();
+  if (!ACTIVE_SERVICE_FLOWS.has(flow)) return null;
+
+  const stage = String(session.etapa || '').trim();
+  if (!stage || ['inicio', 'escolher_servico', 'concluido'].includes(stage)) return null;
+  return flow;
+}
+
+function serviceRepairKey(session, flow, fallbackClientId = '') {
+  const contactId = session?.chatId || session?.clientId || session?.id || fallbackClientId;
+  return `${Store.normalizeClientId(contactId)}:${flow}`;
+}
+
+async function repairSessionServiceLabel(channel, clientId, repairedKeys, source = 'runtime') {
+  if (!channel?.client) return false;
+
+  const session = Store.getSession(clientId);
+  const flow = getActiveServiceFlow(session);
+  if (!flow) return false;
+
+  const contactId = session.chatId || session.clientId || session.id || clientId;
+  const key = serviceRepairKey(session, flow, contactId);
+  if (repairedKeys.has(key)) return true;
+
+  try {
+    const result = await replaceServiceLabel(channel, contactId, flow);
+    const applied = result === true || result?.applied === true;
+    if (applied) {
+      repairedKeys.add(key);
+      console.log(`[ETIQUETAS] atendimento ativo recuperado (${source}): ${contactId} -> ${flow}`);
+      return true;
+    }
+  } catch (err) {
+    console.warn(`[ETIQUETAS] falha ao recuperar atendimento ativo ${contactId} (${flow}):`, err?.message || err);
+  }
+
+  return false;
+}
+
+async function reconcileActiveServiceLabels(channel, repairedKeys) {
+  if (!channel?.client) return { found: 0, repaired: 0 };
+
+  await initializeServiceLabels(channel).catch((err) => {
+    console.warn('[ETIQUETAS] inicialização das etiquetas falhou:', err?.message || err);
+  });
+
+  const sessions = Store.listSessions();
+  let found = 0;
+  let repaired = 0;
+
+  for (const session of sessions) {
+    const flow = getActiveServiceFlow(session);
+    if (!flow) continue;
+    found += 1;
+    const contactId = session.chatId || session.clientId || session.id;
+    if (await repairSessionServiceLabel(channel, contactId, repairedKeys, 'reinício')) repaired += 1;
+  }
+
+  console.log(`[ETIQUETAS] recuperação pós-reinício concluída: ativos=${found} reparados=${repaired}`);
+  return { found, repaired };
+}
+
 function blockPdfSending(channel) {
   if (!channel) return;
   if (typeof channel.sendDocument === 'function') {
@@ -184,6 +253,7 @@ async function main() {
   console.log(`[PersonalizeWppConect] buffer listas/botões: ${env.interactiveBufferMs}ms`);
   console.log('[PersonalizeWppConect] respostas comuns: digitação única + balões sem pausa artificial');
   console.log('[PersonalizeWppConect] boas-vindas: saudação + imagem com link na legenda + lista, sem digitação e sem delay artificial');
+  console.log('[PersonalizeWppConect] etiquetas: criação única por ID + recuperação de atendimentos ativos após reinício');
   console.log('[PersonalizeWppConect] finalização: dados salvos na nota do contato; sem encaminhamento ao vendedor');
 
   if (env.allowedClientNumbers?.length || env.allowedChatIds?.length) {
@@ -192,6 +262,7 @@ async function main() {
 
   let channel = null;
   const processedMessageIds = new Set();
+  const repairedServiceLabels = new Set();
 
   const buffer = new BufferManager({
     delayMs: env.bufferMs,
@@ -236,6 +307,9 @@ async function main() {
       return;
     }
 
+    // Primeira mensagem depois de um reinício também repara a etiqueta da sessão ativa.
+    await repairSessionServiceLabel(channel, canonicalChatId, repairedServiceLabels, 'primeira mensagem');
+
     const key = messageKey(raw || { from: canonicalChatId, text: effectiveText });
     if (processedMessageIds.has(key)) return;
     processedMessageIds.add(key);
@@ -266,6 +340,7 @@ async function main() {
   channel = await createWppChannel({ onMessage });
   blockPdfSending(channel);
   installMessageExperience(channel);
+  await reconcileActiveServiceLabels(channel, repairedServiceLabels);
   console.log('[PersonalizeWppConect] conectado. Aguardando mensagens...');
 
   if (env.enableUnreadBootstrap) {
