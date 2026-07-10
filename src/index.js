@@ -4,7 +4,6 @@ const { env } = require('./config/env');
 const { BufferManager, mergeMessages } = require('./core/bufferManager');
 const { processCustomerMessage } = require('./flow/customerFlow');
 const { createWppChannel, createMockChannel, collectUnreadMessages } = require('./services/wppconnectClient');
-const { startAssetServer } = require('./services/assetServer');
 const { isAllowedClient } = require('./core/allowedClient');
 const Identity = require('./services/contactIdentity');
 
@@ -17,12 +16,7 @@ function messageKey(message) {
 async function main() {
   console.log('[PersonalizeWppConect] iniciando...');
   console.log(`[PersonalizeWppConect] modo: ${env.mockMode ? 'mock/local' : 'WPPConnect'}`);
-
-  try {
-    await startAssetServer();
-  } catch (err) {
-    console.warn('[PersonalizeWppConect] servidor de assets não iniciou:', err?.message || err);
-  }
+  console.log(`[PersonalizeWppConect] link do mostruário: ${env.mostruarioLinkUrl}`);
 
   if (env.allowedClientNumbers?.length || env.allowedChatIds?.length) {
     console.log(`[PersonalizeWppConect] whitelist ativa: números=${env.allowedClientNumbers.join(', ') || '-'} chatIds=${env.allowedChatIds.join(', ') || '-'}`);
