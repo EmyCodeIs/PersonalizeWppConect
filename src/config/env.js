@@ -48,13 +48,28 @@ const env = {
   enableTestCommands: bool('ENABLE_TEST_COMMANDS', true),
   businessName: process.env.BUSINESS_NAME || 'Personalize',
   sellerName: process.env.SELLER_NAME || 'Vendedor Personalize',
-  bufferMs: Math.max(800, num('BUFFER_MS', 2500)),
+
+  // Entrada do cliente. O buffer curto atende respostas simples; o longo é usado
+  // em medidas, arte, endereço, Pantone e observações com várias mensagens.
+  bufferMs: Math.max(800, num('BUFFER_MS', 4500)),
+  multiMessageBufferMs: Math.max(2500, num('MULTI_MESSAGE_BUFFER_MS', 8000)),
+  measureBufferMs: Math.max(2500, num('MEASURE_BUFFER_MS', 8000)),
+  artBufferMs: Math.max(2500, num('ART_BUFFER_MS', 8000)),
+  addressBufferMs: Math.max(2500, num('ADDRESS_BUFFER_MS', 8000)),
+  pantoneBufferMs: Math.max(2500, num('PANTONE_BUFFER_MS', 8000)),
+  observationBufferMs: Math.max(2500, num('OBSERVATION_BUFFER_MS', 9000)),
+  cityBufferMs: Math.max(800, num('CITY_BUFFER_MS', 2500)),
+  interactiveBufferMs: Math.max(100, num('INTERACTIVE_BUFFER_MS', 350)),
+
+  // Mantidos para respostas avulsas. Dentro de um grupo de resposta o sistema
+  // ignora esses delays e envia os balões em sequência, sem pausas artificiais.
   minReplyDelayMs: Math.max(0, num('MIN_REPLY_DELAY_MS', 1800)),
   maxReplyDelayMs: Math.max(0, num('MAX_REPLY_DELAY_MS', 4200)),
   enableTyping: bool('ENABLE_TYPING', true),
   typingMinMs: Math.max(0, num('TYPING_MIN_MS', 650)),
   typingMaxMs: Math.max(0, num('TYPING_MAX_MS', 1600)),
   typingCharsPerSecond: Math.max(10, num('TYPING_CHARS_PER_SECOND', 45)),
+
   stopNonLetteringFlow: bool('STOP_NON_LETTERING_FLOW', true),
   enableContactNotes: bool('ENABLE_CONTACT_NOTES', true),
   enableContactLabels: bool('ENABLE_CONTACT_LABELS', true),
@@ -76,7 +91,6 @@ const env = {
   lidNumberMap: mapList('LID_NUMBER_MAP'),
   assetsDir: process.env.ASSETS_DIR || 'assets',
   mostruarioLetreiroImageBaseName: process.env.MOSTRUARIO_LETREIRO_IMAGE_BASENAME || 'capa-mostruario',
-  // Link comum de página. Não aponta para PDF e não envia documento.
   mostruarioLinkUrl:
     process.env.MOSTRUARIO_LINK_URL
     || process.env.MOSTRUARIO_LETREIRO_LINK_URL
@@ -86,12 +100,7 @@ const env = {
   assetTabelaProfundidadeBaseName: process.env.ASSET_TABELA_PROFUNDIDADE_BASENAME || 'tabela-profundidade-3mm',
 };
 
-if (env.maxReplyDelayMs < env.minReplyDelayMs) {
-  env.maxReplyDelayMs = env.minReplyDelayMs;
-}
-
-if (env.typingMaxMs < env.typingMinMs) {
-  env.typingMaxMs = env.typingMinMs;
-}
+if (env.maxReplyDelayMs < env.minReplyDelayMs) env.maxReplyDelayMs = env.minReplyDelayMs;
+if (env.typingMaxMs < env.typingMinMs) env.typingMaxMs = env.typingMinMs;
 
 module.exports = { env };
