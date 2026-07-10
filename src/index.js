@@ -18,7 +18,7 @@ const Store = require('./services/leadStore');
 const Identity = require('./services/contactIdentity');
 const { env } = require('./config/env');
 
-const BUILD_ID = 'restore-active-service-labels-2026-07-10-04';
+const BUILD_ID = 'labels-regression-audit-wpp-labels-only-2026-07-10-05';
 const ACTIVE_SERVICE_FLOWS = new Set(['letreiro', 'plotagem', 'outros']);
 const MULTI_MESSAGE_STAGES = new Set([
   'plotagem_descricao',
@@ -196,29 +196,6 @@ async function repairSessionServiceLabel(channel, clientId, repairedKeys, source
   return false;
 }
 
-async function reconcileActiveServiceLabels(channel, repairedKeys) {
-  if (!channel?.client) return { found: 0, repaired: 0 };
-
-  await initializeServiceLabels(channel).catch((err) => {
-    console.warn('[ETIQUETAS] inicialização das etiquetas falhou:', err?.message || err);
-  });
-
-  const sessions = Store.listSessions();
-  let found = 0;
-  let repaired = 0;
-
-  for (const session of sessions) {
-    const flow = getActiveServiceFlow(session);
-    if (!flow) continue;
-    found += 1;
-    const contactId = session.chatId || session.clientId || session.id;
-    if (await repairSessionServiceLabel(channel, contactId, repairedKeys, 'reinício')) repaired += 1;
-  }
-
-  console.log(`[ETIQUETAS] recuperação pós-reinício concluída: ativos=${found} reparados=${repaired}`);
-  return { found, repaired };
-}
-
 function blockPdfSending(channel) {
   if (!channel) return;
   if (typeof channel.sendDocument === 'function') {
@@ -253,7 +230,7 @@ async function main() {
   console.log(`[PersonalizeWppConect] buffer listas/botões: ${env.interactiveBufferMs}ms`);
   console.log('[PersonalizeWppConect] respostas comuns: digitação única + balões sem pausa artificial');
   console.log('[PersonalizeWppConect] boas-vindas: saudação + imagem com link na legenda + lista, sem digitação e sem delay artificial');
-  console.log('[PersonalizeWppConect] etiquetas: criação única por ID + recuperação de atendimentos ativos após reinício');
+  console.log('[PersonalizeWppConect] etiquetas: somente WPP.labels; sem WPP.lists, sem editar cores/nomes e sem remover etiquetas manuais');
   console.log('[PersonalizeWppConect] finalização: dados salvos na nota do contato; sem encaminhamento ao vendedor');
 
   if (env.allowedClientNumbers?.length || env.allowedChatIds?.length) {
@@ -340,7 +317,9 @@ async function main() {
   channel = await createWppChannel({ onMessage });
   blockPdfSending(channel);
   installMessageExperience(channel);
-  await reconcileActiveServiceLabels(channel, repairedServiceLabels);
+  await initializeServiceLabels(channel).catch((err) => {
+    console.warn('[ETIQUETAS] auditoria inicial falhou:', err?.message || err);
+  });
   console.log('[PersonalizeWppConect] conectado. Aguardando mensagens...');
 
   if (env.enableUnreadBootstrap) {
