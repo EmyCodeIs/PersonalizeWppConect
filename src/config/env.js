@@ -74,6 +74,8 @@ const env = {
   stopNonLetteringFlow: bool('STOP_NON_LETTERING_FLOW', true),
   enableContactNotes: bool('ENABLE_CONTACT_NOTES', true),
   enableContactLabels: bool('ENABLE_CONTACT_LABELS', true),
+  detectManualContactLabels: bool('DETECT_MANUAL_CONTACT_LABELS', true),
+  storeManualContactLabels: bool('STORE_MANUAL_CONTACT_LABELS', true),
   awaitingQuoteLabelName: process.env.AWAITING_QUOTE_LABEL_NAME || serviceLabelLetreiro,
   awaitingQuoteLabelColor: process.env.AWAITING_QUOTE_LABEL_COLOR || serviceLabelLetreiroColor,
   serviceLabelLetreiro,
