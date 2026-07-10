@@ -122,93 +122,6 @@ function getTabelaProfundidadePath() {
   ], IMAGE_EXTENSIONS);
 }
 
-function normalizeChatId(clientId) {
-  const raw = String(clientId || '').trim();
-  if (!raw) return '';
-  if (/@(c\.us|g\.us|lid)$/i.test(raw)) return raw;
-  const digits = raw.replace(/\D/g, '');
-  return digits ? `${digits}@c.us` : raw;
-}
-
-function imageMimeType(filePath) {
-  const ext = path.extname(filePath).toLowerCase();
-  if (ext === '.jpg' || ext === '.jpeg') return 'image/jpeg';
-  if (ext === '.webp') return 'image/webp';
-  return 'image/png';
-}
-
-function imageToDataUri(filePath) {
-  const buffer = fs.readFileSync(filePath);
-  return `data:${imageMimeType(filePath)};base64,${buffer.toString('base64')}`;
-}
-
-async function sendImageWithUrlButton(channel, clientId, filePath, pdfUrl) {
-  if (!filePath || !pdfUrl || !channel?.client?.page?.evaluate) return false;
-
-  const chatId = normalizeChatId(clientId);
-  const filename = path.basename(filePath);
-  const caption = String(messages.mostruario || '').trim();
-  const buttonText = String(messages.mostruarioLink || 'Ver Mostruário')
-    .replace(/^🔗\s*/u, '')
-    .trim() || 'Ver Mostruário';
-
-  let dataUri;
-  try {
-    dataUri = imageToDataUri(filePath);
-  } catch (err) {
-    console.warn('[MOSTRUARIO CTA] não foi possível ler a imagem:', err?.message || err);
-    return false;
-  }
-
-  try {
-    console.log(`[MOSTRUARIO CTA] tentando imagem + botão para ${chatId}`);
-    const result = await channel.client.page.evaluate(async (payload) => {
-      const WPP = window.WPP || null;
-      if (!WPP?.chat?.sendFileMessage) {
-        return { ok: false, reason: 'WPP.chat.sendFileMessage indisponível' };
-      }
-
-      const sent = await WPP.chat.sendFileMessage(payload.chatId, payload.dataUri, {
-        type: 'image',
-        filename: payload.filename,
-        caption: payload.caption,
-        buttons: [
-          {
-            url: payload.pdfUrl,
-            text: payload.buttonText,
-          },
-        ],
-        waitForAck: true,
-        markIsRead: false,
-      });
-
-      return {
-        ok: true,
-        id: sent?.id || null,
-        ack: sent?.ack ?? null,
-      };
-    }, {
-      chatId,
-      dataUri,
-      filename,
-      caption,
-      pdfUrl,
-      buttonText,
-    });
-
-    if (result?.ok) {
-      console.log(`[MOSTRUARIO CTA] card enviado com botão "${buttonText}". ACK: ${result.ack ?? 'indisponível'}`);
-      return true;
-    }
-
-    console.warn('[MOSTRUARIO CTA] card não enviado:', result?.reason || 'retorno desconhecido');
-    return false;
-  } catch (err) {
-    console.warn('[MOSTRUARIO CTA] falhou; usando fallback imagem + link:', err?.message || err);
-    return false;
-  }
-}
-
 async function sendImageIfExists(channel, clientId, filePath, caption) {
   if (!filePath) return false;
   if (!channel?.sendImage) {
@@ -219,7 +132,7 @@ async function sendImageIfExists(channel, clientId, filePath, caption) {
   console.log(`[ASSET] enviando imagem: ${filePath}`);
   try {
     const result = await channel.sendImage(clientId, filePath, caption || '');
-    console.log(`[ASSET] envio solicitado com sucesso: ${path.basename(filePath)}`);
+    console.log(`[ASSET] imagem enviada: ${path.basename(filePath)}`);
     return result !== false;
   } catch (err) {
     console.warn('[ASSET] não foi possível enviar imagem:', filePath, err?.message || err);
@@ -232,14 +145,6 @@ async function sendMostruarioLetreiro(channel, clientId) {
   const pdfPath = getMostruarioPdfPath();
   const pdfUrl = String(env.mostruarioLetreiroPdfUrl || '').trim();
 
-  // Caminho principal: card nativo com imagem e botão CTA abrindo o PDF online.
-  if (imagePath && pdfUrl) {
-    const nativeCardSent = await sendImageWithUrlButton(channel, clientId, imagePath, pdfUrl);
-    if (nativeCardSent) return;
-    console.warn('[MOSTRUARIO CTA] seguindo com fallback compatível.');
-  }
-
-  // Fallback seguro: imagem normal seguida do link ou do PDF local.
   if (imagePath) {
     const ok = await sendImageIfExists(channel, clientId, imagePath, messages.mostruario);
     if (!ok) await channel.sendText(clientId, messages.mostruario);
@@ -248,19 +153,30 @@ async function sendMostruarioLetreiro(channel, clientId) {
   }
 
   if (pdfUrl) {
-    await channel.sendText(clientId, `${messages.mostruarioLink}: ${pdfUrl}`);
+    await channel.sendText(
+      clientId,
+      `${messages.mostruarioLink || '🔗 Ver Mostruário'}\n${pdfUrl}`,
+    );
+    console.log('[MOSTRUARIO] imagem e link público enviados.');
     return;
   }
 
   if (pdfPath && channel?.sendDocument) {
     try {
       console.log(`[ASSET] enviando PDF: ${pdfPath}`);
-      const ok = await channel.sendDocument(clientId, pdfPath, 'mostruario.pdf', 'Confira nosso mostruário de Letreiros e Cores.');
+      const ok = await channel.sendDocument(
+        clientId,
+        pdfPath,
+        'mostruario.pdf',
+        'Confira nosso mostruário de Letreiros e Cores.',
+      );
       if (ok) return;
     } catch (err) {
       console.warn('[MOSTRUARIO] não foi possível enviar PDF:', err?.message || err);
     }
   }
+
+  console.warn('[MOSTRUARIO] nenhum link público nem PDF local pôde ser enviado.');
 }
 
 async function sendTabelaCores(channel, clientId) {
@@ -286,5 +202,4 @@ module.exports = {
   getTabelaEspessuraPath,
   getTabelaProfundidadePath,
   listAssetFiles,
-  sendImageWithUrlButton,
 };
