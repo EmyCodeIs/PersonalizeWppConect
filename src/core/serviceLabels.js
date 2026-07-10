@@ -1,46 +1,7 @@
 'use strict';
 
 const { env } = require('../config/env');
-
-function onlyDigits(value) {
-  return String(value || '').replace(/\D/g, '');
-}
-
-function toWhatsAppNumber(value) {
-  let digits = onlyDigits(value);
-  if (!digits) return '';
-
-  // Mapeamentos locais brasileiros podem vir sem DDI.
-  if (digits.length === 10 || digits.length === 11) {
-    digits = `55${digits}`;
-  }
-
-  return digits;
-}
-
-function normalizeChatId(clientId) {
-  const raw = String(clientId || '').trim();
-  if (!raw) return '';
-
-  if (/@lid$/i.test(raw)) {
-    const mapped = env.lidNumberMap?.[raw.toLowerCase()];
-    const number = toWhatsAppNumber(mapped);
-    if (number) {
-      const resolved = `${number}@c.us`;
-      console.log(`[ETIQUETA] LID resolvido para aplicação: ${raw} -> ${resolved}`);
-      return resolved;
-    }
-
-    console.warn(`[ETIQUETA] não existe LID_NUMBER_MAP para ${raw}; etiqueta não será aplicada pelo @lid.`);
-    return '';
-  }
-
-  if (/@c\.us$/i.test(raw)) return raw;
-  if (/@g\.us$/i.test(raw)) return '';
-
-  const number = toWhatsAppNumber(raw);
-  return number ? `${number}@c.us` : '';
-}
+const Identity = require('../services/contactIdentity');
 
 function normalizeName(value) {
   return String(value || '').trim().toLowerCase();
@@ -100,10 +61,7 @@ async function findOrCreateLabel(client, name, color) {
   if (typeof client?.addNewLabel !== 'function') return null;
 
   try {
-    await client.addNewLabel(name, {
-      labelColor: colorToHex(color),
-    });
-
+    await client.addNewLabel(name, { labelColor: colorToHex(color) });
     labels = await getAllLabels(client);
     found = labels.find((label) => normalizeName(labelName(label)) === normalizeName(name));
     return found || null;
@@ -113,9 +71,7 @@ async function findOrCreateLabel(client, name, color) {
   }
 }
 
-async function replaceWithCurrentApi(client, chatId, target, replaceGroup) {
-  if (typeof client?.addOrRemoveLabels !== 'function') return false;
-
+async function buildOptions(client, target, replaceGroup) {
   let labels = await getAllLabels(client);
   let targetLabel = labels.find((label) => normalizeName(labelName(label)) === normalizeName(target.name));
   if (!targetLabel) {
@@ -124,7 +80,7 @@ async function replaceWithCurrentApi(client, chatId, target, replaceGroup) {
   }
 
   const targetId = labelId(targetLabel);
-  if (!targetId) return false;
+  if (!targetId) return [];
 
   const removableNames = new Set(replaceGroup.map(normalizeName));
   const options = labels
@@ -139,44 +95,25 @@ async function replaceWithCurrentApi(client, chatId, target, replaceGroup) {
     options.push({ labelId: targetId, type: 'add' });
   }
 
+  return options;
+}
+
+async function applyWithClientApi(client, chatId, options) {
+  if (typeof client?.addOrRemoveLabels !== 'function' || !options.length) return false;
   await client.addOrRemoveLabels([chatId], options);
   return true;
 }
 
-async function replaceWithPageFallback(client, chatId, target, replaceGroup) {
-  if (!client?.page?.evaluate) return false;
-
+async function applyWithPageApi(client, chatId, options) {
+  if (!client?.page?.evaluate || !options.length) return false;
   try {
-    return await client.page.evaluate(async ({ chatId, targetName, replaceGroup }) => {
+    return await client.page.evaluate(async ({ chatId, options }) => {
       const WPP = window.WPP || null;
-      if (!WPP?.labels?.getAllLabels || !WPP.labels?.addOrRemoveLabels) return false;
-
-      const labels = await WPP.labels.getAllLabels();
-      const list = Array.isArray(labels) ? labels : Object.values(labels || {});
-      const normalizedGroup = replaceGroup.map((name) => String(name || '').trim().toLowerCase());
-      const target = list.find((label) => String(label?.name || '').trim().toLowerCase() === targetName.toLowerCase());
-      if (!target?.id) return false;
-
-      const options = list
-        .filter((label) => normalizedGroup.includes(String(label?.name || '').trim().toLowerCase()))
-        .map((label) => ({
-          labelId: String(label.id),
-          type: String(label.id) === String(target.id) ? 'add' : 'remove',
-        }));
-
-      if (!options.some((item) => item.type === 'add')) {
-        options.push({ labelId: String(target.id), type: 'add' });
-      }
-
+      if (!WPP?.labels?.addOrRemoveLabels) return false;
       await WPP.labels.addOrRemoveLabels([chatId], options);
       return true;
-    }, {
-      chatId,
-      targetName: target.name,
-      replaceGroup,
-    });
-  } catch (err) {
-    console.warn('[ETIQUETA] fallback interno falhou:', err?.message || err);
+    }, { chatId, options });
+  } catch (_) {
     return false;
   }
 }
@@ -185,34 +122,46 @@ async function replaceServiceLabel(channel, clientId, service) {
   if (!env.enableContactLabels || !channel?.client) return false;
 
   const client = channel.client;
-  const chatId = normalizeChatId(clientId);
   const target = getServiceLabel(service);
-  if (!chatId || !target?.name) return false;
+  if (!target?.name) return false;
 
   const replaceGroup = env.serviceLabelReplaceGroup?.length
     ? env.serviceLabelReplaceGroup
     : [env.serviceLabelLetreiro, env.serviceLabelPlotagem, env.serviceLabelOutros];
 
-  let ok = false;
-  try {
-    ok = await replaceWithCurrentApi(client, chatId, target, replaceGroup);
-  } catch (err) {
-    console.warn(`[ETIQUETA] API atual falhou para ${target.name}:`, err?.message || err);
+  const options = await buildOptions(client, target, replaceGroup);
+  if (!options.length) {
+    console.warn(`[ETIQUETA] não consegui localizar/criar a etiqueta ${target.name}.`);
+    return false;
   }
 
-  if (!ok) ok = await replaceWithPageFallback(client, chatId, target, replaceGroup);
+  // O chatId recebido continua sendo a identidade principal. Para contatos LID,
+  // tentamos o próprio @lid primeiro. Aliases conhecidos são apenas tentativas extras.
+  const candidates = Identity.getLabelCandidateIds(clientId);
+  if (!candidates.length) candidates.push(Identity.normalizeChatId(clientId));
 
-  if (ok) {
-    console.log(`[ETIQUETA] solicitação enviada: ${target.name} (${target.color}) em ${chatId}`);
-    return true;
+  for (const chatId of candidates) {
+    let sent = false;
+    try {
+      sent = await applyWithClientApi(client, chatId, options);
+    } catch (err) {
+      console.warn(`[ETIQUETA] API do cliente falhou para ${chatId}:`, err?.message || err);
+    }
+
+    if (!sent) sent = await applyWithPageApi(client, chatId, options);
+
+    if (sent) {
+      console.log(`[ETIQUETA] solicitação enviada para ${chatId}: ${target.name} (${target.color})`);
+      return true;
+    }
   }
 
-  console.warn(`[ETIQUETA] não consegui aplicar ${target.name} em ${chatId}.`);
+  console.warn(`[ETIQUETA] não foi possível enviar ${target.name} para nenhum identificador conhecido do contato.`);
   return false;
 }
 
 module.exports = {
   replaceServiceLabel,
   getServiceLabel,
-  normalizeChatId,
+  normalizeChatId: Identity.normalizeChatId,
 };
