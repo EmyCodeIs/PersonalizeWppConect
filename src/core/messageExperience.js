@@ -68,8 +68,12 @@ async function stopTypingCompat(client, chatId) {
   return false;
 }
 
+function currentResponseOptions() {
+  return responseContext.getStore() || {};
+}
+
 function isGroupedResponse() {
-  return !!responseContext.getStore()?.grouped;
+  return !!currentResponseOptions().grouped;
 }
 
 function isWelcomeText(text) {
@@ -109,7 +113,8 @@ function installMessageExperience(channel) {
 
   if (channel.__rawSendText) {
     channel.sendText = async (clientId, text, options = {}) => {
-      if (isGroupedResponse() || options.noTyping) {
+      const grouped = currentResponseOptions();
+      if (grouped.grouped || options.noTyping) {
         return sendTextWithLinkedWelcome(channel, clientId, text, options);
       }
 
@@ -126,7 +131,8 @@ function installMessageExperience(channel) {
 
   if (channel.__rawSendImage) {
     channel.sendImage = async (clientId, filePath, caption = '', options = {}) => {
-      if (isGroupedResponse() || options.noTyping) {
+      const grouped = currentResponseOptions();
+      if (grouped.grouped || options.noTyping) {
         return sendImageDirect(channel, clientId, filePath, caption);
       }
 
@@ -149,10 +155,16 @@ function installMessageExperience(channel) {
     if (isGroupedResponse()) return action();
 
     const chatId = normalizeChatId(clientId);
-    const started = env.enableTyping ? await startTypingCompat(channel.client, chatId) : false;
+    const shouldType = env.enableTyping && options.noTyping !== true;
+    const started = shouldType ? await startTypingCompat(channel.client, chatId) : false;
+
     try {
       if (started) await wait(typingDuration(summaryText || 'Preparando resposta', options));
-      return await responseContext.run({ grouped: true, clientId: chatId }, action);
+      return await responseContext.run({
+        grouped: true,
+        clientId: chatId,
+        noTyping: options.noTyping === true,
+      }, action);
     } finally {
       if (started) await stopTypingCompat(channel.client, chatId);
     }
