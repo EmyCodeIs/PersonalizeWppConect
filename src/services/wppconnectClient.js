@@ -16,11 +16,7 @@ function randomDelay() {
 function normalizeChatId(clientId) {
   const raw = String(clientId || '').trim();
   if (!raw) return '';
-
-  // IDs novos do WhatsApp podem chegar como @lid. Se trocar para @c.us,
-  // o WA-JS pode falhar com "No LID for user". Por isso preservamos o sufixo real.
   if (/@(c\.us|g\.us|lid)$/i.test(raw)) return raw;
-
   const digits = raw.replace(/\D/g, '');
   return digits ? `${digits}@c.us` : raw;
 }
@@ -36,10 +32,34 @@ function getMessageFrom(message, fallbackChatId = '') {
 function normalizeUnreadMessage(message, fallbackChatId = '') {
   const from = getMessageFrom(message, fallbackChatId);
   const text = getMessageText(message);
-  if (!from || !text) return null;
-  if (message?.fromMe) return null;
+  if (!from || !text || message?.fromMe) return null;
   if (message?.isGroupMsg || /@g\.us$/i.test(from)) return null;
   return { from, text, raw: message };
+}
+
+function colorToHex(color) {
+  const normalized = String(color || '').trim().toLowerCase();
+  const map = {
+    green: '#25D366',
+    red: '#F15C6D',
+    gray: '#A4A4A4',
+    grey: '#A4A4A4',
+    blue: '#53BDEB',
+    yellow: '#F7D154',
+    orange: '#F5A623',
+    purple: '#A970FF',
+    pink: '#FF8AC6',
+  };
+  if (/^#[0-9a-f]{6}$/i.test(normalized)) return normalized;
+  return map[normalized] || '#A4A4A4';
+}
+
+function labelId(label) {
+  return String(label?.id || label?.labelId || '').trim();
+}
+
+function labelName(label) {
+  return String(label?.name || label?.label || '').trim();
 }
 
 function createMockChannel() {
@@ -57,9 +77,11 @@ function createMockChannel() {
     },
     async setContactNote(clientId, note) {
       console.log(`\n[NOTA ${clientId}]\n${note}\n`);
+      return true;
     },
     async applyContactLabel(clientId, label) {
       console.log(`\n[ETIQUETA ${clientId}] ${label?.name || label} (${label?.color || 'green'})\n`);
+      return true;
     },
     async markUnread(clientId) {
       console.log(`\n[MARCAR NÃO LIDO ${clientId}]\n`);
@@ -68,105 +90,87 @@ function createMockChannel() {
   };
 }
 
-async function tryClientLabelApi(client, chatId, labelName, color) {
-  const methods = [
+async function getAllLabels(client) {
+  if (typeof client?.getAllLabels !== 'function') return [];
+  try {
+    const labels = await client.getAllLabels();
+    return Array.isArray(labels) ? labels : Object.values(labels || {});
+  } catch (err) {
+    console.warn('[WPPConnect] não foi possível listar etiquetas:', err?.message || err);
+    return [];
+  }
+}
+
+async function findOrCreateLabel(client, name, color) {
+  let labels = await getAllLabels(client);
+  let found = labels.find((item) => labelName(item).toLowerCase() === name.toLowerCase());
+  if (found) return found;
+
+  if (typeof client?.addNewLabel !== 'function') return null;
+
+  try {
+    const created = await client.addNewLabel(name, {
+      labelColor: colorToHex(color),
+    });
+
+    if (created && typeof created === 'object') return created;
+
+    labels = await getAllLabels(client);
+    found = labels.find((item) => labelName(item).toLowerCase() === name.toLowerCase());
+    return found || null;
+  } catch (err) {
+    console.warn(`[WPPConnect] não foi possível criar etiqueta "${name}":`, err?.message || err);
+    return null;
+  }
+}
+
+async function applyLabelCurrentApi(client, chatId, labelNameValue, color) {
+  if (typeof client?.addOrRemoveLabels !== 'function') return false;
+
+  const label = await findOrCreateLabel(client, labelNameValue, color);
+  const id = labelId(label);
+  if (!id) return false;
+
+  await client.addOrRemoveLabels([chatId], [
+    { labelId: id, type: 'add' },
+  ]);
+  return true;
+}
+
+async function applyLabelFallback(client, chatId, labelNameValue) {
+  const attempts = [
     async () => {
-      if (typeof client.getAllLabels !== 'function') return false;
-      const labels = await client.getAllLabels();
-      const found = Array.isArray(labels)
-        ? labels.find((item) => String(item?.name || item?.label || '').toLowerCase() === labelName.toLowerCase())
-        : null;
-      let label = found;
-      if (!label && typeof client.createLabel === 'function') {
-        label = await client.createLabel(labelName, color);
-      }
-      const labelId = label?.id || label?.labelId || label?.hexColor || label?.name || labelName;
-      if (!labelId) return false;
-      if (typeof client.addChatWLabels === 'function') {
-        await client.addChatWLabels(chatId, [labelId]);
-        return true;
-      }
-      if (typeof client.addOrRemoveLabels === 'function') {
-        await client.addOrRemoveLabels([chatId], [labelId], []);
-        return true;
-      }
-      if (typeof client.addLabelToChat === 'function') {
-        await client.addLabelToChat(chatId, labelId);
-        return true;
-      }
-      return false;
+      if (typeof client?.addChatWLabels !== 'function') return false;
+      await client.addChatWLabels(chatId, [labelNameValue]);
+      return true;
     },
     async () => {
-      if (typeof client.addChatWLabels !== 'function') return false;
-      await client.addChatWLabels(chatId, [labelName]);
-      return true;
+      if (!client?.page?.evaluate) return false;
+      return client.page.evaluate(async ({ chatId, labelNameValue }) => {
+        const WPP = window.WPP || null;
+        if (!WPP?.labels) return false;
+        const labels = await WPP.labels.getAllLabels();
+        const list = Array.isArray(labels) ? labels : Object.values(labels || {});
+        const found = list.find((item) => String(item?.name || '').toLowerCase() === labelNameValue.toLowerCase());
+        if (!found?.id) return false;
+        await WPP.labels.addOrRemoveLabels([chatId], [
+          { labelId: String(found.id), type: 'add' },
+        ]);
+        return true;
+      }, { chatId, labelNameValue });
     },
   ];
 
-  for (const run of methods) {
+  for (const attempt of attempts) {
     try {
-      const ok = await run();
-      if (ok) return true;
+      if (await attempt()) return true;
     } catch (_) {}
   }
   return false;
 }
 
-async function tryPageLabelApi(client, chatId, labelName, color) {
-  if (!client?.page?.evaluate) return false;
-  try {
-    return await client.page.evaluate(async ({ chatId, labelName, color }) => {
-      const lower = String(labelName || '').toLowerCase();
-      const WPP = window.WPP || null;
-      if (!WPP) return false;
-
-      async function getLabels() {
-        if (WPP.labels?.getAllLabels) return WPP.labels.getAllLabels();
-        if (WPP.label?.getAllLabels) return WPP.label.getAllLabels();
-        if (WPP.chat?.getLabels) return WPP.chat.getLabels();
-        return [];
-      }
-
-      async function createLabel() {
-        if (WPP.labels?.create) return WPP.labels.create(labelName, { color });
-        if (WPP.label?.create) return WPP.label.create(labelName, { color });
-        if (WPP.labels?.addLabel) return WPP.labels.addLabel(labelName, color);
-        return null;
-      }
-
-      const labels = await getLabels().catch(() => []);
-      const list = Array.isArray(labels) ? labels : Object.values(labels || {});
-      let label = list.find((item) => String(item?.name || item?.label || '').toLowerCase() === lower) || null;
-      if (!label) label = await createLabel().catch(() => null);
-      const labelId = label?.id || label?.labelId || label?.name || labelName;
-      if (!labelId) return false;
-
-      if (WPP.chat?.addLabels) {
-        await WPP.chat.addLabels(chatId, [labelId]);
-        return true;
-      }
-      if (WPP.chat?.addLabel) {
-        await WPP.chat.addLabel(chatId, labelId);
-        return true;
-      }
-      if (WPP.labels?.addChatLabels) {
-        await WPP.labels.addChatLabels(chatId, [labelId]);
-        return true;
-      }
-      if (WPP.label?.addChatLabels) {
-        await WPP.label.addChatLabels(chatId, [labelId]);
-        return true;
-      }
-      return false;
-    }, { chatId, labelName, color });
-  } catch (_) {
-    return false;
-  }
-}
-
 async function collectViaUnreadMethods(client) {
-  const methodNames = ['getUnreadMessages', 'getAllUnreadMessages'];
-  for (const name of methodNames) {
+  for (const name of ['getUnreadMessages', 'getAllUnreadMessages']) {
     if (typeof client?.[name] !== 'function') continue;
     try {
       const result = await client[name]();
@@ -183,21 +187,31 @@ async function collectViaUnreadMethods(client) {
   return [];
 }
 
+async function listChatsCompat(client) {
+  if (typeof client?.listChats === 'function') {
+    return client.listChats();
+  }
+  if (typeof client?.getAllChats === 'function') {
+    console.warn('[WPPConnect] listChats indisponível; usando getAllChats como fallback legado.');
+    return client.getAllChats();
+  }
+  if (typeof client?.getAllChatsWithMessages === 'function') {
+    return client.getAllChatsWithMessages();
+  }
+  return [];
+}
+
 async function collectViaChats(client) {
-  const getChats = typeof client.getAllChats === 'function'
-    ? () => client.getAllChats()
-    : typeof client.getAllChatsWithMessages === 'function'
-      ? () => client.getAllChatsWithMessages()
-      : null;
-
-  if (!getChats) return [];
-
-  const chats = await getChats().catch((err) => {
+  let chats = [];
+  try {
+    const result = await listChatsCompat(client);
+    chats = Array.isArray(result) ? result : Object.values(result || {});
+  } catch (err) {
     console.warn('[WPPConnect] não foi possível listar chats:', err?.message || err);
     return [];
-  });
+  }
 
-  const chatList = (Array.isArray(chats) ? chats : Object.values(chats || {}))
+  const chatList = chats
     .filter((chat) => !chat?.isGroup && !chat?.isGroupMsg && !/@g\.us$/i.test(String(chat?.id?._serialized || chat?.id || '')))
     .filter((chat) => Number(chat?.unreadCount || chat?.unread || chat?.unreadMessages || 0) > 0)
     .slice(0, env.unreadBootstrapMaxChats);
@@ -206,12 +220,17 @@ async function collectViaChats(client) {
 
   for (const chat of chatList) {
     const chatId = String(chat?.id?._serialized || chat?.id || chat?.contact?.id?._serialized || '').trim();
-    const unreadCount = Number(chat?.unreadCount || chat?.unread || chat?.unreadMessages || 0) || env.unreadBootstrapMaxMessagesPerChat;
-    const limit = Math.min(env.unreadBootstrapMaxMessagesPerChat, unreadCount || env.unreadBootstrapMaxMessagesPerChat);
+    const unreadCount = Number(chat?.unreadCount || chat?.unread || chat?.unreadMessages || 0)
+      || env.unreadBootstrapMaxMessagesPerChat;
+    const limit = Math.min(env.unreadBootstrapMaxMessagesPerChat, unreadCount);
 
-    let messages = Array.isArray(chat?.msgs) ? chat.msgs : Array.isArray(chat?.messages) ? chat.messages : [];
+    let messages = Array.isArray(chat?.msgs)
+      ? chat.msgs
+      : Array.isArray(chat?.messages)
+        ? chat.messages
+        : [];
 
-    if (!messages.length && chatId && typeof client.getAllMessagesInChat === 'function') {
+    if (!messages.length && chatId && typeof client?.getAllMessagesInChat === 'function') {
       try {
         messages = await client.getAllMessagesInChat(chatId, true, false);
       } catch (err) {
@@ -238,19 +257,16 @@ async function collectViaPage(client) {
       const WPP = window.WPP || null;
       if (!WPP) return [];
 
-      function readId(value) {
+      const readId = (value) => {
         if (!value) return '';
         if (typeof value === 'string') return value;
         return value._serialized || value.id?._serialized || value.user || value.toString?.() || '';
-      }
+      };
 
-      function readText(message) {
-        return String(message?.body || message?.caption || message?.text || '').trim();
-      }
-
+      const readText = (message) => String(message?.body || message?.caption || message?.text || '').trim();
       const stores = window.Store || {};
-      const chatCollection = WPP.chat?.getModelsArray?.() || stores.Chat?.models || stores.Chat?._models || [];
-      const chats = Array.from(chatCollection || [])
+      const collection = WPP.chat?.getModelsArray?.() || stores.Chat?.models || stores.Chat?._models || [];
+      const chats = Array.from(collection || [])
         .filter((chat) => Number(chat?.unreadCount || chat?.unread || 0) > 0)
         .filter((chat) => !chat?.isGroup && !/@g\.us$/i.test(readId(chat?.id)))
         .slice(0, maxChats);
@@ -259,15 +275,19 @@ async function collectViaPage(client) {
       for (const chat of chats) {
         const chatId = readId(chat?.id);
         const unread = Number(chat?.unreadCount || chat?.unread || 0) || maxMessages;
-        const limit = Math.min(maxMessages, unread || maxMessages);
-        const msgs = Array.from(chat?.msgs?.models || chat?.msgs?._models || chat?.messages || [])
-          .slice(-limit);
+        const messages = Array.from(chat?.msgs?.models || chat?.msgs?._models || chat?.messages || [])
+          .slice(-Math.min(maxMessages, unread));
 
-        for (const msg of msgs) {
-          const from = readId(msg?.from) || chatId;
-          const text = readText(msg);
-          if (!from || !text || msg?.fromMe || /@g\.us$/i.test(from)) continue;
-          out.push({ from, text, id: readId(msg?.id), timestamp: msg?.t || msg?.timestamp || null });
+        for (const message of messages) {
+          const from = readId(message?.from) || chatId;
+          const text = readText(message);
+          if (!from || !text || message?.fromMe || /@g\.us$/i.test(from)) continue;
+          out.push({
+            from,
+            text,
+            id: readId(message?.id),
+            timestamp: message?.t || message?.timestamp || null,
+          });
         }
       }
       return out;
@@ -280,7 +300,9 @@ async function collectViaPage(client) {
       .map((msg) => normalizeUnreadMessage({ ...msg, id: msg.id, timestamp: msg.timestamp }, msg.from))
       .filter(Boolean);
 
-    if (normalized.length) console.log(`[WPPConnect] não lidas coletadas via page.evaluate: ${normalized.length}`);
+    if (normalized.length) {
+      console.log(`[WPPConnect] não lidas coletadas via page.evaluate: ${normalized.length}`);
+    }
     return normalized;
   } catch (err) {
     console.warn('[WPPConnect] busca de não lidas via page.evaluate falhou:', err?.message || err);
@@ -290,10 +312,9 @@ async function collectViaPage(client) {
 
 async function collectUnreadMessages(client) {
   const all = [];
-
   for (const collect of [collectViaUnreadMethods, collectViaChats, collectViaPage]) {
     const found = await collect(client);
-    for (const item of found) all.push(item);
+    all.push(...found);
     if (all.length) break;
   }
 
@@ -315,7 +336,7 @@ async function createWppChannel({ onMessage, onQr } = {}) {
     session: env.sessionName,
     catchQR: (base64Qr, asciiQR, attempts, urlCode) => {
       console.log('\n[WPPConnect] Escaneie o QR Code com o WhatsApp Business.');
-      console.log('[WPPConnect] Se a janela do Chrome abrir, leia o QR por ela. Também deixei o QR abaixo como fallback:\n');
+      console.log('[WPPConnect] Se a janela do Chrome abrir, leia o QR por ela. O QR abaixo é fallback:\n');
       console.log(asciiQR);
       if (typeof onQr === 'function') onQr({ base64Qr, asciiQR, attempts, urlCode });
     },
@@ -333,12 +354,7 @@ async function createWppChannel({ onMessage, onQr } = {}) {
     async sendText(clientId, text) {
       const chatId = normalizeChatId(clientId);
       await wait(randomDelay());
-      try {
-        await client.sendText(chatId, String(text || ''));
-      } catch (err) {
-        console.error(`[WPPConnect] erro ao enviar mensagem para ${chatId}:`, err?.message || err);
-        throw err;
-      }
+      await client.sendText(chatId, String(text || ''));
     },
     async sendImage(clientId, filePath, caption = '') {
       const chatId = normalizeChatId(clientId);
@@ -359,46 +375,39 @@ async function createWppChannel({ onMessage, onQr } = {}) {
     async setContactNote(clientId, note) {
       const chatId = normalizeChatId(clientId);
       try {
-        if (client?.page?.evaluate) {
-          await client.page.evaluate(async ({ chatId, note }) => {
-            if (window.WPP?.chat?.setNotes) return window.WPP.chat.setNotes(chatId, note);
-            if (window.WPP?.contact?.setNotes) return window.WPP.contact.setNotes(chatId, note);
-            return null;
-          }, { chatId, note });
-        }
+        if (!client?.page?.evaluate) return false;
+        return await client.page.evaluate(async ({ chatId, note }) => {
+          if (window.WPP?.chat?.setNotes) return window.WPP.chat.setNotes(chatId, note);
+          if (window.WPP?.contact?.setNotes) return window.WPP.contact.setNotes(chatId, note);
+          return false;
+        }, { chatId, note });
       } catch (err) {
-        console.warn('[WPPConnect] nao foi possivel salvar nota:', err?.message || err);
+        console.warn('[WPPConnect] não foi possível salvar nota:', err?.message || err);
+        return false;
       }
     },
     async markUnread(clientId) {
       const chatId = normalizeChatId(clientId);
       const attempts = [
         async () => {
-          if (typeof client.markUnseenMessage !== 'function') return false;
+          if (typeof client?.markUnseenMessage !== 'function') return false;
           await client.markUnseenMessage(chatId);
           return true;
         },
         async () => {
-          if (typeof client.markUnread !== 'function') return false;
+          if (typeof client?.markUnread !== 'function') return false;
           await client.markUnread(chatId);
           return true;
         },
         async () => {
           if (!client?.page?.evaluate) return false;
           return client.page.evaluate(async ({ chatId }) => {
-            const WPP = window.WPP || null;
-            if (WPP?.chat?.markIsUnread) {
-              await WPP.chat.markIsUnread(chatId);
+            if (window.WPP?.chat?.markIsUnread) {
+              await window.WPP.chat.markIsUnread(chatId);
               return true;
             }
-            if (WPP?.chat?.markUnread) {
-              await WPP.chat.markUnread(chatId);
-              return true;
-            }
-            const Store = window.Store || null;
-            const chat = Store?.Chat?.get?.(chatId) || Store?.Chat?.find?.(chatId);
-            if (chat?.markUnread) {
-              await chat.markUnread();
+            if (window.WPP?.chat?.markUnread) {
+              await window.WPP.chat.markUnread(chatId);
               return true;
             }
             return false;
@@ -408,8 +417,7 @@ async function createWppChannel({ onMessage, onQr } = {}) {
 
       for (const attempt of attempts) {
         try {
-          const ok = await attempt();
-          if (ok) {
+          if (await attempt()) {
             console.log(`[WPPConnect] marcado como não lido: ${chatId}`);
             return true;
           }
@@ -421,15 +429,20 @@ async function createWppChannel({ onMessage, onQr } = {}) {
     async applyContactLabel(clientId, label = {}) {
       if (!env.enableContactLabels) return false;
       const chatId = normalizeChatId(clientId);
-      const labelName = String(label.name || env.awaitingQuoteLabelName || 'Aguardando orçamento').trim();
+      const name = String(label.name || env.awaitingQuoteLabelName || 'Aguardando orçamento').trim();
       const color = String(label.color || env.awaitingQuoteLabelColor || 'green').trim();
-      if (!chatId || !labelName) return false;
+      if (!chatId || !name) return false;
 
-      const ok = await tryClientLabelApi(client, chatId, labelName, color)
-        || await tryPageLabelApi(client, chatId, labelName, color);
+      let ok = false;
+      try {
+        ok = await applyLabelCurrentApi(client, chatId, name, color);
+      } catch (err) {
+        console.warn(`[WPPConnect] API atual de etiquetas falhou para "${name}":`, err?.message || err);
+      }
 
+      if (!ok) ok = await applyLabelFallback(client, chatId, name);
       if (!ok) {
-        console.warn(`[WPPConnect] nao foi possivel aplicar etiqueta "${labelName}" em ${chatId}. Verifique suporte da versao/sessao Business.`);
+        console.warn(`[WPPConnect] não foi possível aplicar etiqueta "${name}" em ${chatId}.`);
       }
       return ok;
     },
@@ -440,13 +453,10 @@ async function createWppChannel({ onMessage, onQr } = {}) {
   });
 
   client.onMessage(async (message) => {
-    if (message?.fromMe) return;
-    if (message?.isGroupMsg) return;
-
+    if (message?.fromMe || message?.isGroupMsg) return;
     const from = String(message?.from || message?.chatId || '').trim();
     const text = getMessageText(message);
     if (!from || !text) return;
-
     console.log(`[WPPConnect] mensagem recebida de ${from}`);
     await onMessage?.({ from, text, raw: message, channel });
   });
