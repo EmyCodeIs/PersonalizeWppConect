@@ -47,56 +47,23 @@ async function getAllLabels(client) {
     const labels = await client.getAllLabels();
     return Array.isArray(labels) ? labels : Object.values(labels || {});
   } catch (err) {
-    console.warn('[ETIQUETA] não foi possível listar etiquetas:', err?.message || err);
+    console.warn('[LISTA] não foi possível listar as listas/etiquetas:', err?.message || err);
     return [];
   }
 }
 
-async function buildOptionsFromClient(client, target, replaceGroup) {
-  let labels = await getAllLabels(client);
-  let targetLabel = labels.find((label) => normalizeName(labelName(label)) === normalizeName(target.name));
-
-  if (!targetLabel && typeof client?.addNewLabel === 'function') {
-    try {
-      await client.addNewLabel(target.name);
-      labels = await getAllLabels(client);
-      targetLabel = labels.find((label) => normalizeName(labelName(label)) === normalizeName(target.name));
-    } catch (err) {
-      console.warn(`[ETIQUETA] wrapper não conseguiu criar "${target.name}":`, err?.message || err);
-    }
+async function applyThroughListsApi(client, chatId, target, replaceGroup) {
+  if (!client?.page?.evaluate) {
+    return { applied: false, verified: false, reason: 'page_unavailable' };
   }
-
-  const targetId = labelId(targetLabel);
-  if (!targetId) return [];
-
-  const removableNames = new Set(replaceGroup.map(normalizeName));
-  const options = labels
-    .filter((label) => removableNames.has(normalizeName(labelName(label))))
-    .map((label) => ({
-      labelId: labelId(label),
-      type: labelId(label) === targetId ? 'add' : 'remove',
-    }))
-    .filter((item) => item.labelId);
-
-  if (!options.some((item) => item.labelId === targetId && item.type === 'add')) {
-    options.push({ labelId: targetId, type: 'add' });
-  }
-
-  return options;
-}
-
-async function applyThroughWaJs(client, chatId, target, replaceGroup) {
-  if (!client?.page?.evaluate) return { applied: false, verified: false, reason: 'page_unavailable' };
 
   return client.page.evaluate(async ({ chatId, target, replaceGroup, requestedHex }) => {
     const WPP = window.WPP || null;
-    if (!WPP?.labels?.getAllLabels || !WPP?.labels?.addOrRemoveLabels) {
-      return { applied: false, verified: false, reason: 'labels_api_unavailable' };
+    if (!WPP?.lists?.create || !WPP?.lists?.addChats || !WPP?.lists?.removeChats) {
+      return { applied: false, verified: false, reason: 'lists_api_unavailable' };
     }
 
-    function normalize(value) {
-      return String(value || '').trim().toLowerCase();
-    }
+    const normalize = (value) => String(value || '').trim().toLowerCase();
 
     function rgb(hex) {
       const clean = String(hex || '').replace('#', '');
@@ -108,65 +75,78 @@ async function applyThroughWaJs(client, chatId, target, replaceGroup) {
       ];
     }
 
-    function closestPaletteColor(palette, wantedHex) {
+    function closestPaletteIndex(palette, wantedHex) {
       const wanted = rgb(wantedHex);
-      if (!wanted || !Array.isArray(palette) || !palette.length) return null;
-      let best = null;
+      if (!wanted || !Array.isArray(palette) || !palette.length) return undefined;
+      let bestIndex;
       let bestDistance = Number.POSITIVE_INFINITY;
-      for (const item of palette) {
+      palette.forEach((item, index) => {
         const candidate = rgb(item);
-        if (!candidate) continue;
+        if (!candidate) return;
         const distance = ((candidate[0] - wanted[0]) ** 2)
           + ((candidate[1] - wanted[1]) ** 2)
           + ((candidate[2] - wanted[2]) ** 2);
         if (distance < bestDistance) {
           bestDistance = distance;
-          best = item;
+          bestIndex = index;
         }
-      }
-      return best;
+      });
+      return bestIndex;
     }
 
-    let labels = await WPP.labels.getAllLabels();
-    labels = Array.isArray(labels) ? labels : Object.values(labels || {});
-    let targetLabel = labels.find((label) => normalize(label?.name) === normalize(target.name));
-
-    if (!targetLabel) {
-      if (!WPP.labels.addNewLabel) {
-        return { applied: false, verified: false, reason: 'add_label_unavailable' };
-      }
-
-      let palette = [];
-      if (WPP.labels.getLabelColorPalette) {
-        palette = await WPP.labels.getLabelColorPalette();
-      }
-      const paletteColor = closestPaletteColor(palette, requestedHex);
-      const options = paletteColor ? { labelColor: paletteColor } : {};
-      targetLabel = await WPP.labels.addNewLabel(target.name, options);
-      labels = await WPP.labels.getAllLabels();
-      labels = Array.isArray(labels) ? labels : Object.values(labels || {});
-      targetLabel = labels.find((label) => normalize(label?.name) === normalize(target.name)) || targetLabel;
+    let lists = [];
+    if (WPP.labels?.getAllLabels) {
+      const value = await WPP.labels.getAllLabels();
+      lists = Array.isArray(value) ? value : Object.values(value || {});
     }
 
-    const targetId = String(targetLabel?.id || '');
+    let targetList = lists.find((item) => normalize(item?.name) === normalize(target.name));
+
+    if (!targetList) {
+      let colorIndex;
+      if (WPP.labels?.getLabelColorPalette) {
+        const palette = await WPP.labels.getLabelColorPalette();
+        colorIndex = closestPaletteIndex(palette, requestedHex);
+      }
+
+      const createdId = await WPP.lists.create(
+        target.name,
+        [],
+        Number.isInteger(colorIndex) ? colorIndex : undefined
+      );
+
+      if (WPP.labels?.getAllLabels) {
+        const value = await WPP.labels.getAllLabels();
+        lists = Array.isArray(value) ? value : Object.values(value || {});
+      }
+
+      targetList = lists.find((item) => String(item?.id || '') === String(createdId))
+        || lists.find((item) => normalize(item?.name) === normalize(target.name))
+        || { id: String(createdId), name: target.name };
+    }
+
+    const targetId = String(targetList?.id || '');
     if (!targetId) {
-      return { applied: false, verified: false, reason: 'target_label_missing' };
+      return { applied: false, verified: false, reason: 'target_list_missing' };
     }
 
-    const group = replaceGroup.map(normalize);
-    const operations = labels
-      .filter((label) => group.includes(normalize(label?.name)))
-      .map((label) => ({
-        labelId: String(label.id),
-        type: String(label.id) === targetId ? 'add' : 'remove',
-      }));
+    const groupNames = replaceGroup.map(normalize);
+    const otherLists = lists.filter((item) => {
+      const id = String(item?.id || '');
+      return id && id !== targetId && groupNames.includes(normalize(item?.name));
+    });
 
-    if (!operations.some((item) => item.labelId === targetId && item.type === 'add')) {
-      operations.push({ labelId: targetId, type: 'add' });
+    for (const list of otherLists) {
+      try {
+        await WPP.lists.removeChats(String(list.id), [chatId]);
+      } catch (err) {
+        const text = String(err?.message || err?.text || err || '');
+        if (!/not found|not attached|not in list/i.test(text)) throw err;
+      }
     }
 
-    await WPP.labels.addOrRemoveLabels([chatId], operations);
-    await new Promise((resolve) => setTimeout(resolve, 700));
+    await WPP.lists.addChats(targetId, [chatId]);
+    await new Promise((resolve) => setTimeout(resolve, 800));
 
     let verified = null;
     try {
@@ -175,8 +155,8 @@ async function applyThroughWaJs(client, chatId, target, replaceGroup) {
       const labelStore = Store?.Label || Store?.Labels || null;
       if (chat && typeof labelStore?.getLabelsForModel === 'function') {
         const attached = labelStore.getLabelsForModel(chat) || [];
-        const list = Array.isArray(attached) ? attached : Object.values(attached || {});
-        verified = list.some((label) => String(label?.id || label) === targetId);
+        const attachedList = Array.isArray(attached) ? attached : Object.values(attached || {});
+        verified = attachedList.some((item) => String(item?.id || item) === targetId);
       }
     } catch (_) {
       verified = null;
@@ -185,10 +165,10 @@ async function applyThroughWaJs(client, chatId, target, replaceGroup) {
     return {
       applied: true,
       verified,
+      mode: 'lists',
       chatId,
       targetId,
       targetName: target.name,
-      operations,
     };
   }, {
     chatId,
@@ -198,18 +178,45 @@ async function applyThroughWaJs(client, chatId, target, replaceGroup) {
   });
 }
 
-async function applyThroughWrapper(client, chatId, target, replaceGroup) {
-  if (typeof client?.addOrRemoveLabels !== 'function') {
-    return { applied: false, verified: false, reason: 'wrapper_unavailable' };
+async function buildLegacyOptions(client, target, replaceGroup) {
+  let labels = await getAllLabels(client);
+  let targetLabel = labels.find((item) => normalizeName(labelName(item)) === normalizeName(target.name));
+
+  if (!targetLabel && typeof client?.addNewLabel === 'function') {
+    try {
+      await client.addNewLabel(target.name);
+      labels = await getAllLabels(client);
+      targetLabel = labels.find((item) => normalizeName(labelName(item)) === normalizeName(target.name));
+    } catch (err) {
+      console.warn(`[LISTA] fallback antigo não conseguiu criar "${target.name}":`, err?.message || err);
+    }
   }
 
-  const options = await buildOptionsFromClient(client, target, replaceGroup);
-  if (!options.length) {
-    return { applied: false, verified: false, reason: 'label_not_found' };
-  }
+  const targetId = labelId(targetLabel);
+  if (!targetId) return [];
 
-  await client.addOrRemoveLabels([chatId], options);
-  return { applied: true, verified: null, chatId, operations: options };
+  const groupNames = new Set(replaceGroup.map(normalizeName));
+  const operations = labels
+    .filter((item) => groupNames.has(normalizeName(labelName(item))))
+    .map((item) => ({
+      labelId: labelId(item),
+      type: labelId(item) === targetId ? 'add' : 'remove',
+    }))
+    .filter((item) => item.labelId);
+
+  if (!operations.some((item) => item.labelId === targetId && item.type === 'add')) {
+    operations.push({ labelId: targetId, type: 'add' });
+  }
+  return operations;
+}
+
+async function applyThroughLegacyLabels(client, chatId, target, replaceGroup) {
+  const operations = await buildLegacyOptions(client, target, replaceGroup);
+  if (!operations.length || typeof client?.addOrRemoveLabels !== 'function') {
+    return { applied: false, verified: false, reason: 'legacy_labels_unavailable' };
+  }
+  await client.addOrRemoveLabels([chatId], operations);
+  return { applied: true, verified: null, mode: 'legacy-labels', chatId };
 }
 
 async function replaceServiceLabel(channel, clientId, service) {
@@ -226,41 +233,42 @@ async function replaceServiceLabel(channel, clientId, service) {
   const candidates = Identity.getLabelCandidateIds(clientId);
   if (!candidates.length) candidates.push(Identity.normalizeChatId(clientId));
 
-  for (const chatId of candidates.filter(Boolean)) {
-    let result = null;
+  for (const chatId of [...new Set(candidates.filter(Boolean))]) {
+    let result;
 
     try {
-      result = await applyThroughWaJs(client, chatId, target, replaceGroup);
+      result = await applyThroughListsApi(client, chatId, target, replaceGroup);
     } catch (err) {
-      console.warn(`[ETIQUETA] WA-JS falhou para ${chatId}:`, err?.message || err);
+      console.warn(`[LISTA] API nova falhou para ${chatId}:`, err?.message || err?.text || err);
     }
 
-    if (!result?.applied) {
+    if (!result?.applied && result?.reason === 'lists_api_unavailable') {
+      console.warn('[LISTA] WPP.lists indisponível nesta versão; usando fallback antigo WPP.labels.');
       try {
-        result = await applyThroughWrapper(client, chatId, target, replaceGroup);
+        result = await applyThroughLegacyLabels(client, chatId, target, replaceGroup);
       } catch (err) {
-        console.warn(`[ETIQUETA] wrapper falhou para ${chatId}:`, err?.message || err);
+        console.warn(`[LISTA] fallback antigo falhou para ${chatId}:`, err?.message || err);
       }
     }
 
     if (result?.applied && result.verified === true) {
-      console.log(`[ETIQUETA] aplicada e confirmada em ${chatId}: ${target.name}`);
+      console.log(`[LISTA] adicionada e confirmada em ${chatId}: ${target.name} (${result.mode})`);
       return true;
     }
 
     if (result?.applied && result.verified === null) {
-      console.log(`[ETIQUETA] operação enviada sem confirmação disponível em ${chatId}: ${target.name}`);
+      console.log(`[LISTA] operação concluída sem verificação interna disponível em ${chatId}: ${target.name} (${result.mode})`);
       return true;
     }
 
     if (result?.applied && result.verified === false) {
-      console.warn(`[ETIQUETA] operação executada, mas a etiqueta não foi confirmada em ${chatId}: ${target.name}`);
-    } else if (result?.reason) {
-      console.warn(`[ETIQUETA] não aplicada em ${chatId}: ${result.reason}`);
+      console.warn(`[LISTA] operação executada, mas não confirmada em ${chatId}: ${target.name}`);
+    } else if (result?.reason && result.reason !== 'lists_api_unavailable') {
+      console.warn(`[LISTA] não aplicada em ${chatId}: ${result.reason}`);
     }
   }
 
-  console.warn(`[ETIQUETA] não foi possível aplicar ${target.name} em nenhum identificador conhecido.`);
+  console.warn(`[LISTA] não foi possível adicionar ${target.name} em nenhum identificador conhecido.`);
   return false;
 }
 
