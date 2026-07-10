@@ -2,6 +2,7 @@
 
 const path = require('path');
 const { env } = require('../config/env');
+const { applyNamedLabel } = require('../core/serviceLabels');
 
 function wait(ms) {
   return new Promise((resolve) => setTimeout(resolve, Math.max(0, Number(ms || 0))));
@@ -66,24 +67,6 @@ function normalizeUnreadMessage(message, fallbackChatId = '') {
   return { from, text, raw: message };
 }
 
-function colorToHex(color) {
-  const normalized = String(color || '').trim().toLowerCase();
-  const map = {
-    green: '#25D366', red: '#F15C6D', gray: '#A4A4A4', grey: '#A4A4A4',
-    blue: '#53BDEB', yellow: '#F7D154', orange: '#F5A623', purple: '#A970FF', pink: '#FF8AC6',
-  };
-  if (/^#[0-9a-f]{6}$/i.test(normalized)) return normalized;
-  return map[normalized] || '#A4A4A4';
-}
-
-function labelId(label) {
-  return String(label?.id || label?.labelId || '').trim();
-}
-
-function labelName(label) {
-  return String(label?.name || label?.label || '').trim();
-}
-
 function createMockChannel() {
   const client = {
     async sendText(chatId, text) {
@@ -130,69 +113,6 @@ function createMockChannel() {
       return true;
     },
   };
-}
-
-async function getAllLabels(client) {
-  if (typeof client?.getAllLabels !== 'function') return [];
-  try {
-    const labels = await client.getAllLabels();
-    return Array.isArray(labels) ? labels : Object.values(labels || {});
-  } catch (err) {
-    console.warn('[WPPConnect] não foi possível listar etiquetas:', err?.message || err);
-    return [];
-  }
-}
-
-async function findOrCreateLabel(client, name, color) {
-  let labels = await getAllLabels(client);
-  let found = labels.find((item) => labelName(item).toLowerCase() === name.toLowerCase());
-  if (found) return found;
-  if (typeof client?.addNewLabel !== 'function') return null;
-  try {
-    const created = await client.addNewLabel(name, { labelColor: colorToHex(color) });
-    if (created && typeof created === 'object') return created;
-    labels = await getAllLabels(client);
-    return labels.find((item) => labelName(item).toLowerCase() === name.toLowerCase()) || null;
-  } catch (err) {
-    console.warn(`[WPPConnect] não foi possível criar etiqueta "${name}":`, err?.message || err);
-    return null;
-  }
-}
-
-async function applyLabelCurrentApi(client, chatId, labelNameValue, color) {
-  if (typeof client?.addOrRemoveLabels !== 'function') return false;
-  const label = await findOrCreateLabel(client, labelNameValue, color);
-  const id = labelId(label);
-  if (!id) return false;
-  await client.addOrRemoveLabels([chatId], [{ labelId: id, type: 'add' }]);
-  return true;
-}
-
-async function applyLabelFallback(client, chatId, labelNameValue) {
-  const attempts = [
-    async () => {
-      if (typeof client?.addChatWLabels !== 'function') return false;
-      await client.addChatWLabels(chatId, [labelNameValue]);
-      return true;
-    },
-    async () => {
-      if (!client?.page?.evaluate) return false;
-      return client.page.evaluate(async ({ chatId, labelNameValue }) => {
-        const WPP = window.WPP || null;
-        if (!WPP?.labels) return false;
-        const labels = await WPP.labels.getAllLabels();
-        const list = Array.isArray(labels) ? labels : Object.values(labels || {});
-        const found = list.find((item) => String(item?.name || '').toLowerCase() === labelNameValue.toLowerCase());
-        if (!found?.id) return false;
-        await WPP.labels.addOrRemoveLabels([chatId], [{ labelId: String(found.id), type: 'add' }]);
-        return true;
-      }, { chatId, labelNameValue });
-    },
-  ];
-  for (const attempt of attempts) {
-    try { if (await attempt()) return true; } catch (_) {}
-  }
-  return false;
 }
 
 async function collectViaUnreadMethods(client) {
@@ -332,14 +252,12 @@ async function createWppChannel({ onMessage, onQr } = {}) {
       return false;
     },
     async applyContactLabel(clientId, label = {}) {
-      if (!env.enableContactLabels) return false;
-      const chatId = normalizeChatId(clientId);
-      const name = String(label.name || env.awaitingQuoteLabelName || 'Aguardando orçamento').trim();
-      const color = String(label.color || env.awaitingQuoteLabelColor || 'green').trim();
-      let ok = false;
-      try { ok = await applyLabelCurrentApi(client, chatId, name, color); } catch (_) {}
-      if (!ok) ok = await applyLabelFallback(client, chatId, name);
-      return ok;
+      const target = {
+        name: String(label.name || env.awaitingQuoteLabelName || 'Aguardando orçamento').trim(),
+        color: String(label.color || env.awaitingQuoteLabelColor || 'gray').trim(),
+      };
+      const result = await applyNamedLabel({ client }, clientId, target);
+      return result === true || result?.applied === true;
     },
   };
 
