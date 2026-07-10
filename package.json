@@ -1,7 +1,7 @@
 {
   "name": "personalize-wppconnect-cliente-flow",
-  "version": "0.6.3",
-  "description": "Port local do fluxo cliente da Personalize para WPPConnect, com regras do fluxo de produção, etiquetas aditivas preservadas, links em legendas de imagem e finalização em nota do contato.",
+  "version": "0.6.4",
+  "description": "Port local do fluxo cliente da Personalize para WPPConnect, com etiquetas oficiais persistidas por ID, links em legendas de imagem e finalização em nota do contato.",
   "main": "src/index.js",
   "type": "commonjs",
   "scripts": {
