@@ -1,6 +1,6 @@
 {
   "name": "personalize-wppconnect-cliente-flow",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Port local do fluxo cliente da Personalize para WPPConnect, separado da API oficial em producao.",
   "main": "src/index.js",
   "type": "commonjs",
@@ -8,7 +8,7 @@
     "start": "node src/index.js",
     "dev": "node src/index.js",
     "test:flow": "node scripts/test-flow.js",
-    "check": "node --check src/index.js && node --check src/services/wppconnectClient.js && node --check src/core/serviceLabels.js && node --check src/flow/customerFlow.js && node --check scripts/test-flow.js"
+    "check": "node --check src/index.js && node --check src/services/contactIdentity.js && node --check src/services/leadStore.js && node --check src/services/wppconnectClient.js && node --check src/core/allowedClient.js && node --check src/core/serviceLabels.js && node --check src/flow/customerFlow.js && node --check scripts/test-flow.js"
   },
   "dependencies": {
     "@wppconnect-team/wppconnect": "^2.2.1",
