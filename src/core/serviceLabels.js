@@ -2,6 +2,7 @@
 
 const { env } = require('../config/env');
 const Identity = require('../services/contactIdentity');
+const Store = require('../services/leadStore');
 
 function normalizeName(value) {
   return String(value || '').trim().toLowerCase();
@@ -41,6 +42,14 @@ function labelName(label) {
   return String(label?.name || label?.label || '').trim();
 }
 
+function managedServiceLabelNames() {
+  const configured = Array.isArray(env.serviceLabelReplaceGroup)
+    ? env.serviceLabelReplaceGroup
+    : [];
+  const fallback = [env.serviceLabelLetreiro, env.serviceLabelPlotagem, env.serviceLabelOutros];
+  return [...new Set((configured.length ? configured : fallback).map((item) => String(item || '').trim()).filter(Boolean))];
+}
+
 async function getAllLabels(client) {
   if (typeof client?.getAllLabels !== 'function') return [];
   try {
@@ -49,6 +58,121 @@ async function getAllLabels(client) {
   } catch (err) {
     console.warn('[LISTA] não foi possível listar as listas/etiquetas:', err?.message || err);
     return [];
+  }
+}
+
+function uniqueLabelMetadata(labels = []) {
+  const seen = new Set();
+  return labels
+    .map((item) => ({
+      id: labelId(item) || null,
+      name: labelName(item),
+      colorIndex: Number.isFinite(Number(item?.colorIndex ?? item?.colorId ?? item?.color))
+        ? Number(item?.colorIndex ?? item?.colorId ?? item?.color)
+        : null,
+    }))
+    .filter((item) => item.name)
+    .filter((item) => {
+      const key = `${item.id || ''}:${normalizeName(item.name)}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+}
+
+async function detectAttachedLabels(client, chatId, managedNames = managedServiceLabelNames()) {
+  if (!env.detectManualContactLabels || !client?.page?.evaluate || !chatId) {
+    return { all: [], manual: [], managed: [] };
+  }
+
+  try {
+    const result = await client.page.evaluate(async ({ chatId, managedNames }) => {
+      const WPP = window.WPP || null;
+      const Store = window.Store || null;
+      const normalize = (value) => String(value || '').trim().toLowerCase();
+      const managedSet = new Set((managedNames || []).map(normalize));
+
+      let allLabels = [];
+      try {
+        if (WPP?.labels?.getAllLabels) {
+          const value = await WPP.labels.getAllLabels();
+          allLabels = Array.isArray(value) ? value : Object.values(value || {});
+        }
+      } catch (_) {}
+
+      let chat = null;
+      try {
+        chat = Store?.Chat?.get?.(chatId) || null;
+        if (!chat && typeof Store?.Chat?.find === 'function') {
+          chat = await Store.Chat.find(chatId);
+        }
+      } catch (_) {}
+
+      let attached = [];
+      try {
+        const labelStore = Store?.Label || Store?.Labels || null;
+        if (chat && typeof labelStore?.getLabelsForModel === 'function') {
+          const value = labelStore.getLabelsForModel(chat) || [];
+          attached = Array.isArray(value) ? value : Object.values(value || {});
+        } else if (Array.isArray(chat?.labels)) {
+          attached = chat.labels;
+        } else if (Array.isArray(chat?.labelIds)) {
+          attached = chat.labelIds;
+        }
+      } catch (_) {}
+
+      const normalizeLabel = (item) => {
+        const rawId = item?.id || item?.labelId || item;
+        const id = rawId ? String(rawId) : '';
+        const known = allLabels.find((label) => String(label?.id || label?.labelId || '') === id) || null;
+        const name = String(item?.name || item?.label || known?.name || known?.label || '').trim();
+        const rawColor = item?.colorIndex ?? item?.colorId ?? item?.color
+          ?? known?.colorIndex ?? known?.colorId ?? known?.color;
+        const colorIndex = Number.isFinite(Number(rawColor)) ? Number(rawColor) : null;
+        return { id: id || null, name, colorIndex };
+      };
+
+      const labels = attached.map(normalizeLabel).filter((item) => item.name);
+      const unique = [];
+      const seen = new Set();
+      for (const item of labels) {
+        const key = `${item.id || ''}:${normalize(item.name)}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        unique.push(item);
+      }
+
+      return {
+        all: unique,
+        manual: unique.filter((item) => !managedSet.has(normalize(item.name))),
+        managed: unique.filter((item) => managedSet.has(normalize(item.name))),
+      };
+    }, { chatId, managedNames });
+
+    return {
+      all: uniqueLabelMetadata(result?.all || []),
+      manual: uniqueLabelMetadata(result?.manual || []),
+      managed: uniqueLabelMetadata(result?.managed || []),
+    };
+  } catch (err) {
+    console.warn(`[LISTA] não foi possível identificar etiquetas atuais de ${chatId}:`, err?.message || err);
+    return { all: [], manual: [], managed: [] };
+  }
+}
+
+function persistManualLabels(clientId, labels = []) {
+  if (!env.storeManualContactLabels) return;
+  try {
+    const session = Store.getSession(clientId);
+    if (!session) return;
+    session.dados = session.dados || {};
+    const normalized = uniqueLabelMetadata(labels).sort((a, b) => a.name.localeCompare(b.name, 'pt-BR'));
+    session.dados.manualContactLabels = normalized;
+    session.dados.manualContactLabelNames = normalized.map((item) => item.name);
+    session.dados.manualContactLabelsDetectedAt = new Date().toISOString();
+    Store.saveSession(session);
+  } catch (err) {
+    console.warn('[LISTA] não foi possível salvar etiquetas manuais na sessão:', err?.message || err);
   }
 }
 
@@ -193,6 +317,8 @@ async function applyThroughListsApi(client, chatId, target, replaceGroup) {
       return { applied: false, verified: false, reason: 'target_list_missing' };
     }
 
+    // Somente as etiquetas do grupo de serviço podem ser substituídas.
+    // Etiquetas de vendedor, suporte ou qualquer etiqueta manual permanecem intactas.
     const groupNames = replaceGroup.map(normalize);
     const otherLists = lists.filter((item) => {
       const id = String(item?.id || '');
@@ -214,7 +340,7 @@ async function applyThroughListsApi(client, chatId, target, replaceGroup) {
     let verified = null;
     try {
       const Store = window.Store || null;
-      const chat = Store?.Chat?.get?.(chatId) || Store?.Chat?.find?.(chatId) || null;
+      const chat = Store?.Chat?.get?.(chatId) || null;
       const labelStore = Store?.Label || Store?.Labels || null;
       if (chat && typeof labelStore?.getLabelsForModel === 'function') {
         const attached = labelStore.getLabelsForModel(chat) || [];
@@ -289,20 +415,22 @@ async function replaceServiceLabel(channel, clientId, service) {
   const target = getServiceLabel(service);
   if (!target?.name) return false;
 
-  // Atualiza a cor da lista de serviço já existente. Isso não remove clientes e
-  // não toca nas listas dos vendedores, que ficam fora do grupo de substituição.
-  await syncExistingServiceLabelColor(client, target);
+  const replaceGroup = managedServiceLabelNames();
 
-  const replaceGroup = env.serviceLabelReplaceGroup?.length
-    ? env.serviceLabelReplaceGroup
-    : [env.serviceLabelLetreiro, env.serviceLabelPlotagem, env.serviceLabelOutros];
+  // Recolore somente a etiqueta de serviço. Etiquetas manuais não são alteradas.
+  await syncExistingServiceLabelColor(client, target);
 
   const candidates = Identity.getLabelCandidateIds(clientId);
   if (!candidates.length) candidates.push(Identity.normalizeChatId(clientId));
 
   for (const chatId of [...new Set(candidates.filter(Boolean))]) {
-    let result;
+    const before = await detectAttachedLabels(client, chatId, replaceGroup);
+    if (before.manual.length) {
+      console.log(`[LISTA] etiquetas manuais detectadas e preservadas em ${chatId}: ${before.manual.map((item) => item.name).join(', ')}`);
+      persistManualLabels(clientId, before.manual);
+    }
 
+    let result;
     try {
       result = await applyThroughListsApi(client, chatId, target, replaceGroup);
     } catch (err) {
@@ -318,14 +446,18 @@ async function replaceServiceLabel(channel, clientId, service) {
       }
     }
 
+    const after = await detectAttachedLabels(client, chatId, replaceGroup);
+    const manualLabels = after.manual.length ? after.manual : before.manual;
+    persistManualLabels(clientId, manualLabels);
+
     if (result?.applied && result.verified === true) {
       console.log(`[LISTA] adicionada e confirmada em ${chatId}: ${target.name} (${result.mode})`);
-      return true;
+      return { ...result, manualLabels, managedLabels: after.managed };
     }
 
     if (result?.applied && result.verified === null) {
       console.log(`[LISTA] operação concluída sem verificação interna disponível em ${chatId}: ${target.name} (${result.mode})`);
-      return true;
+      return { ...result, manualLabels, managedLabels: after.managed };
     }
 
     if (result?.applied && result.verified === false) {
@@ -341,6 +473,8 @@ async function replaceServiceLabel(channel, clientId, service) {
 
 module.exports = {
   replaceServiceLabel,
+  detectAttachedLabels,
+  managedServiceLabelNames,
   getServiceLabel,
   normalizeChatId: Identity.normalizeChatId,
 };
