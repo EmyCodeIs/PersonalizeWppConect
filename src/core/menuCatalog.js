@@ -1,6 +1,10 @@
 'use strict';
 
 const { messages } = require('./messages');
+const {
+  buildKeepBaseTitle,
+  buildKeepBaseDescription,
+} = require('../domain/acrilicoThickness');
 
 function wait(ms) {
   return new Promise((resolve) => setTimeout(resolve, Math.max(0, Number(ms || 0))));
@@ -20,20 +24,11 @@ const menus = {
     description: '🔸\nQual dos nossos serviços deseja?',
     buttonText: 'Selecionar serviço',
     fallbackText: messages.askService,
+    interactiveOnly: true,
     rows: [
-      { id: '1', title: 'Letreiro de acrílico', description: 'Orçamento de letreiro e cores' },
-      { id: '2', title: 'Plotagem', description: 'Encaminhar para vendedor' },
-      { id: '3', title: 'Outros', description: 'Encaminhar para vendedor' },
-    ],
-  },
-  confirmarFluxo: {
-    title: 'Tipo de orçamento',
-    description: 'Para eu te atender melhor, seu orçamento é para letreiro em acrílico?',
-    buttonText: 'Escolher opção',
-    fallbackText: messages.askFlow,
-    rows: [
-      { id: '1', title: 'Sim, quero letreiro', description: 'Seguir orçamento de letreiro em acrílico' },
-      { id: '2', title: 'Não, é outro serviço', description: 'Encaminhar para atendimento humano' },
+      { id: 'serv_letreiro', title: 'Letreiro de acrílico', description: 'Orçamento de letreiro e cores' },
+      { id: 'serv_plotagem', title: 'Plotagem', description: 'Coletar dados da solicitação' },
+      { id: 'serv_outros', title: 'Outros', description: 'Coletar dados da solicitação' },
     ],
   },
   tipoAcrilico: {
@@ -41,6 +36,7 @@ const menus = {
     description: '🔶\nSelecione o tipo de acrílico do seu letreiro:',
     buttonText: 'Selecionar Acrílico',
     fallbackText: messages.askAcrylicType,
+    interactiveOnly: true,
     rows: [
       { id: 'acr_colorido', title: 'Colorido (cores sólidas)', description: 'Preto, branco, dourado, prata...' },
       { id: 'acr_pintado', title: 'Personalizado', description: 'Enviar minha cor' },
@@ -51,6 +47,7 @@ const menus = {
     description: 'Quantas cores você quer no seu *letreiro?*',
     buttonText: 'Quantidade',
     fallbackText: messages.askColorCount,
+    interactiveOnly: true,
     rows: [
       { id: 'corq_1', title: '1 cor', description: 'Uma cor no letreiro' },
       { id: 'corq_2', title: '2 cores', description: 'Duas cores no letreiro' },
@@ -61,36 +58,38 @@ const menus = {
     ],
   },
   espessuraPersonalizada: {
-    title: 'Espessura personalizada',
-    description: 'Qual espessura deseja para o acrílico personalizado?',
-    buttonText: 'Escolher espessura',
-    fallbackText: messages.askPersonalizedThickness,
+    title: 'Espessura',
+    description: '🔳\nSelecione a espessura do acrílico personalizado:',
+    buttonText: 'Selecionar',
+    interactiveOnly: true,
     rows: [
-      { id: 'esp_4', title: '4mm' },
-      { id: 'esp_6', title: '6mm' },
-      { id: 'esp_10', title: '10mm' },
+      { id: 'esp_4', title: 'Quero 4mm', description: 'Escolher espessura de 4mm' },
+      { id: 'esp_6', title: 'Quero 6mm', description: 'Escolher espessura de 6mm' },
+      { id: 'esp_10', title: 'Quero 10mm', description: 'Escolher espessura de 10mm' },
+      { id: 'esp_nao_sei', title: 'Ainda não sei', description: 'Registrar para definir depois' },
+      { id: 'esp_voltar', title: 'Quero voltar', description: 'Corrigir minha medida' },
     ],
   },
   arte: {
     title: 'Arte do letreiro',
-    description: 'Agora preciso da arte do seu letreiro.',
+    description: '🖼️\nAgora preciso da arte do seu letreiro:',
     buttonText: 'Escolher opção',
-    fallbackText: messages.askArt,
+    interactiveOnly: true,
     rows: [
       { id: 'art_arquivo', title: 'Tenho arquivo', description: 'PDF, AI, EPS ou SVG' },
       { id: 'art_imagem', title: 'Enviar imagem', description: 'Imagem de referência' },
       { id: 'art_ideia', title: 'Descrever ideia', description: 'Explique como imagina o letreiro' },
+      { id: 'art_voltar', title: 'Voltar', description: 'Retornar à espessura' },
     ],
   },
-  envio: {
-    title: 'Forma de recebimento',
-    description: 'Como deseja receber?',
-    buttonText: 'Escolher envio',
-    fallbackText: messages.askDelivery,
+  observacao: {
+    title: 'Observação do pedido',
+    description: 'Deseja fazer uma observação sobre o pedido?',
+    buttonText: 'Escolher',
+    interactiveOnly: true,
     rows: [
-      { id: 'envio_correios', title: 'Correios / transportadora' },
-      { id: 'envio_instalacao', title: 'Instalação', description: 'BH e região' },
-      { id: 'envio_retirada', title: 'Retirada' },
+      { id: 'OBS_PEDIDO|ADD', title: 'Fazer observação', description: 'Adicionar detalhes importantes' },
+      { id: 'OBS_PEDIDO|SKIP', title: 'Não preciso', description: 'Finalizar sem observação' },
     ],
   },
 };
@@ -123,7 +122,7 @@ function buildSolidColorMenu(index, total) {
       { id: 'cor_verde', title: 'Verde', description: 'Cor sólida (3mm)' },
       { id: 'cor_vermelho', title: 'Vermelho', description: 'Cor sólida (3mm)' },
       { id: 'cor_amarelo', title: 'Amarelo', description: 'Cor sólida (3mm)' },
-      { id: 'cor_voltar', title: 'Voltar', description: 'Retornar à etapa anterior' },
+      { id: 'cor_voltar', title: 'Voltar', description: 'Retornar ao tipo da cor' },
     ],
   };
 }
@@ -142,29 +141,43 @@ function buildMirrorColorMenu(index, total) {
       { id: 'cor_esp_verde', title: 'Verde espelhado', description: 'Efeito espelhado (2mm)' },
       { id: 'cor_esp_azul', title: 'Azul espelhado', description: 'Efeito espelhado (2mm)' },
       { id: 'cor_esp_roxo', title: 'Roxo espelhado', description: 'Efeito espelhado (2mm)' },
-      { id: 'cor_voltar', title: 'Voltar', description: 'Retornar à etapa anterior' },
+      { id: 'cor_voltar', title: 'Voltar', description: 'Retornar ao tipo da cor' },
     ],
   };
 }
 
-function buildDepthMenu(baseLabel = '3mm') {
-  const base = String(baseLabel || '3mm').trim() || '3mm';
-  const mixed = /\be\b/i.test(base);
+function buildDepthMenu(colors = []) {
   return {
     title: 'Espessura / profundidade',
     description: '🔳\nQuer acrescentar uma espessura maior no seu acrílico?',
     buttonText: 'Selecionar',
     interactiveOnly: true,
     rows: [
-      {
-        id: 'esp3_keep',
-        title: `Quero manter ${base}`,
-        description: mixed ? 'Sólidas 3mm e espelhadas 2mm' : `Seguir com a espessura padrão ${base}`,
-      },
+      { id: 'esp3_keep', title: buildKeepBaseTitle(colors), description: buildKeepBaseDescription(colors) },
       { id: 'esp3_add3', title: 'Acrescentar +3mm', description: 'Adicionar acrílico cristal por trás' },
       { id: 'esp3_add6', title: 'Acrescentar +6mm', description: 'Adicionar acrílico cristal por trás' },
       { id: 'esp3_add10', title: 'Acrescentar +10mm', description: 'Adicionar acrílico cristal por trás' },
+      { id: 'esp3_align', title: 'Ainda não sei', description: 'Registrar para definir depois' },
+      { id: 'esp3_back', title: 'Quero voltar', description: 'Corrigir minha medida' },
     ],
+  };
+}
+
+function buildDeliveryMenu(isGrandeBH) {
+  const rows = [
+    { id: 'envio_correios', title: 'Correios', description: 'Receber no meu endereço' },
+  ];
+  if (isGrandeBH) rows.push({ id: 'envio_instalacao', title: 'Instalação pela equipe', description: 'Disponível para BH e região' });
+  rows.push(
+    { id: 'envio_retirada_cliente', title: 'Retirar na empresa', description: 'Quero retirar na empresa' },
+    { id: 'envio_voltar', title: 'Voltar', description: 'Corrigir minha cidade' },
+  );
+  return {
+    title: 'Envio',
+    description: '🚚\nOpções de envio\nSelecione uma opção na lista abaixo:',
+    buttonText: 'Escolher Envio',
+    interactiveOnly: true,
+    rows,
   };
 }
 
@@ -172,7 +185,6 @@ function buildListPayload(menu) {
   const sections = Array.isArray(menu.sections) && menu.sections.length
     ? menu.sections
     : [{ title: menu.title, rows: menu.rows || [] }];
-
   return {
     buttonText: menu.buttonText || 'Escolher',
     description: menu.description,
@@ -193,7 +205,6 @@ async function trySendWppList(channel, clientId, menu) {
   if (!client) return false;
   const chatId = normalizeChatId(clientId);
   const payload = buildListPayload(menu);
-  const rows = payload.sections.flatMap((section) => section.rows || []);
 
   const attempts = [
     async () => {
@@ -206,48 +217,33 @@ async function trySendWppList(channel, clientId, menu) {
       await client.sendList(chatId, menu.description, menu.buttonText || 'Escolher', payload.sections, 'Selecione uma opção');
       return true;
     },
-    async () => {
-      if (typeof client.sendButtons !== 'function' || rows.length > 3) return false;
-      const buttons = rows.map((row) => ({ buttonId: row.id, buttonText: { displayText: row.title }, type: 1 }));
-      await client.sendButtons(chatId, menu.description, buttons, menu.title);
-      return true;
-    },
   ];
 
   for (const attempt of attempts) {
     try {
       if (await attempt()) {
-        console.log(`[MENU] enviado como interativo: ${menu.title}`);
+        console.log(`[MENU] enviado como lista interativa: ${menu.title}`);
         return true;
       }
     } catch (err) {
-      console.warn(`[MENU] interativo falhou (${menu.title}):`, err?.message || err);
+      console.warn(`[MENU] lista interativa falhou (${menu.title}):`, err?.message || err);
     }
   }
-
   return false;
 }
 
 async function sendMenu(channel, clientId, menuKeyOrDefinition, options = {}) {
-  const menu = typeof menuKeyOrDefinition === 'string'
-    ? menus[menuKeyOrDefinition]
-    : menuKeyOrDefinition;
+  const menu = typeof menuKeyOrDefinition === 'string' ? menus[menuKeyOrDefinition] : menuKeyOrDefinition;
   if (!menu) return false;
 
-  const interactiveOnly = Boolean(options.interactiveOnly || menu.interactiveOnly);
-  const maxAttempts = interactiveOnly ? 2 : 1;
+  const interactiveOnly = options.interactiveOnly !== undefined
+    ? Boolean(options.interactiveOnly)
+    : Boolean(menu.interactiveOnly);
+  const attempts = interactiveOnly ? 2 : 1;
 
-  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
-    if (channel?.sendMenu) {
-      const sent = await channel.sendMenu(clientId, menu).catch((err) => {
-        console.warn(`[MENU] falha ao enviar lista "${menu.title}" via canal:`, err?.message || err);
-        return false;
-      });
-      if (sent) return true;
-    }
-
+  for (let i = 0; i < attempts; i += 1) {
     if (await trySendWppList(channel, clientId, menu)) return true;
-    if (attempt < maxAttempts) await wait(450);
+    if (i + 1 < attempts) await wait(350);
   }
 
   if (interactiveOnly) {
@@ -257,19 +253,19 @@ async function sendMenu(channel, clientId, menuKeyOrDefinition, options = {}) {
   }
 
   if (menu.fallbackText) {
-    console.log(`[MENU] usando fallback texto: ${menu.title}`);
     await channel.sendText(clientId, menu.fallbackText);
     return true;
   }
-
   return false;
 }
 
 module.exports = {
   menus,
   sendMenu,
+  buildListPayload,
   buildColorTypeMenu,
   buildSolidColorMenu,
   buildMirrorColorMenu,
   buildDepthMenu,
+  buildDeliveryMenu,
 };
