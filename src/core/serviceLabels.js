@@ -24,192 +24,118 @@ function getServiceLabel(service) {
   return { name: env.serviceLabelOutros, color: env.serviceLabelOutrosColor };
 }
 
+function colorToHex(color) {
+  const normalized = String(color || '').trim().toLowerCase();
+  const map = {
+    green: '#25D366',
+    red: '#F15C6D',
+    gray: '#A4A4A4',
+    grey: '#A4A4A4',
+    blue: '#53BDEB',
+    yellow: '#F7D154',
+    orange: '#F5A623',
+    purple: '#A970FF',
+    pink: '#FF8AC6',
+  };
+  if (/^#[0-9a-f]{6}$/i.test(normalized)) return normalized;
+  return map[normalized] || '#A4A4A4';
+}
+
 function labelId(label) {
-  return label?.id || label?.labelId || label?.hexColor || label?.name || label?.label || null;
+  return String(label?.id || label?.labelId || '').trim();
 }
 
 function labelName(label) {
-  return label?.name || label?.label || label?.title || '';
+  return String(label?.name || label?.label || '').trim();
 }
 
-async function getLabelsFromClient(client) {
-  const methods = ['getAllLabels', 'getLabels'];
-  for (const method of methods) {
-    if (typeof client?.[method] !== 'function') continue;
-    try {
-      const labels = await client[method]();
-      return Array.isArray(labels) ? labels : Object.values(labels || {});
-    } catch (_) {}
-  }
-  return [];
-}
-
-async function getLabelsFromPage(client) {
-  if (!client?.page?.evaluate) return [];
+async function getAllLabels(client) {
+  if (typeof client?.getAllLabels !== 'function') return [];
   try {
-    return await client.page.evaluate(() => {
-      const WPP = window.WPP || null;
-      if (!WPP) return [];
-      const maybe = WPP.labels?.getAllLabels?.() || WPP.label?.getAllLabels?.() || [];
-      if (Array.isArray(maybe)) return maybe;
-      return Object.values(maybe || {});
-    });
-  } catch (_) {
+    const labels = await client.getAllLabels();
+    return Array.isArray(labels) ? labels : Object.values(labels || {});
+  } catch (err) {
+    console.warn('[ETIQUETA] não foi possível listar etiquetas:', err?.message || err);
     return [];
   }
 }
 
-async function getAllLabels(client) {
-  const fromClient = await getLabelsFromClient(client);
-  if (fromClient.length) return fromClient;
-  const fromPage = await getLabelsFromPage(client);
-  return Array.isArray(fromPage) ? fromPage : [];
-}
-
-async function createLabel(client, name, color) {
-  if (!name) return null;
-
-  const attempts = [
-    async () => {
-      if (typeof client?.createLabel !== 'function') return null;
-      return client.createLabel(name, color);
-    },
-    async () => {
-      if (!client?.page?.evaluate) return null;
-      return client.page.evaluate(async ({ name, color }) => {
-        const WPP = window.WPP || null;
-        if (!WPP) return null;
-        if (WPP.labels?.create) return WPP.labels.create(name, { color });
-        if (WPP.label?.create) return WPP.label.create(name, { color });
-        if (WPP.labels?.addLabel) return WPP.labels.addLabel(name, color);
-        return null;
-      }, { name, color });
-    },
-  ];
-
-  for (const attempt of attempts) {
-    try {
-      const result = await attempt();
-      if (result) return result;
-    } catch (_) {}
-  }
-  return null;
-}
-
 async function findOrCreateLabel(client, name, color) {
-  const labels = await getAllLabels(client);
-  const found = labels.find((label) => normalizeName(labelName(label)) === normalizeName(name));
+  let labels = await getAllLabels(client);
+  let found = labels.find((label) => normalizeName(labelName(label)) === normalizeName(name));
   if (found) return found;
-  const created = await createLabel(client, name, color);
-  if (created) return created;
-  return { id: name, name };
+
+  if (typeof client?.addNewLabel !== 'function') return null;
+
+  try {
+    const created = await client.addNewLabel(name, {
+      labelColor: colorToHex(color),
+    });
+
+    if (created && typeof created === 'object') return created;
+
+    labels = await getAllLabels(client);
+    found = labels.find((label) => normalizeName(labelName(label)) === normalizeName(name));
+    return found || null;
+  } catch (err) {
+    console.warn(`[ETIQUETA] não foi possível criar "${name}":`, err?.message || err);
+    return null;
+  }
 }
 
-async function resolveLabelIds(client, names = []) {
+async function replaceWithCurrentApi(client, chatId, target, replaceGroup) {
+  if (typeof client?.addOrRemoveLabels !== 'function') return false;
+
   const labels = await getAllLabels(client);
-  const wanted = names.map(normalizeName).filter(Boolean);
-  return labels
-    .filter((label) => wanted.includes(normalizeName(labelName(label))))
-    .map(labelId)
-    .filter(Boolean);
+  let targetLabel = labels.find((label) => normalizeName(labelName(label)) === normalizeName(target.name));
+  if (!targetLabel) targetLabel = await findOrCreateLabel(client, target.name, target.color);
+
+  const targetId = labelId(targetLabel);
+  if (!targetId) return false;
+
+  const removableNames = new Set(replaceGroup.map(normalizeName));
+  const options = labels
+    .filter((label) => removableNames.has(normalizeName(labelName(label))))
+    .map((label) => ({ labelId: labelId(label), type: 'remove' }))
+    .filter((item) => item.labelId && item.labelId !== targetId);
+
+  options.push({ labelId: targetId, type: 'add' });
+  await client.addOrRemoveLabels([chatId], options);
+  return true;
 }
 
-async function addLabels(client, chatId, labelIds = []) {
-  if (!labelIds.length) return false;
-  const attempts = [
-    async () => {
-      if (typeof client?.addOrRemoveLabels !== 'function') return false;
-      await client.addOrRemoveLabels([chatId], labelIds, []);
-      return true;
-    },
-    async () => {
-      if (typeof client?.addChatWLabels !== 'function') return false;
-      await client.addChatWLabels(chatId, labelIds);
-      return true;
-    },
-    async () => {
-      if (typeof client?.addLabelToChat !== 'function') return false;
-      for (const id of labelIds) await client.addLabelToChat(chatId, id);
-      return true;
-    },
-    async () => {
-      if (!client?.page?.evaluate) return false;
-      return client.page.evaluate(async ({ chatId, labelIds }) => {
-        const WPP = window.WPP || null;
-        if (!WPP) return false;
-        if (WPP.chat?.addLabels) {
-          await WPP.chat.addLabels(chatId, labelIds);
-          return true;
-        }
-        if (WPP.labels?.addChatLabels) {
-          await WPP.labels.addChatLabels(chatId, labelIds);
-          return true;
-        }
-        if (WPP.label?.addChatLabels) {
-          await WPP.label.addChatLabels(chatId, labelIds);
-          return true;
-        }
-        return false;
-      }, { chatId, labelIds });
-    },
-  ];
+async function replaceWithPageFallback(client, chatId, target, replaceGroup) {
+  if (!client?.page?.evaluate) return false;
 
-  for (const attempt of attempts) {
-    try {
-      const ok = await attempt();
-      if (ok) return true;
-    } catch (_) {}
+  try {
+    return await client.page.evaluate(async ({ chatId, targetName, replaceGroup }) => {
+      const WPP = window.WPP || null;
+      if (!WPP?.labels?.getAllLabels || !WPP.labels?.addOrRemoveLabels) return false;
+
+      const labels = await WPP.labels.getAllLabels();
+      const list = Array.isArray(labels) ? labels : Object.values(labels || {});
+      const normalizedGroup = replaceGroup.map((name) => String(name || '').trim().toLowerCase());
+      const target = list.find((label) => String(label?.name || '').trim().toLowerCase() === targetName.toLowerCase());
+      if (!target?.id) return false;
+
+      const options = list
+        .filter((label) => normalizedGroup.includes(String(label?.name || '').trim().toLowerCase()))
+        .map((label) => ({ labelId: String(label.id), type: String(label.id) === String(target.id) ? 'add' : 'remove' }));
+
+      if (!options.some((item) => item.type === 'add')) {
+        options.push({ labelId: String(target.id), type: 'add' });
+      }
+
+      await WPP.labels.addOrRemoveLabels([chatId], options);
+      return true;
+    }, {
+      chatId,
+      targetName: target.name,
+      replaceGroup,
+    });
+  } catch (_) {
+    return false;
   }
-  return false;
-}
-
-async function removeLabels(client, chatId, labelIds = []) {
-  if (!labelIds.length) return true;
-  const attempts = [
-    async () => {
-      if (typeof client?.addOrRemoveLabels !== 'function') return false;
-      await client.addOrRemoveLabels([chatId], [], labelIds);
-      return true;
-    },
-    async () => {
-      if (typeof client?.removeChatWLabels !== 'function') return false;
-      await client.removeChatWLabels(chatId, labelIds);
-      return true;
-    },
-    async () => {
-      if (typeof client?.removeLabelFromChat !== 'function') return false;
-      for (const id of labelIds) await client.removeLabelFromChat(chatId, id);
-      return true;
-    },
-    async () => {
-      if (!client?.page?.evaluate) return false;
-      return client.page.evaluate(async ({ chatId, labelIds }) => {
-        const WPP = window.WPP || null;
-        if (!WPP) return false;
-        if (WPP.chat?.removeLabels) {
-          await WPP.chat.removeLabels(chatId, labelIds);
-          return true;
-        }
-        if (WPP.labels?.removeChatLabels) {
-          await WPP.labels.removeChatLabels(chatId, labelIds);
-          return true;
-        }
-        if (WPP.label?.removeChatLabels) {
-          await WPP.label.removeChatLabels(chatId, labelIds);
-          return true;
-        }
-        return false;
-      }, { chatId, labelIds });
-    },
-  ];
-
-  for (const attempt of attempts) {
-    try {
-      const ok = await attempt();
-      if (ok) return true;
-    } catch (_) {}
-  }
-  return false;
 }
 
 async function replaceServiceLabel(channel, clientId, service) {
@@ -224,22 +150,21 @@ async function replaceServiceLabel(channel, clientId, service) {
     ? env.serviceLabelReplaceGroup
     : [env.serviceLabelLetreiro, env.serviceLabelPlotagem, env.serviceLabelOutros];
 
-  const targetLabel = await findOrCreateLabel(client, target.name, target.color);
-  const targetId = labelId(targetLabel) || target.name;
-  const removeIds = await resolveLabelIds(client, replaceGroup);
-
-  const removed = await removeLabels(client, chatId, removeIds);
-  if (!removed && removeIds.length) {
-    console.warn(`[ETIQUETA] não consegui remover etiquetas antigas de ${chatId}. Vou tentar aplicar a nova mesmo assim.`);
+  let ok = false;
+  try {
+    ok = await replaceWithCurrentApi(client, chatId, target, replaceGroup);
+  } catch (err) {
+    console.warn(`[ETIQUETA] API atual falhou para ${target.name}:`, err?.message || err);
   }
 
-  const added = await addLabels(client, chatId, [targetId]);
-  if (added) {
+  if (!ok) ok = await replaceWithPageFallback(client, chatId, target, replaceGroup);
+
+  if (ok) {
     console.log(`[ETIQUETA] aplicada: ${target.name} (${target.color}) em ${chatId}`);
     return true;
   }
 
-  console.warn(`[ETIQUETA] não consegui aplicar ${target.name} em ${chatId}. Verifique suporte da versão/sessão Business.`);
+  console.warn(`[ETIQUETA] não consegui aplicar ${target.name} em ${chatId}.`);
   return false;
 }
 
