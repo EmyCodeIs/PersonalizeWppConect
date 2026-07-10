@@ -16,6 +16,14 @@ function normalizeAssetName(value) {
     .replace(/[^a-z0-9]+/g, '');
 }
 
+function normalizeChatId(clientId) {
+  const raw = String(clientId || '').trim();
+  if (!raw) return '';
+  if (/@(c\.us|g\.us|lid)$/i.test(raw)) return raw;
+  const digits = raw.replace(/\D/g, '');
+  return digits ? `${digits}@c.us` : raw;
+}
+
 function getAssetsDir() {
   return path.resolve(process.cwd(), env.assetsDir || 'assets');
 }
@@ -106,22 +114,60 @@ function getTabelaProfundidadePath() {
   ], IMAGE_EXTENSIONS);
 }
 
-async function sendImageIfExists(channel, clientId, filePath, caption) {
+function getFileSizeKb(filePath) {
+  try {
+    return Math.round(fs.statSync(filePath).size / 1024);
+  } catch (_) {
+    return null;
+  }
+}
+
+async function sendImageIfExists(channel, clientId, filePath, caption, options = {}) {
   if (!filePath) return false;
-  if (!channel?.sendImage) {
+  if (!channel?.sendImage && !channel?.client?.sendImage) {
     console.warn('[ASSET] canal atual não possui sendImage.');
     return false;
   }
 
-  console.log(`[ASSET] enviando imagem: ${filePath}`);
+  const sizeKb = getFileSizeKb(filePath);
+  console.log(`[ASSET] enviando imagem: ${filePath}${sizeKb ? ` (${sizeKb} KB)` : ''}`);
+  const startedAt = Date.now();
+
   try {
-    const result = await channel.sendImage(clientId, filePath, caption || '');
-    console.log(`[ASSET] imagem enviada: ${path.basename(filePath)}`);
+    let result;
+
+    if (options.fast && typeof channel?.client?.sendImage === 'function') {
+      const chatId = normalizeChatId(clientId);
+      const fullPath = path.resolve(process.cwd(), filePath);
+      result = await channel.client.sendImage(
+        chatId,
+        fullPath,
+        path.basename(fullPath),
+        String(caption || ''),
+      );
+    } else {
+      result = await channel.sendImage(clientId, filePath, caption || '');
+    }
+
+    console.log(`[ASSET] imagem enviada: ${path.basename(filePath)} em ${Date.now() - startedAt}ms`);
     return result !== false;
   } catch (err) {
     console.warn('[ASSET] não foi possível enviar imagem:', filePath, err?.message || err);
     return false;
   }
+}
+
+async function sendTextFast(channel, clientId, text) {
+  const startedAt = Date.now();
+  const chatId = normalizeChatId(clientId);
+
+  if (typeof channel?.client?.sendText === 'function') {
+    await channel.client.sendText(chatId, String(text || ''));
+  } else {
+    await channel.sendText(clientId, text);
+  }
+
+  console.log(`[MOSTRUARIO PERF] link enviado em ${Date.now() - startedAt}ms`);
 }
 
 function getMostruarioLink() {
@@ -133,22 +179,31 @@ function getMostruarioLink() {
 }
 
 async function sendMostruarioLetreiro(channel, clientId) {
+  const totalStartedAt = Date.now();
   const imagePath = getMostruarioImagePath();
   const link = getMostruarioLink();
 
   if (imagePath) {
-    const ok = await sendImageIfExists(channel, clientId, imagePath, messages.mostruario);
-    if (!ok) await channel.sendText(clientId, messages.mostruario);
+    const ok = await sendImageIfExists(
+      channel,
+      clientId,
+      imagePath,
+      messages.mostruario,
+      { fast: true },
+    );
+    if (!ok) await sendTextFast(channel, clientId, messages.mostruario);
   } else {
-    await channel.sendText(clientId, messages.mostruario);
+    await sendTextFast(channel, clientId, messages.mostruario);
   }
 
-  await channel.sendText(
+  await sendTextFast(
+    channel,
     clientId,
     `${messages.mostruarioLink || '🔗 Ver Mostruário'}\n${link}`,
   );
 
   console.log(`[MOSTRUARIO] link comum enviado: ${link}`);
+  console.log(`[MOSTRUARIO PERF] etapa concluída em ${Date.now() - totalStartedAt}ms`);
   return true;
 }
 
