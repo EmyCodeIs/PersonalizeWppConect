@@ -1,4 +1,4 @@
-' strict';
+'use strict';
 
 const { env } = require('../config/env');
 const Identity = require('../services/contactIdentity');
@@ -58,8 +58,6 @@ async function buildOptionsFromClient(client, target, replaceGroup) {
 
   if (!targetLabel && typeof client?.addNewLabel === 'function') {
     try {
-      // Sem cor fixa aqui: a API escolhe uma cor válida da paleta quando o wrapper
-      // não expõe getLabelColorPalette de forma confiável.
       await client.addNewLabel(target.name);
       labels = await getAllLabels(client);
       targetLabel = labels.find((label) => normalizeName(labelName(label)) === normalizeName(target.name));
