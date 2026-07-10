@@ -76,9 +76,14 @@ const env = {
   // Ex: 18885055098907@lid=31971386091
   lidNumberMap: mapList('LID_NUMBER_MAP'),
   assetsDir: process.env.ASSETS_DIR || 'assets',
+  enableAssetServer: bool('ENABLE_ASSET_SERVER', true),
+  assetServerHost: process.env.ASSET_SERVER_HOST || '0.0.0.0',
+  assetServerPort: Math.max(1, num('ASSET_SERVER_PORT', 3030)),
+  assetPublicBaseUrl: process.env.ASSET_PUBLIC_BASE_URL || '',
   mostruarioLetreiroImageBaseName: process.env.MOSTRUARIO_LETREIRO_IMAGE_BASENAME || 'capa-mostruario',
   mostruarioLetreiroPdfBaseName: process.env.MOSTRUARIO_LETREIRO_PDF_BASENAME || 'mostruario',
   mostruarioLetreiroPdfPath: process.env.MOSTRUARIO_LETREIRO_PDF_PATH || '',
+  // URL externa explícita. Se vazia, o servidor local gera uma URL automaticamente.
   mostruarioLetreiroPdfUrl: process.env.MOSTRUARIO_LETREIRO_PDF_URL || '',
   assetTabelaCoresBaseName: process.env.ASSET_TABELA_CORES_BASENAME || 'tabela-cores-v2',
   assetTabelaEspessuraBaseName: process.env.ASSET_TABELA_ESPESSURA_BASENAME || 'tabela-espessura',
