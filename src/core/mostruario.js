@@ -81,22 +81,6 @@ function getMostruarioImagePath() {
   ], IMAGE_EXTENSIONS);
 }
 
-function getMostruarioPdfPath() {
-  const explicit = String(env.mostruarioLetreiroPdfPath || '').trim();
-  if (explicit) {
-    const filePath = path.resolve(process.cwd(), explicit);
-    if (fs.existsSync(filePath)) return filePath;
-    console.warn(`[ASSET] PDF configurado não encontrado: ${filePath}`);
-  }
-
-  return resolveAssetPath([
-    env.mostruarioLetreiroPdfBaseName || 'mostruario',
-    'mostruario',
-    'Mostruario_Letreiro',
-    'mostruario-letreiro',
-  ], ['.pdf']);
-}
-
 function getTabelaCoresPath() {
   return resolveAssetPath([
     env.assetTabelaCoresBaseName || 'tabela-cores-v2',
@@ -140,9 +124,17 @@ async function sendImageIfExists(channel, clientId, filePath, caption) {
   }
 }
 
+function getMostruarioLink() {
+  const link = String(env.mostruarioLinkUrl || '').trim();
+  if (/^https?:\/\/[^\s]+$/i.test(link)) return link;
+
+  console.warn('[MOSTRUARIO] MOSTRUARIO_LINK_URL inválida; usando link provisório.');
+  return 'https://personalizeseuambiente.com.br/mostruario-letreiros';
+}
+
 async function sendMostruarioLetreiro(channel, clientId) {
   const imagePath = getMostruarioImagePath();
-  const pdfUrl = String(env.mostruarioLetreiroPdfUrl || '').trim();
+  const link = getMostruarioLink();
 
   if (imagePath) {
     const ok = await sendImageIfExists(channel, clientId, imagePath, messages.mostruario);
@@ -151,17 +143,13 @@ async function sendMostruarioLetreiro(channel, clientId) {
     await channel.sendText(clientId, messages.mostruario);
   }
 
-  if (pdfUrl) {
-    await channel.sendText(
-      clientId,
-      `${messages.mostruarioLink || '🔗 Ver Mostruário'}\n${pdfUrl}`,
-    );
-    console.log(`[MOSTRUARIO] link enviado: ${pdfUrl}`);
-    return true;
-  }
+  await channel.sendText(
+    clientId,
+    `${messages.mostruarioLink || '🔗 Ver Mostruário'}\n${link}`,
+  );
 
-  console.warn('[MOSTRUARIO] nenhuma URL disponível. O PDF local não será enviado como anexo.');
-  return false;
+  console.log(`[MOSTRUARIO] link comum enviado: ${link}`);
+  return true;
 }
 
 async function sendTabelaCores(channel, clientId) {
@@ -182,9 +170,9 @@ module.exports = {
   sendTabelaEspessura,
   sendTabelaProfundidade,
   getMostruarioImagePath,
-  getMostruarioPdfPath,
   getTabelaCoresPath,
   getTabelaEspessuraPath,
   getTabelaProfundidadePath,
   listAssetFiles,
+  getMostruarioLink,
 };
