@@ -3,8 +3,6 @@
 function normalizeBufferId(clientId) {
   const raw = String(clientId || '').trim();
   if (!raw) return '';
-  // Preserva IDs reais do WhatsApp, incluindo @c.us, @lid e @g.us.
-  // Converter para apenas dígitos quebra conversas novas/LID e causa erro "No LID for user" ao responder.
   return raw;
 }
 
@@ -15,12 +13,19 @@ class BufferManager {
     this.map = new Map();
   }
 
-  push(clientId, message) {
+  push(clientId, message, options = {}) {
     const id = normalizeBufferId(clientId);
     if (!id) return;
+
     const item = this.map.get(id) || { messages: [], timer: null };
     item.messages.push({ ...message, chatId: id });
+
     if (item.timer) clearTimeout(item.timer);
+    const requestedDelay = Number(options.delayMs);
+    const effectiveDelay = Number.isFinite(requestedDelay)
+      ? Math.max(100, requestedDelay)
+      : this.delayMs;
+
     item.timer = setTimeout(async () => {
       const current = this.map.get(id);
       this.map.delete(id);
@@ -28,15 +33,24 @@ class BufferManager {
       await this.onFlush(id, current.messages).catch((err) => {
         console.error('[BUFFER] flush error:', err?.message || err);
       });
-    }, this.delayMs);
+    }, effectiveDelay);
+
     if (typeof item.timer.unref === 'function') item.timer.unref();
+    item.delayMs = effectiveDelay;
     this.map.set(id, item);
+  }
+
+  clear(clientId) {
+    const id = normalizeBufferId(clientId);
+    const item = this.map.get(id);
+    if (item?.timer) clearTimeout(item.timer);
+    this.map.delete(id);
   }
 }
 
 function mergeMessages(messages = []) {
   return messages
-    .map((msg) => msg?.text || msg?.body || msg?.caption || '')
+    .map((msg) => msg?.interactiveId || msg?.text || msg?.body || msg?.caption || '')
     .map((text) => String(text || '').trim())
     .filter(Boolean)
     .join('\n');
