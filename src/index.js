@@ -1,30 +1,32 @@
 'use strict';
 
-const path = require('path');
-const { env } = require('./config/env');
 const { BufferManager, mergeMessages } = require('./core/bufferManager');
 const { processCustomerMessage } = require('./flow/customerFlow');
 const {
   createWppChannel,
   createMockChannel,
   collectUnreadMessages,
-  normalizeChatId,
 } = require('./services/wppconnectClient');
+const { installMessageExperience } = require('./core/messageExperience');
 const { isAllowedClient } = require('./core/allowedClient');
 const { extractName, normalizeText, titleCase } = require('./core/parsers');
 const Store = require('./services/leadStore');
 const Identity = require('./services/contactIdentity');
+const { env } = require('./config/env');
 
-const BUILD_ID = 'typing-name-flow-review-2026-07-10-02';
-
-function wait(ms) {
-  return new Promise((resolve) => setTimeout(resolve, Math.max(0, Number(ms || 0))));
-}
+const BUILD_ID = 'production-flow-port-grouped-messages-2026-07-10-02';
+const MULTI_MESSAGE_STAGES = new Set([
+  'plotagem_descricao',
+  'plotagem_medida',
+  'plotagem_local',
+  'outros_descricao',
+  'outros_referencia',
+]);
 
 function messageKey(message) {
   const rawId = message?.id?._serialized || message?.id || message?.messageId || message?.key?.id;
   if (rawId) return String(rawId);
-  return `${message?.from || message?.chatId || 'unknown'}:${message?.text || message?.body || ''}:${message?.timestamp || ''}`;
+  return `${message?.from || message?.chatId || 'unknown'}:${message?.body || message?.text || message?.caption || ''}:${message?.timestamp || ''}`;
 }
 
 function sanitizePersonName(value) {
@@ -42,12 +44,8 @@ function sanitizePersonName(value) {
 
   if (!name || name.length < 2 || name.length > 60 || !/[A-Za-zÀ-ÿ]/u.test(name)) return null;
   if (/\d{3,}/.test(name)) return null;
-
   const generic = normalizeText(name);
-  if (['voce', 'você', 'usuario', 'usuário', 'whatsapp', 'desconhecido', 'unknown'].includes(generic)) {
-    return null;
-  }
-
+  if (['voce', 'você', 'usuario', 'usuário', 'whatsapp', 'desconhecido', 'unknown'].includes(generic)) return null;
   return titleCase(name);
 }
 
@@ -68,7 +66,6 @@ function extractProfileName(raw) {
     raw?.chat?.contact?.shortName,
     raw?.chat?.contact?.formattedName,
   ];
-
   for (const candidate of candidates) {
     const name = sanitizePersonName(candidate);
     if (name) return name;
@@ -76,12 +73,52 @@ function extractProfileName(raw) {
   return null;
 }
 
-function prepareBufferedInput(clientId, text, messages) {
+function extractInteractiveId(raw = {}) {
+  const candidates = [
+    raw?.selectedRowId,
+    raw?.selectedButtonId,
+    raw?.listResponse?.singleSelectReply?.selectedRowId,
+    raw?.listResponseMessage?.singleSelectReply?.selectedRowId,
+    raw?.buttonsResponseMessage?.selectedButtonId,
+    raw?.templateButtonReplyMessage?.selectedId,
+    raw?.interactive?.list_reply?.id,
+    raw?.interactive?.button_reply?.id,
+    raw?.nativeFlowResponseMessage?.paramsJson,
+  ];
+
+  for (const candidate of candidates) {
+    if (!candidate) continue;
+    if (typeof candidate === 'string') {
+      const text = candidate.trim();
+      if (!text) continue;
+      if (text.startsWith('{')) {
+        try {
+          const parsed = JSON.parse(text);
+          const id = parsed?.id || parsed?.row_id || parsed?.selectedRowId;
+          if (id) return String(id).trim();
+        } catch (_) {}
+      }
+      return text;
+    }
+  }
+  return '';
+}
+
+function mediaMarker(raw = {}) {
+  const type = String(raw?.type || raw?.mimetype || raw?.mediaType || '').toLowerCase();
+  const fileName = raw?.filename || raw?.fileName || raw?.document?.filename || '';
+  if (/image/.test(type)) return '[imagem enviada]';
+  if (/document|pdf|application/.test(type) || fileName) return `[arquivo enviado${fileName ? `: ${fileName}` : ''}]`;
+  if (/video/.test(type)) return '[vídeo enviado]';
+  return '';
+}
+
+function prepareBufferedInput(clientId, text, bufferedMessages) {
   const session = Store.getSession(clientId);
   if (!session) return text;
 
   const explicitName = sanitizePersonName(extractName(text));
-  const profileName = messages
+  const profileName = bufferedMessages
     .map((item) => sanitizePersonName(item?.profileName) || extractProfileName(item?.raw))
     .find(Boolean);
 
@@ -94,186 +131,46 @@ function prepareBufferedInput(clientId, text, messages) {
     console.log(`[CLIENTE ${clientId}] nome identificado (${session.dados.nomeOrigem}): ${chosenName}`);
   }
 
-  if (session.etapa !== 'escolher_servico') return text;
-
-  const normalized = normalizeText(text);
-  if (/^(3|outro|outros|outro servico|outro serviço)$/.test(normalized)) return '3';
-  if (/^(2|plotagem|plotar)$/.test(normalized)) return '2';
-  if (/^(1|letreiro|letreiro de acrilico|letreiro de acrílico)$/.test(normalized)) return '1';
   return text;
 }
 
-function typingDuration(text, options = {}) {
-  const fast = Boolean(options.fast);
-  const min = fast ? Math.min(env.typingMinMs, 250) : env.typingMinMs;
-  const max = fast ? Math.min(env.typingMaxMs, 700) : env.typingMaxMs;
-  const estimated = Math.round((String(text || '').length / env.typingCharsPerSecond) * 1000);
-  return Math.max(min, Math.min(max, estimated || min));
-}
+function resolveBufferDelay(clientId, raw, interactiveId) {
+  if (interactiveId) return env.interactiveBufferMs;
+  const session = Store.getSession(clientId);
+  const stage = String(session?.etapa || '').trim();
 
-async function startTypingCompat(client, chatId) {
-  const attempts = [
-    async () => {
-      if (typeof client?.startTyping !== 'function') return false;
-      await client.startTyping(chatId);
-      return true;
-    },
-    async () => {
-      if (typeof client?.setChatState !== 'function') return false;
-      await client.setChatState(chatId, 0);
-      return true;
-    },
-  ];
-
-  for (const attempt of attempts) {
-    try {
-      if (await attempt()) return true;
-    } catch (_) {}
-  }
-  return false;
-}
-
-async function stopTypingCompat(client, chatId) {
-  const attempts = [
-    async () => {
-      if (typeof client?.stopTyping !== 'function') return false;
-      await client.stopTyping(chatId);
-      return true;
-    },
-    async () => {
-      if (typeof client?.setChatState !== 'function') return false;
-      await client.setChatState(chatId, 2);
-      return true;
-    },
-  ];
-
-  for (const attempt of attempts) {
-    try {
-      if (await attempt()) return true;
-    } catch (_) {}
-  }
-  return false;
-}
-
-async function runWithTyping(client, chatId, text, action, options = {}) {
-  if (!env.enableTyping || options.noTyping) return action();
-
-  const normalizedId = normalizeChatId(chatId);
-  const started = await startTypingCompat(client, normalizedId);
-
-  try {
-    if (started) await wait(typingDuration(text, options));
-    return await action();
-  } finally {
-    if (started) await stopTypingCompat(client, normalizedId);
-  }
-}
-
-function installTyping(channel) {
-  const client = channel?.client;
-  if (!client || client.__personalizeTypingInstalled) return;
-
-  const originalSendText = typeof client.sendText === 'function' ? client.sendText.bind(client) : null;
-  const originalSendImage = typeof client.sendImage === 'function' ? client.sendImage.bind(client) : null;
-
-  if (originalSendText) {
-    client.sendText = async (chatId, text, ...rest) => {
-      const content = String(text || '');
-      const fast = content.includes(env.mostruarioLinkUrl) || /ver mostru[aá]rio/i.test(content);
-      return runWithTyping(
-        client,
-        chatId,
-        content,
-        () => originalSendText(chatId, content, ...rest),
-        { fast },
-      );
-    };
-
-    channel.sendText = async (clientId, text, options = {}) => {
-      const chatId = normalizeChatId(clientId);
-      const content = String(text || '');
-      return runWithTyping(
-        client,
-        chatId,
-        content,
-        () => originalSendText(chatId, content),
-        options,
-      );
-    };
-  }
-
-  if (originalSendImage) {
-    client.sendImage = async (chatId, filePath, fileName, caption = '', ...rest) => {
-      const description = String(caption || fileName || 'enviando imagem');
-      const fast = /capa[-_ ]?mostruario|mostruario[-_ ]?letreiro/i.test(`${filePath} ${fileName}`);
-      return runWithTyping(
-        client,
-        chatId,
-        description,
-        () => originalSendImage(chatId, filePath, fileName, caption, ...rest),
-        { fast },
-      );
-    };
-
-    channel.sendImage = async (clientId, filePath, caption = '', options = {}) => {
-      const chatId = normalizeChatId(clientId);
-      const fullPath = path.resolve(process.cwd(), filePath);
-      return runWithTyping(
-        client,
-        chatId,
-        String(caption || 'enviando imagem'),
-        () => originalSendImage(chatId, fullPath, path.basename(fullPath), String(caption || '')),
-        options,
-      );
-    };
-  }
-
-  for (const methodName of ['sendListMessage', 'sendList', 'sendButtons']) {
-    if (typeof client[methodName] !== 'function') continue;
-    const original = client[methodName].bind(client);
-    client[methodName] = async (chatId, ...args) => {
-      const description = JSON.stringify(args[0] || args).slice(0, 300);
-      return runWithTyping(client, chatId, description, () => original(chatId, ...args), { fast: true });
-    };
-  }
-
-  channel.startTyping = async (clientId) => startTypingCompat(client, normalizeChatId(clientId));
-  channel.stopTyping = async (clientId) => stopTypingCompat(client, normalizeChatId(clientId));
-  client.__personalizeTypingInstalled = true;
+  // Mesmos tempos operacionais do fluxo Personalize em produção.
+  if (stage === 'tamanho') return env.measureBufferMs;
+  if (stage === 'arte_coleta') return env.artBufferMs;
+  if (stage === 'endereco') return env.addressBufferMs;
+  if (stage === 'pantone') return env.pantoneBufferMs;
+  if (stage === 'observacao_pedido_coleta') return env.observationBufferMs;
+  if (stage === 'cidade') return env.cityBufferMs;
+  if (MULTI_MESSAGE_STAGES.has(stage)) return env.multiMessageBufferMs;
+  return env.bufferMs;
 }
 
 function blockPdfSending(channel) {
   if (!channel) return;
-
   if (typeof channel.sendDocument === 'function') {
     channel.sendDocument = async () => {
-      console.warn('[BLOQUEIO PDF] tentativa de envio de documento bloqueada. O mostruário deve ser enviado apenas como link.');
+      console.warn('[BLOQUEIO PDF] tentativa de envio de documento bloqueada. O mostruário usa somente link.');
       return false;
     };
   }
 
   const client = channel.client;
   if (typeof client?.sendFile !== 'function' || client.__personalizePdfGuardInstalled) return;
-
   const originalSendFile = client.sendFile.bind(client);
   client.sendFile = async (...args) => {
-    const serializedArgs = args
-      .map((value) => {
-        if (typeof value === 'string') return value;
-        try {
-          return JSON.stringify(value);
-        } catch (_) {
-          return String(value || '');
-        }
-      })
-      .join(' ')
-      .toLowerCase();
-
-    if (serializedArgs.includes('.pdf') || serializedArgs.includes('mostruario')) {
-      console.warn('[BLOQUEIO PDF] client.sendFile bloqueado para PDF/mostruário.');
+    const serialized = args.map((value) => {
+      if (typeof value === 'string') return value;
+      try { return JSON.stringify(value); } catch (_) { return String(value || ''); }
+    }).join(' ').toLowerCase();
+    if (serialized.includes('.pdf') && serialized.includes('mostruario')) {
+      console.warn('[BLOQUEIO PDF] envio do PDF de mostruário bloqueado.');
       return false;
     }
-
     return originalSendFile(...args);
   };
   client.__personalizePdfGuardInstalled = true;
@@ -282,10 +179,11 @@ function blockPdfSending(channel) {
 async function main() {
   console.log('[PersonalizeWppConect] iniciando...');
   console.log(`[PersonalizeWppConect] BUILD: ${BUILD_ID}`);
-  console.log('[PersonalizeWppConect] MODO MOSTRUÁRIO: SOMENTE LINK, PDF BLOQUEADO');
-  console.log(`[PersonalizeWppConect] modo: ${env.mockMode ? 'mock/local' : 'WPPConnect'}`);
-  console.log(`[PersonalizeWppConect] link do mostruário: ${env.mostruarioLinkUrl}`);
-  console.log(`[PersonalizeWppConect] digitando: ${env.enableTyping ? `${env.typingMinMs}-${env.typingMaxMs}ms` : 'desativado'}`);
+  console.log(`[PersonalizeWppConect] buffer comum: ${env.bufferMs}ms`);
+  console.log(`[PersonalizeWppConect] buffers de coleta: medida=${env.measureBufferMs}ms arte=${env.artBufferMs}ms endereço=${env.addressBufferMs}ms Pantone=${env.pantoneBufferMs}ms observação=${env.observationBufferMs}ms cidade=${env.cityBufferMs}ms`);
+  console.log(`[PersonalizeWppConect] buffer listas/botões: ${env.interactiveBufferMs}ms`);
+  console.log('[PersonalizeWppConect] respostas do mesmo evento: digitação única + balões sem pausa artificial');
+  console.log('[PersonalizeWppConect] finalização: dados salvos na nota do contato; sem encaminhamento ao vendedor');
 
   if (env.allowedClientNumbers?.length || env.allowedChatIds?.length) {
     console.log(`[PersonalizeWppConect] whitelist ativa: números=${env.allowedClientNumbers.join(', ') || '-'} chatIds=${env.allowedChatIds.join(', ') || '-'}`);
@@ -296,22 +194,32 @@ async function main() {
 
   const buffer = new BufferManager({
     delayMs: env.bufferMs,
-    onFlush: async (clientId, messages) => {
-      const text = mergeMessages(messages);
+    onFlush: async (clientId, bufferedMessages) => {
+      const text = mergeMessages(bufferedMessages);
       if (!text) return;
+      const preparedText = prepareBufferedInput(clientId, text, bufferedMessages);
+      console.log(`\n[CLIENTE ${clientId}] ${preparedText}\n`);
 
-      const preparedText = prepareBufferedInput(clientId, text, messages);
-      console.log(`\n[CLIENTE ${clientId}] ${text}\n`);
+      const action = () => processCustomerMessage({
+        clientId,
+        text: preparedText,
+        channel,
+        messages: bufferedMessages,
+      });
 
-      try {
-        await processCustomerMessage({ clientId, text: preparedText, channel });
-      } finally {
-        await channel?.stopTyping?.(clientId).catch(() => null);
+      if (typeof channel?.runResponseGroup === 'function') {
+        await channel.runResponseGroup(clientId, preparedText, action);
+      } else {
+        await action();
       }
     },
   });
 
   const onMessage = async ({ from, text, raw, source = 'event' }) => {
+    const interactiveId = extractInteractiveId(raw);
+    const effectiveText = interactiveId || String(text || '').trim() || mediaMarker(raw);
+    if (!effectiveText) return;
+
     const profileName = extractProfileName(raw);
     const identity = Identity.registerContact({ chatId: from, raw });
     const canonicalChatId = identity?.primaryChatId || from;
@@ -319,31 +227,39 @@ async function main() {
     const allowed = isAllowedClient({ from: canonicalChatId, raw });
     if (!allowed.allowed) {
       console.log(`[PersonalizeWppConect] ignorado (${source}) fora da whitelist: ${canonicalChatId}`);
-      if (allowed.candidates?.length) {
-        console.log(`[PersonalizeWppConect] candidatos analisados: ${allowed.candidates.join(' | ')}`);
-      }
       return;
     }
 
-    const key = messageKey(raw || { from: canonicalChatId, text });
+    const key = messageKey(raw || { from: canonicalChatId, text: effectiveText });
     if (processedMessageIds.has(key)) return;
     processedMessageIds.add(key);
+    if (processedMessageIds.size > 5000) {
+      const first = processedMessageIds.values().next().value;
+      processedMessageIds.delete(first);
+    }
 
-    console.log(`[PersonalizeWppConect] mensagem enfileirada (${source}) de ${canonicalChatId}`);
-    buffer.push(canonicalChatId, { text, raw, source, identity, profileName });
-    await channel?.startTyping?.(canonicalChatId).catch(() => null);
+    const delayMs = resolveBufferDelay(canonicalChatId, raw, interactiveId);
+    console.log(`[PersonalizeWppConect] mensagem enfileirada (${source}) de ${canonicalChatId}; espera=${delayMs}ms${interactiveId ? `; ação=${interactiveId}` : ''}`);
+    buffer.push(canonicalChatId, {
+      text: effectiveText,
+      raw,
+      source,
+      identity,
+      profileName,
+      interactiveId,
+    }, { delayMs });
   };
 
   if (env.mockMode) {
-    channel = createMockChannel();
+    channel = installMessageExperience(createMockChannel());
     blockPdfSending(channel);
-    console.log('[PersonalizeWppConect] MOCK_MODE ativo. Use npm run test:flow para simular conversa.');
+    console.log('[PersonalizeWppConect] MOCK_MODE ativo.');
     return;
   }
 
   channel = await createWppChannel({ onMessage });
   blockPdfSending(channel);
-  installTyping(channel);
+  installMessageExperience(channel);
   console.log('[PersonalizeWppConect] conectado. Aguardando mensagens...');
 
   if (env.enableUnreadBootstrap) {
@@ -353,12 +269,7 @@ async function main() {
         const unread = await collectUnreadMessages(channel.client);
         console.log(`[PersonalizeWppConect] mensagens não lidas encontradas: ${unread.length}`);
         for (const item of unread) {
-          await onMessage({
-            from: item.from,
-            text: item.text,
-            raw: item.raw,
-            source: 'unread-bootstrap',
-          });
+          await onMessage({ from: item.from, text: item.text, raw: item.raw, source: 'unread-bootstrap' });
         }
       } catch (err) {
         console.warn('[PersonalizeWppConect] não foi possível buscar mensagens não lidas:', err?.message || err);
