@@ -14,7 +14,7 @@ const Store = require('./services/leadStore');
 const Identity = require('./services/contactIdentity');
 const { env } = require('./config/env');
 
-const BUILD_ID = 'production-flow-port-grouped-messages-2026-07-10-02';
+const BUILD_ID = 'welcome-image-caption-no-typing-2026-07-10-03';
 const MULTI_MESSAGE_STAGES = new Set([
   'plotagem_descricao',
   'plotagem_medida',
@@ -182,7 +182,8 @@ async function main() {
   console.log(`[PersonalizeWppConect] buffer comum: ${env.bufferMs}ms`);
   console.log(`[PersonalizeWppConect] buffers de coleta: medida=${env.measureBufferMs}ms arte=${env.artBufferMs}ms endereço=${env.addressBufferMs}ms Pantone=${env.pantoneBufferMs}ms observação=${env.observationBufferMs}ms cidade=${env.cityBufferMs}ms`);
   console.log(`[PersonalizeWppConect] buffer listas/botões: ${env.interactiveBufferMs}ms`);
-  console.log('[PersonalizeWppConect] respostas do mesmo evento: digitação única + balões sem pausa artificial');
+  console.log('[PersonalizeWppConect] respostas comuns: digitação única + balões sem pausa artificial');
+  console.log('[PersonalizeWppConect] boas-vindas: saudação + imagem com link na legenda + lista, sem digitação e sem delay artificial');
   console.log('[PersonalizeWppConect] finalização: dados salvos na nota do contato; sem encaminhamento ao vendedor');
 
   if (env.allowedClientNumbers?.length || env.allowedChatIds?.length) {
@@ -200,6 +201,9 @@ async function main() {
       const preparedText = prepareBufferedInput(clientId, text, bufferedMessages);
       console.log(`\n[CLIENTE ${clientId}] ${preparedText}\n`);
 
+      const stageBeforeResponse = String(Store.getSession(clientId)?.etapa || '').trim();
+      const isWelcomeBlock = stageBeforeResponse === 'inicio';
+
       const action = () => processCustomerMessage({
         clientId,
         text: preparedText,
@@ -208,7 +212,9 @@ async function main() {
       });
 
       if (typeof channel?.runResponseGroup === 'function') {
-        await channel.runResponseGroup(clientId, preparedText, action);
+        await channel.runResponseGroup(clientId, preparedText, action, {
+          noTyping: isWelcomeBlock,
+        });
       } else {
         await action();
       }
