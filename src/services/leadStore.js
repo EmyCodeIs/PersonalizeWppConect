@@ -2,6 +2,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const Identity = require('./contactIdentity');
 
 const DATA_DIR = path.join(process.cwd(), 'data');
 const SESSIONS_PATH = path.join(DATA_DIR, 'sessions.json');
@@ -34,15 +35,16 @@ function nowIso() {
 }
 
 function normalizeClientId(clientId) {
-  const raw = String(clientId || '').trim();
-  const digits = raw.replace(/\D/g, '');
-  return digits || raw;
+  return Identity.getSessionKey(clientId);
 }
 
-function createSession(id) {
+function createSession(id, chatId) {
+  const identity = Identity.resolveContact(chatId || id);
   return {
     id,
     clientId: id,
+    chatId: identity?.primaryChatId || String(chatId || '').trim() || null,
+    contactIdentity: identity || null,
     etapa: 'inicio',
     dados: {},
     createdAt: nowIso(),
@@ -51,10 +53,13 @@ function createSession(id) {
   };
 }
 
-function migrateSession(session, id) {
-  const next = session && typeof session === 'object' ? session : createSession(id);
-  next.id = next.id || id;
-  next.clientId = next.clientId || id;
+function migrateSession(session, id, chatId) {
+  const next = session && typeof session === 'object' ? session : createSession(id, chatId);
+  const identity = Identity.resolveContact(chatId || next.chatId || id);
+  next.id = id;
+  next.clientId = id;
+  next.chatId = identity?.primaryChatId || next.chatId || String(chatId || '').trim() || null;
+  next.contactIdentity = identity || next.contactIdentity || null;
   next.etapa = next.etapa || next.step || 'inicio';
   next.dados = next.dados || next.data || {};
   next.createdAt = next.createdAt || nowIso();
@@ -65,14 +70,15 @@ function migrateSession(session, id) {
 function getSession(clientId) {
   const id = normalizeClientId(clientId);
   if (!id) return null;
-  state.sessions[id] = migrateSession(state.sessions[id], id);
+  state.sessions[id] = migrateSession(state.sessions[id], id, clientId);
   return state.sessions[id];
 }
 
 function saveSession(session) {
-  if (!session?.clientId && !session?.id) return null;
-  const id = normalizeClientId(session.clientId || session.id);
-  const next = migrateSession(session, id);
+  if (!session?.clientId && !session?.id && !session?.chatId) return null;
+  const sourceId = session.chatId || session.clientId || session.id;
+  const id = normalizeClientId(sourceId);
+  const next = migrateSession(session, id, sourceId);
   next.updatedAt = nowIso();
   state.sessions[id] = next;
   state.lastSavedAt = nowIso();
@@ -83,7 +89,7 @@ function saveSession(session) {
 function resetSession(clientId) {
   const id = normalizeClientId(clientId);
   if (!id) return null;
-  state.sessions[id] = createSession(id);
+  state.sessions[id] = createSession(id, clientId);
   writeJson(SESSIONS_PATH, state);
   return state.sessions[id];
 }
@@ -120,11 +126,13 @@ function resetSystem() {
 
   ensureDataDir();
   fs.writeFileSync(LEADS_PATH, '', 'utf8');
+  const previousIdentityCount = Identity.resetIdentities();
 
   return {
     resetAt: state.lastSavedAt,
     previousSessionCount,
     previousLeadCount,
+    previousIdentityCount,
   };
 }
 
