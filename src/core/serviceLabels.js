@@ -47,7 +47,9 @@ function managedServiceLabelNames() {
     ? env.serviceLabelReplaceGroup
     : [];
   const fallback = [env.serviceLabelLetreiro, env.serviceLabelPlotagem, env.serviceLabelOutros];
-  return [...new Set((configured.length ? configured : fallback).map((item) => String(item || '').trim()).filter(Boolean))];
+  return [...new Set((configured.length ? configured : fallback)
+    .map((item) => String(item || '').trim())
+    .filter(Boolean))];
 }
 
 async function getAllLabels(client) {
@@ -166,7 +168,8 @@ function persistManualLabels(clientId, labels = []) {
     const session = Store.getSession(clientId);
     if (!session) return;
     session.dados = session.dados || {};
-    const normalized = uniqueLabelMetadata(labels).sort((a, b) => a.name.localeCompare(b.name, 'pt-BR'));
+    const normalized = uniqueLabelMetadata(labels)
+      .sort((a, b) => a.name.localeCompare(b.name, 'pt-BR'));
     session.dados.manualContactLabels = normalized;
     session.dados.manualContactLabelNames = normalized.map((item) => item.name);
     session.dados.manualContactLabelsDetectedAt = new Date().toISOString();
@@ -239,14 +242,14 @@ async function syncExistingServiceLabelColor(client, target) {
   }
 }
 
-async function applyThroughListsApi(client, chatId, target, replaceGroup) {
+async function applyThroughListsApi(client, chatId, target) {
   if (!client?.page?.evaluate) {
     return { applied: false, verified: false, reason: 'page_unavailable' };
   }
 
-  return client.page.evaluate(async ({ chatId, target, replaceGroup, requestedHex }) => {
+  return client.page.evaluate(async ({ chatId, target, requestedHex }) => {
     const WPP = window.WPP || null;
-    if (!WPP?.lists?.create || !WPP?.lists?.addChats || !WPP?.lists?.removeChats) {
+    if (!WPP?.lists?.create || !WPP?.lists?.addChats) {
       return { applied: false, verified: false, reason: 'lists_api_unavailable' };
     }
 
@@ -299,7 +302,7 @@ async function applyThroughListsApi(client, chatId, target, replaceGroup) {
       const createdId = await WPP.lists.create(
         target.name,
         [],
-        Number.isInteger(colorIndex) ? colorIndex : undefined
+        Number.isInteger(colorIndex) ? colorIndex : undefined,
       );
 
       if (WPP.labels?.getAllLabels) {
@@ -317,25 +320,9 @@ async function applyThroughListsApi(client, chatId, target, replaceGroup) {
       return { applied: false, verified: false, reason: 'target_list_missing' };
     }
 
-    // Somente as etiquetas do grupo de serviço podem ser substituídas.
-    // Etiquetas de vendedor, suporte ou qualquer etiqueta manual permanecem intactas.
-    const groupNames = replaceGroup.map(normalize);
-    const otherLists = lists.filter((item) => {
-      const id = String(item?.id || '');
-      return id && id !== targetId && groupNames.includes(normalize(item?.name));
-    });
-
-    for (const list of otherLists) {
-      try {
-        await WPP.lists.removeChats(String(list.id), [chatId]);
-      } catch (err) {
-        const text = String(err?.message || err?.text || err || '');
-        if (!/not found|not attached|not in list/i.test(text)) throw err;
-      }
-    }
-
+    // MODO ADITIVO: nunca remove nenhuma etiqueta do contato.
     await WPP.lists.addChats(targetId, [chatId]);
-    await new Promise((resolve) => setTimeout(resolve, 800));
+    await new Promise((resolve) => setTimeout(resolve, 400));
 
     let verified = null;
     try {
@@ -354,7 +341,7 @@ async function applyThroughListsApi(client, chatId, target, replaceGroup) {
     return {
       applied: true,
       verified,
-      mode: 'lists',
+      mode: 'lists-additive',
       chatId,
       targetId,
       targetName: target.name,
@@ -362,12 +349,11 @@ async function applyThroughListsApi(client, chatId, target, replaceGroup) {
   }, {
     chatId,
     target,
-    replaceGroup,
     requestedHex: desiredHex(target.color),
   });
 }
 
-async function buildLegacyOptions(client, target, replaceGroup) {
+async function buildLegacyAddOptions(client, target) {
   let labels = await getAllLabels(client);
   let targetLabel = labels.find((item) => normalizeName(labelName(item)) === normalizeName(target.name));
 
@@ -384,28 +370,17 @@ async function buildLegacyOptions(client, target, replaceGroup) {
   const targetId = labelId(targetLabel);
   if (!targetId) return [];
 
-  const groupNames = new Set(replaceGroup.map(normalizeName));
-  const operations = labels
-    .filter((item) => groupNames.has(normalizeName(labelName(item))))
-    .map((item) => ({
-      labelId: labelId(item),
-      type: labelId(item) === targetId ? 'add' : 'remove',
-    }))
-    .filter((item) => item.labelId);
-
-  if (!operations.some((item) => item.labelId === targetId && item.type === 'add')) {
-    operations.push({ labelId: targetId, type: 'add' });
-  }
-  return operations;
+  // MODO ADITIVO: somente a operação de adicionar é permitida.
+  return [{ labelId: targetId, type: 'add' }];
 }
 
-async function applyThroughLegacyLabels(client, chatId, target, replaceGroup) {
-  const operations = await buildLegacyOptions(client, target, replaceGroup);
+async function applyThroughLegacyLabels(client, chatId, target) {
+  const operations = await buildLegacyAddOptions(client, target);
   if (!operations.length || typeof client?.addOrRemoveLabels !== 'function') {
     return { applied: false, verified: false, reason: 'legacy_labels_unavailable' };
   }
   await client.addOrRemoveLabels([chatId], operations);
-  return { applied: true, verified: null, mode: 'legacy-labels', chatId };
+  return { applied: true, verified: null, mode: 'legacy-labels-additive', chatId };
 }
 
 async function replaceServiceLabel(channel, clientId, service) {
@@ -415,48 +390,54 @@ async function replaceServiceLabel(channel, clientId, service) {
   const target = getServiceLabel(service);
   if (!target?.name) return false;
 
-  const replaceGroup = managedServiceLabelNames();
+  const managedNames = managedServiceLabelNames();
 
-  // Recolore somente a etiqueta de serviço. Etiquetas manuais não são alteradas.
+  // Recolore somente a etiqueta-alvo; nunca altera nem remove as demais.
   await syncExistingServiceLabelColor(client, target);
 
   const candidates = Identity.getLabelCandidateIds(clientId);
   if (!candidates.length) candidates.push(Identity.normalizeChatId(clientId));
 
   for (const chatId of [...new Set(candidates.filter(Boolean))]) {
-    const before = await detectAttachedLabels(client, chatId, replaceGroup);
+    const before = await detectAttachedLabels(client, chatId, managedNames);
+    if (before.all.length) {
+      console.log(`[LISTA] etiquetas antes da inclusão em ${chatId}: ${before.all.map((item) => item.name).join(', ')}`);
+    }
     if (before.manual.length) {
-      console.log(`[LISTA] etiquetas manuais detectadas e preservadas em ${chatId}: ${before.manual.map((item) => item.name).join(', ')}`);
       persistManualLabels(clientId, before.manual);
     }
 
     let result;
     try {
-      result = await applyThroughListsApi(client, chatId, target, replaceGroup);
+      result = await applyThroughListsApi(client, chatId, target);
     } catch (err) {
       console.warn(`[LISTA] API nova falhou para ${chatId}:`, err?.message || err?.text || err);
     }
 
     if (!result?.applied && result?.reason === 'lists_api_unavailable') {
-      console.warn('[LISTA] WPP.lists indisponível nesta versão; usando fallback antigo WPP.labels.');
+      console.warn('[LISTA] WPP.lists indisponível nesta versão; usando fallback antigo aditivo.');
       try {
-        result = await applyThroughLegacyLabels(client, chatId, target, replaceGroup);
+        result = await applyThroughLegacyLabels(client, chatId, target);
       } catch (err) {
         console.warn(`[LISTA] fallback antigo falhou para ${chatId}:`, err?.message || err);
       }
     }
 
-    const after = await detectAttachedLabels(client, chatId, replaceGroup);
+    const after = await detectAttachedLabels(client, chatId, managedNames);
     const manualLabels = after.manual.length ? after.manual : before.manual;
     persistManualLabels(clientId, manualLabels);
 
+    if (after.all.length) {
+      console.log(`[LISTA] etiquetas após inclusão em ${chatId}: ${after.all.map((item) => item.name).join(', ')}`);
+    }
+
     if (result?.applied && result.verified === true) {
-      console.log(`[LISTA] adicionada e confirmada em ${chatId}: ${target.name} (${result.mode})`);
+      console.log(`[LISTA] adicionada e confirmada sem remover outras: ${target.name} (${result.mode})`);
       return { ...result, manualLabels, managedLabels: after.managed };
     }
 
     if (result?.applied && result.verified === null) {
-      console.log(`[LISTA] operação concluída sem verificação interna disponível em ${chatId}: ${target.name} (${result.mode})`);
+      console.log(`[LISTA] adicionada sem remover outras: ${target.name} (${result.mode})`);
       return { ...result, manualLabels, managedLabels: after.managed };
     }
 
