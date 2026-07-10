@@ -60,18 +60,6 @@ const menus = {
       { id: 'corq_voltar', title: 'Voltar', description: 'Retornar à etapa anterior' },
     ],
   },
-  profundidade: {
-    title: 'Espessura / profundidade',
-    description: 'Deseja seguir com 3mm ou adicionar acrílico cristal por trás?',
-    buttonText: 'Escolher espessura',
-    fallbackText: messages.askDepth,
-    rows: [
-      { id: 'esp3_keep', title: 'Quero manter 3mm', description: 'Seguir com a espessura padrão' },
-      { id: 'esp3_add3', title: 'Acrescentar +3mm', description: 'Adicionar acrílico cristal por trás' },
-      { id: 'esp3_add6', title: 'Acrescentar +6mm', description: 'Adicionar acrílico cristal por trás' },
-      { id: 'esp3_add10', title: 'Acrescentar +10mm', description: 'Adicionar acrílico cristal por trás' },
-    ],
-  },
   espessuraPersonalizada: {
     title: 'Espessura personalizada',
     description: 'Qual espessura deseja para o acrílico personalizado?',
@@ -155,6 +143,27 @@ function buildMirrorColorMenu(index, total) {
       { id: 'cor_esp_azul', title: 'Azul espelhado', description: 'Efeito espelhado (2mm)' },
       { id: 'cor_esp_roxo', title: 'Roxo espelhado', description: 'Efeito espelhado (2mm)' },
       { id: 'cor_voltar', title: 'Voltar', description: 'Retornar à etapa anterior' },
+    ],
+  };
+}
+
+function buildDepthMenu(baseLabel = '3mm') {
+  const base = String(baseLabel || '3mm').trim() || '3mm';
+  const mixed = /\be\b/i.test(base);
+  return {
+    title: 'Espessura / profundidade',
+    description: '🔳\nQuer acrescentar uma espessura maior no seu acrílico?',
+    buttonText: 'Selecionar',
+    interactiveOnly: true,
+    rows: [
+      {
+        id: 'esp3_keep',
+        title: `Quero manter ${base}`,
+        description: mixed ? 'Sólidas 3mm e espelhadas 2mm' : `Seguir com a espessura padrão ${base}`,
+      },
+      { id: 'esp3_add3', title: 'Acrescentar +3mm', description: 'Adicionar acrílico cristal por trás' },
+      { id: 'esp3_add6', title: 'Acrescentar +6mm', description: 'Adicionar acrílico cristal por trás' },
+      { id: 'esp3_add10', title: 'Acrescentar +10mm', description: 'Adicionar acrílico cristal por trás' },
     ],
   };
 }
@@ -262,4 +271,5 @@ module.exports = {
   buildColorTypeMenu,
   buildSolidColorMenu,
   buildMirrorColorMenu,
+  buildDepthMenu,
 };
