@@ -44,9 +44,7 @@ const serviceLabelOutros = process.env.SERVICE_LABEL_OUTROS || 'Outros';
 const env = {
   sessionName: process.env.WPP_SESSION_NAME || 'personalize-wppconnect',
   mockMode: bool('MOCK_MODE', false),
-  // false por padrão para abrir uma janela visível do Chrome/WhatsApp Web no teste real.
   wppHeadless: bool('WPP_HEADLESS', false),
-  // Comandos de teste como /reset e /resetarsys. Desative em produção.
   enableTestCommands: bool('ENABLE_TEST_COMMANDS', true),
   businessName: process.env.BUSINESS_NAME || 'Personalize',
   sellerName: process.env.SELLER_NAME || 'Vendedor Personalize',
@@ -69,22 +67,16 @@ const env = {
   unreadBootstrapDelayMs: Math.max(1000, num('UNREAD_BOOTSTRAP_DELAY_MS', 6000)),
   unreadBootstrapMaxChats: Math.max(1, num('UNREAD_BOOTSTRAP_MAX_CHATS', 30)),
   unreadBootstrapMaxMessagesPerChat: Math.max(1, num('UNREAD_BOOTSTRAP_MAX_MESSAGES_PER_CHAT', 8)),
-  // Whitelist temporária de teste: vazio = atende qualquer contato.
   allowedClientNumbers: list('ALLOWED_CLIENT_NUMBERS', []),
   allowedChatIds: list('ALLOWED_CHAT_IDS', []),
-  // Mapeamento manual quando o WhatsApp só entrega @lid e não expõe o telefone.
-  // Ex: 18885055098907@lid=31971386091
   lidNumberMap: mapList('LID_NUMBER_MAP'),
   assetsDir: process.env.ASSETS_DIR || 'assets',
-  enableAssetServer: bool('ENABLE_ASSET_SERVER', true),
-  assetServerHost: process.env.ASSET_SERVER_HOST || '0.0.0.0',
-  assetServerPort: Math.max(1, num('ASSET_SERVER_PORT', 3030)),
-  assetPublicBaseUrl: process.env.ASSET_PUBLIC_BASE_URL || '',
   mostruarioLetreiroImageBaseName: process.env.MOSTRUARIO_LETREIRO_IMAGE_BASENAME || 'capa-mostruario',
-  mostruarioLetreiroPdfBaseName: process.env.MOSTRUARIO_LETREIRO_PDF_BASENAME || 'mostruario',
-  mostruarioLetreiroPdfPath: process.env.MOSTRUARIO_LETREIRO_PDF_PATH || '',
-  // URL externa explícita. Se vazia, o servidor local gera uma URL automaticamente.
-  mostruarioLetreiroPdfUrl: process.env.MOSTRUARIO_LETREIRO_PDF_URL || '',
+  // Link comum de página. Não aponta para PDF e não envia documento.
+  mostruarioLinkUrl:
+    process.env.MOSTRUARIO_LINK_URL
+    || process.env.MOSTRUARIO_LETREIRO_LINK_URL
+    || 'https://personalizeseuambiente.com.br/mostruario-letreiros',
   assetTabelaCoresBaseName: process.env.ASSET_TABELA_CORES_BASENAME || 'tabela-cores-v2',
   assetTabelaEspessuraBaseName: process.env.ASSET_TABELA_ESPESSURA_BASENAME || 'tabela-espessura',
   assetTabelaProfundidadeBaseName: process.env.ASSET_TABELA_PROFUNDIDADE_BASENAME || 'tabela-profundidade-3mm',
