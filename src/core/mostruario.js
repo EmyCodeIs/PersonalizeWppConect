@@ -3,7 +3,6 @@
 const fs = require('fs');
 const path = require('path');
 const { env } = require('../config/env');
-const { messages } = require('./messages');
 
 const IMAGE_EXTENSIONS = ['.png', '.jpg', '.jpeg', '.webp'];
 
@@ -80,6 +79,15 @@ function resolveAssetPath(baseNameOrNames, extensions) {
   return null;
 }
 
+function getBemVindosImagePath() {
+  return resolveAssetPath([
+    env.bemVindosImageBaseName || 'capa_bem_vindos',
+    'capa_bem_vindos',
+    'capa-bem-vindos',
+    'capa_bem-vindos',
+  ], IMAGE_EXTENSIONS);
+}
+
 function getMostruarioImagePath() {
   return resolveAssetPath([
     env.mostruarioLetreiroImageBaseName || 'capa-mostruario',
@@ -122,7 +130,7 @@ function getFileSizeKb(filePath) {
   }
 }
 
-async function sendImageIfExists(channel, clientId, filePath, caption, options = {}) {
+async function sendImageIfExists(channel, clientId, filePath, caption = '', options = {}) {
   if (!filePath) return false;
   if (!channel?.sendImage && !channel?.client?.sendImage) {
     console.warn('[ASSET] canal atual não possui sendImage.');
@@ -157,7 +165,7 @@ async function sendImageIfExists(channel, clientId, filePath, caption, options =
   }
 }
 
-async function sendTextFast(channel, clientId, text) {
+async function sendTextFast(channel, clientId, text, logPrefix = 'LINK') {
   const startedAt = Date.now();
   const chatId = normalizeChatId(clientId);
 
@@ -167,44 +175,61 @@ async function sendTextFast(channel, clientId, text) {
     await channel.sendText(clientId, text);
   }
 
-  console.log(`[MOSTRUARIO PERF] link enviado em ${Date.now() - startedAt}ms`);
+  console.log(`[${logPrefix}] enviado em ${Date.now() - startedAt}ms`);
+}
+
+function validRawLink(value, variableName, fallback) {
+  const link = String(value || '').trim();
+  if (/^https?:\/\/[^\s]+$/i.test(link)) return link;
+  console.warn(`[LINK] ${variableName} inválida; usando link provisório.`);
+  return fallback;
+}
+
+function getBemVindosLink() {
+  return validRawLink(
+    env.bemVindosLinkUrl,
+    'BEM_VINDOS_LINK_URL',
+    'https://personalizeseuambiente.com.br/bem-vindos',
+  );
 }
 
 function getMostruarioLink() {
-  const link = String(env.mostruarioLinkUrl || '').trim();
-  if (/^https?:\/\/[^\s]+$/i.test(link)) return link;
+  return validRawLink(
+    env.mostruarioLinkUrl,
+    'MOSTRUARIO_LINK_URL',
+    'https://personalizeseuambiente.com.br/mostruario-letreiros',
+  );
+}
 
-  console.warn('[MOSTRUARIO] MOSTRUARIO_LINK_URL inválida; usando link provisório.');
-  return 'https://personalizeseuambiente.com.br/mostruario-letreiros';
+async function sendLinkedImage(channel, clientId, { imagePath, link, label }) {
+  const totalStartedAt = Date.now();
+
+  // Regra visual: imagem sem legenda e URL crua no balão seguinte.
+  if (imagePath) {
+    await sendImageIfExists(channel, clientId, imagePath, '', { fast: true });
+  } else {
+    console.warn(`[${label}] imagem não encontrada; enviando somente o link cru.`);
+  }
+
+  await sendTextFast(channel, clientId, link, `${label} LINK`);
+  console.log(`[${label}] imagem sem legenda + link cru concluídos em ${Date.now() - totalStartedAt}ms`);
+  return true;
+}
+
+async function sendBemVindos(channel, clientId) {
+  return sendLinkedImage(channel, clientId, {
+    imagePath: getBemVindosImagePath(),
+    link: getBemVindosLink(),
+    label: 'BEM-VINDOS',
+  });
 }
 
 async function sendMostruarioLetreiro(channel, clientId) {
-  const totalStartedAt = Date.now();
-  const imagePath = getMostruarioImagePath();
-  const link = getMostruarioLink();
-
-  if (imagePath) {
-    const ok = await sendImageIfExists(
-      channel,
-      clientId,
-      imagePath,
-      messages.mostruario,
-      { fast: true },
-    );
-    if (!ok) await sendTextFast(channel, clientId, messages.mostruario);
-  } else {
-    await sendTextFast(channel, clientId, messages.mostruario);
-  }
-
-  await sendTextFast(
-    channel,
-    clientId,
-    `${messages.mostruarioLink || '🔗 Ver Mostruário'}\n${link}`,
-  );
-
-  console.log(`[MOSTRUARIO] link comum enviado: ${link}`);
-  console.log(`[MOSTRUARIO PERF] etapa concluída em ${Date.now() - totalStartedAt}ms`);
-  return true;
+  return sendLinkedImage(channel, clientId, {
+    imagePath: getMostruarioImagePath(),
+    link: getMostruarioLink(),
+    label: 'MOSTRUARIO',
+  });
 }
 
 async function sendTabelaCores(channel, clientId) {
@@ -220,14 +245,17 @@ async function sendTabelaProfundidade(channel, clientId) {
 }
 
 module.exports = {
+  sendBemVindos,
   sendMostruarioLetreiro,
   sendTabelaCores,
   sendTabelaEspessura,
   sendTabelaProfundidade,
+  getBemVindosImagePath,
   getMostruarioImagePath,
   getTabelaCoresPath,
   getTabelaEspessuraPath,
   getTabelaProfundidadePath,
   listAssetFiles,
+  getBemVindosLink,
   getMostruarioLink,
 };
