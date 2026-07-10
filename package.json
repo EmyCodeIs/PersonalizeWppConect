@@ -1,14 +1,14 @@
 {
   "name": "personalize-wppconnect-cliente-flow",
-  "version": "0.5.0",
-  "description": "Port local do fluxo cliente da Personalize para WPPConnect, separado da API oficial em producao.",
+  "version": "0.6.0",
+  "description": "Port local do fluxo cliente da Personalize para WPPConnect, com regras do fluxo de produção e finalização em nota do contato.",
   "main": "src/index.js",
   "type": "commonjs",
   "scripts": {
-    "start": "node -r ./src/bootstrapPatch.js src/index.js",
-    "dev": "node -r ./src/bootstrapPatch.js src/index.js",
+    "start": "node src/index.js",
+    "dev": "node src/index.js",
     "test:flow": "node scripts/test-flow.js",
-    "check": "node --check src/bootstrapPatch.js && node --check src/index.js && node --check src/services/contactIdentity.js && node --check src/services/leadStore.js && node --check src/services/wppconnectClient.js && node --check src/core/allowedClient.js && node --check src/core/serviceLabels.js && node --check src/core/menuCatalog.js && node --check src/core/mostruario.js && node --check src/flow/colorSelectionFlow.js && node --check src/flow/customerFlow.js && node --check scripts/test-flow.js"
+    "check": "node --check src/index.js && node --check src/config/env.js && node --check src/core/bufferManager.js && node --check src/core/messageExperience.js && node --check src/core/menuCatalog.js && node --check src/core/messages.js && node --check src/core/parsers.js && node --check src/domain/acrilicoThickness.js && node --check src/services/contactIdentity.js && node --check src/services/leadStore.js && node --check src/services/wppconnectClient.js && node --check src/core/allowedClient.js && node --check src/core/serviceLabels.js && node --check src/core/mostruario.js && node --check src/flow/customerFlow.js && node --check scripts/test-flow.js"
   },
   "dependencies": {
     "@wppconnect-team/wppconnect": "^2.2.1",
