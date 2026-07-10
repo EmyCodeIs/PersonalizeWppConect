@@ -3,6 +3,7 @@
 const path = require('path');
 const { AsyncLocalStorage } = require('async_hooks');
 const { env } = require('../config/env');
+const { sendBemVindos } = require('./mostruario');
 
 const responseContext = new AsyncLocalStorage();
 
@@ -71,12 +72,24 @@ function isGroupedResponse() {
   return !!responseContext.getStore()?.grouped;
 }
 
+function isWelcomeText(text) {
+  return /bem-vindo\(a\) ao canal de atendimento da personalize!/i.test(String(text || ''));
+}
+
 async function sendTextDirect(channel, clientId, text) {
   const chatId = normalizeChatId(clientId);
   if (typeof channel?.client?.sendText === 'function') {
     return channel.client.sendText(chatId, String(text || ''));
   }
   return channel.__rawSendText(clientId, text);
+}
+
+async function sendTextWithLinkedWelcome(channel, clientId, text, options = {}) {
+  const result = await sendTextDirect(channel, clientId, text);
+  if (isWelcomeText(text) && !options.skipWelcomeMedia) {
+    await sendBemVindos(channel, clientId);
+  }
+  return result;
 }
 
 async function sendImageDirect(channel, clientId, filePath, caption = '') {
@@ -97,14 +110,14 @@ function installMessageExperience(channel) {
   if (channel.__rawSendText) {
     channel.sendText = async (clientId, text, options = {}) => {
       if (isGroupedResponse() || options.noTyping) {
-        return sendTextDirect(channel, clientId, text);
+        return sendTextWithLinkedWelcome(channel, clientId, text, options);
       }
 
       const chatId = normalizeChatId(clientId);
       const started = env.enableTyping ? await startTypingCompat(channel.client, chatId) : false;
       try {
         if (started) await wait(typingDuration(text, options));
-        return await sendTextDirect(channel, clientId, text);
+        return await sendTextWithLinkedWelcome(channel, clientId, text, options);
       } finally {
         if (started) await stopTypingCompat(channel.client, chatId);
       }
@@ -155,4 +168,5 @@ module.exports = {
   stopTypingCompat,
   typingDuration,
   isGroupedResponse,
+  isWelcomeText,
 };
