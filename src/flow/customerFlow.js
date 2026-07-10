@@ -1,467 +1,406 @@
 'use strict';
 
 const { messages } = require('../core/messages');
-const { sendMenu } = require('../core/menuCatalog');
 const {
-  sendMostruarioLetreiro,
-  sendTabelaCores,
-  sendTabelaEspessura,
-  sendTabelaProfundidade,
+  sendMenu, buildColorTypeMenu, buildSolidColorMenu, buildMirrorColorMenu,
+  buildDepthMenu, buildDeliveryMenu,
+} = require('../core/menuCatalog');
+const {
+  sendMostruarioLetreiro, sendTabelaCores, sendTabelaEspessura, sendTabelaProfundidade,
 } = require('../core/mostruario');
 const { replaceServiceLabel } = require('../core/serviceLabels');
 const { detectInitialContext } = require('../core/intent');
-const { parseMeasure, splitColors, normalizeText, extractName, extractPhone } = require('../core/parsers');
+const { parseMedidasFromText, normalizeText, extractName, extractPhone } = require('../core/parsers');
+const {
+  buildBaseThicknessMessage, buildBaseThicknessLabel,
+  buildBaseThicknessSnapshot, buildExtraThicknessMessage,
+} = require('../domain/acrilicoThickness');
 const Store = require('../services/leadStore');
 const { env } = require('../config/env');
 
-function optionNumber(text) {
-  const raw = normalizeText(text);
-  const m = raw.match(/\b([1-5])\b/);
-  if (m) return Number(m[1]);
-  if (/sim|letreiro|acrilico|acrílico/.test(raw)) return 1;
-  if (/nao|não|outro/.test(raw)) return 2;
+const SOLID = new Map([
+  ['cor_preto', 'Preto'], ['cor_branco', 'Branco'], ['cor_cinza', 'Cinza'],
+  ['cor_azul', 'Azul'], ['cor_verde', 'Verde'], ['cor_vermelho', 'Vermelho'],
+  ['cor_amarelo', 'Amarelo'],
+]);
+const MIRROR = new Map([
+  ['cor_dourado', 'Dourado'], ['cor_prata', 'Prata'], ['cor_rose', 'Rosê'],
+  ['cor_esp_vermelho', 'Vermelho espelhado'], ['cor_esp_verde', 'Verde espelhado'],
+  ['cor_esp_azul', 'Azul espelhado'], ['cor_esp_roxo', 'Roxo espelhado'],
+]);
+
+const clean = (v) => String(v || '').trim();
+const first = (v) => clean(v).split(/\r?\n/).map((x) => x.trim()).find(Boolean) || '';
+const norm = (v) => normalizeText(first(v));
+const isBack = (v, ...ids) => norm(v) === 'voltar' || ids.map(normalizeText).includes(norm(v));
+
+function serviceOf(v) {
+  const x = norm(v);
+  if (['serv_letreiro', '1', 'letreiro', 'letreiro de acrilico'].includes(x) || /\bletreiro\b/.test(x)) return 'letreiro';
+  if (['serv_plotagem', '2', 'plotagem'].includes(x)) return 'plotagem';
+  if (['serv_outros', '3', 'outro', 'outros'].includes(x)) return 'outros';
+  return null;
+}
+function acrylicOf(v) {
+  const x = norm(v);
+  if (x === 'acr_colorido' || /colorido|cor solida|cores solidas/.test(x)) return 'colorido';
+  if (x === 'acr_pintado' || /personalizado|pantone|pintado/.test(x)) return 'pintado';
+  return null;
+}
+function quantityOf(v) {
+  const x = norm(v);
+  const m = x.match(/^corq_([1-5])$/) || x.match(/^([1-5])\s*cor(?:es)?$/) || x.match(/^([1-5])$/);
+  return m ? Number(m[1]) : null;
+}
+function colorTypeOf(v) {
+  const x = norm(v);
+  if (['cor_tipo_solida', 'cor solida', 'solida'].includes(x)) return 'solida';
+  if (['cor_tipo_espelhado', 'cor espelhada', 'espelhada', 'espelhado'].includes(x)) return 'espelhada';
+  return null;
+}
+function colorOf(v, type) {
+  const x = norm(v);
+  for (const [id, label] of (type === 'espelhada' ? MIRROR : SOLID)) {
+    if (x === normalizeText(id) || x === normalizeText(label)) return label;
+  }
+  return null;
+}
+function personalizedThicknessOf(v) {
+  const x = norm(v);
+  if (['esp_4', '4mm', 'quero 4mm'].includes(x)) return '4mm';
+  if (['esp_6', '6mm', 'quero 6mm'].includes(x)) return '6mm';
+  if (['esp_10', '10mm', 'quero 10mm'].includes(x)) return '10mm';
+  if (x === 'esp_nao_sei' || /ainda nao sei|definir depois/.test(x)) return 'a definir';
+  return null;
+}
+function depthOf(v) {
+  const x = norm(v);
+  if (x === 'esp3_keep' || /manter|seguir com|sem acrescimo/.test(x)) return ['keep', '0mm'];
+  if (x === 'esp3_add3' || /\+?\s*3mm|adicionar 3|acrescentar 3/.test(x)) return ['extra', '3mm'];
+  if (x === 'esp3_add6' || /\+?\s*6mm|adicionar 6|acrescentar 6/.test(x)) return ['extra', '6mm'];
+  if (x === 'esp3_add10' || /\+?\s*10mm|adicionar 10|acrescentar 10/.test(x)) return ['extra', '10mm'];
+  if (x === 'esp3_align' || /ainda nao sei|definir depois/.test(x)) return ['align', null];
+  return null;
+}
+function artOf(v) {
+  const x = norm(v);
+  if (x === 'art_arquivo' || /tenho arquivo|pdf|ai|eps|svg/.test(x)) return 'arquivo';
+  if (x === 'art_imagem' || /enviar imagem|imagem de referencia/.test(x)) return 'imagem';
+  if (x === 'art_ideia' || /descrever ideia|descrever/.test(x)) return 'descrever';
+  return null;
+}
+function deliveryOf(v) {
+  const x = norm(v);
+  if (x === 'envio_correios' || /correio|transportadora/.test(x)) return 'Correios';
+  if (x === 'envio_instalacao' || /instala/.test(x)) return 'Instalação';
+  if (x === 'envio_retirada_cliente' || /retir/.test(x)) return 'Retirada';
   return null;
 }
 
-function serviceFromText(text) {
-  const n = optionNumber(text);
-  const raw = normalizeText(text);
-  if (n === 1 || /letreiro|acrilico|acrílico/.test(raw)) return 'letreiro';
-  if (n === 2 || /plotagem|plotar/.test(raw)) return 'plotagem';
-  if (n === 3 || /outro|outros|demais|adesivo|banner|placa|papel/.test(raw)) return 'outros';
-  return null;
+function isGrandeBH(city) {
+  const x = normalizeText(city);
+  if (!x) return false;
+  if (/\bbh\b/.test(x) || x.includes('belo horizonte')) return true;
+  return ['contagem', 'betim', 'nova lima', 'ribeirao das neves', 'santa luzia',
+    'vespasiano', 'ibirite', 'sabara', 'lagoa santa', 'raposos', 'brumadinho',
+    'sarzedo', 'mateus leme', 'pedro leopoldo', 'confins', 'sao jose da lapa']
+    .some((name) => x.includes(name));
 }
-
-function deliveryFromText(text) {
-  const n = optionNumber(text);
-  const raw = normalizeText(text);
-  if (n === 1 || /correio|transport/.test(raw)) return 'Correios';
-  if (n === 2 || /instala/.test(raw)) return 'Instalação';
-  if (n === 3 || /retir/.test(raw)) return 'Retirada';
-  return null;
+function sanitizeObservation(v) {
+  return String(v || '').replace(/[ \t]{2,}/g, ' ').replace(/\n{3,}/g, '\n\n').trim().slice(0, 1200);
 }
-
-function acrylicTypeFromText(text) {
-  const n = optionNumber(text);
-  const raw = normalizeText(text);
-  if (n === 1 || /color|solida|sólida/.test(raw)) return 'Colorido';
-  if (n === 2 || /pantone|personal/.test(raw)) return 'Personalizado';
-  return null;
+function mediaSummary(items = []) {
+  const out = [];
+  for (const item of items) {
+    const raw = item?.raw || item || {};
+    const type = String(raw.type || raw.mimetype || raw.mediaType || '').toLowerCase();
+    const filename = raw.filename || raw.fileName || raw.document?.filename || null;
+    const caption = raw.caption || raw.body || null;
+    if (/image/.test(type)) out.push({ type: 'image', filename, caption });
+    else if (/document|pdf|application/.test(type) || filename) out.push({ type: 'document', filename: filename || 'arquivo', caption });
+    else if (/video/.test(type)) out.push({ type: 'video', filename, caption });
+  }
+  return out.slice(0, 10);
 }
-
-function depthFromText(text) {
-  const n = optionNumber(text);
-  const raw = normalizeText(text);
-  if (n === 1) return '3mm';
-  if (n === 2) return '+3mm';
-  if (n === 3) return '+6mm';
-  if (n === 4) return '+10mm';
-  if (/seguir|sem acrescimo|sem acréscimo|3mm/.test(raw)) return '3mm';
-  if (/\+\s*3/.test(raw)) return '+3mm';
-  if (/\+\s*6/.test(raw)) return '+6mm';
-  if (/\+\s*10/.test(raw)) return '+10mm';
-  return null;
+function formatMeasure(d) {
+  const m = d.medida || {};
+  if (d.tamanhoModo === 'completo') return `${m.largura} x ${m.altura} cm`;
+  if (d.tamanhoModo === 'largura') return `${m.largura} cm de largura; altura proporcional à arte`;
+  if (d.tamanhoModo === 'altura') return `${m.altura} cm de altura; largura proporcional à arte`;
+  return d.tamanhoDescricao || 'Não definida';
 }
-
-function personalizedThicknessFromText(text) {
-  const n = optionNumber(text);
-  const raw = normalizeText(text);
-  if (n === 1 || /4/.test(raw)) return '4mm';
-  if (n === 2 || /6/.test(raw)) return '6mm';
-  if (n === 3 || /10/.test(raw)) return '10mm';
-  return null;
-}
-
-function artFromText(text) {
-  const n = optionNumber(text);
-  const raw = normalizeText(text);
-  if (n === 1 || /pdf|ai|eps|svg|arquivo/.test(raw)) return 'Tenho arquivo';
-  if (n === 2 || /imagem|referencia|referência|print/.test(raw)) return 'Imagem de referência';
-  if (n === 3 || /ideia|descrever|descrev/.test(raw)) return 'Descrever ideia';
-  if (String(text || '').trim().length > 2) return String(text).trim();
-  return null;
-}
-
-function buildLead(session, reason) {
-  return {
-    clientId: session.id,
-    reason,
-    etapa: session.etapa,
-    dados: session.dados,
-  };
-}
-
-function buildBusinessNote(session, reason = 'lead') {
+function buildBusinessNote(session, reason = 'atendimento_concluido') {
   const d = session.dados || {};
-  const demanda = d.demanda || {};
+  const q = d.demanda || {};
+  const media = d.arteMedias?.length ? d.arteMedias.map((m) => `${m.type}${m.filename ? `: ${m.filename}` : ''}`).join(', ') : null;
   return [
-    reason === 'letreiro_aguardando_orcamento'
-      ? '🟢 Orçamento letreiro - Bot WPPConnect'
-      : `Atendimento ${d.flow || 'cliente'} - Bot WPPConnect`,
-    `Motivo: ${reason}`,
-    d.origem ? `Origem: ${d.origem}` : null,
-    d.nome ? `Nome: ${d.nome}` : null,
-    d.telefone ? `Telefone: ${d.telefone}` : null,
-    d.flow ? `Serviço: ${d.flow}` : null,
-    demanda.descricao ? `Demanda: ${demanda.descricao}` : null,
-    demanda.medida ? `Medida: ${demanda.medida}` : null,
-    demanda.local ? `Local/aplicação: ${demanda.local}` : null,
-    demanda.referencia ? `Referência/detalhes: ${demanda.referencia}` : null,
-    demanda.prazo ? `Prazo: ${demanda.prazo}` : null,
-    d.tipoAcrilico ? `Tipo: ${d.tipoAcrilico}` : null,
-    d.pantoneDescricao ? `Pantone/cor personalizada: ${d.pantoneDescricao}` : null,
-    d.coresSelecionadas?.length ? `Cores: ${d.coresSelecionadas.join(', ')}` : null,
-    d.corBasicaQtd ? `Qtd. cores: ${d.corBasicaQtd}` : null,
-    d.espessura ? `Espessura/acréscimo: ${d.espessura}` : null,
-    d.arte ? `Arte: ${d.arte}` : null,
-    d.medida?.descricao ? `Medida letreiro: ${d.medida.descricao}` : null,
-    d.cidade ? `Cidade: ${d.cidade}` : null,
-    d.envio ? `Envio: ${d.envio}` : null,
-    d.endereco ? `Endereço: ${d.endereco}` : null,
+    '🟢 Atendimento coletado pelo Bot WPPConnect', `Status: ${reason}`,
+    `Atualizado em: ${new Date().toLocaleString('pt-BR')}`,
+    d.origem && `Origem: ${d.origem}`, d.nome && `Nome: ${d.nome}`,
+    d.telefone && `Telefone: ${d.telefone}`, d.flow && `Serviço: ${d.flow}`,
+    q.descricao && `Demanda: ${q.descricao}`, q.medida && `Medida informada: ${q.medida}`,
+    q.local && `Local/aplicação: ${q.local}`, q.referencia && `Referência/detalhes: ${q.referencia}`,
+    q.prazo && `Prazo: ${q.prazo}`,
+    d.tipoAcrilico && `Tipo de acrílico: ${d.tipoAcrilico === 'pintado' ? 'Personalizado/Pantone' : 'Colorido'}`,
+    d.pantoneDescricao && `Pantone/cor personalizada: ${d.pantoneDescricao}`,
+    d.corBasicaQtd && `Quantidade de cores: ${d.corBasicaQtd}`,
+    d.coresSelecionadas?.length && `Cores: ${d.coresSelecionadas.join(', ')}`,
+    d.espessuraBaseDescricao && `Espessura base: ${d.espessuraBaseDescricao.replace(/^🔎\s*Observação:\s*/i, '')}`,
+    d.acrescimoAcrilico && d.acrescimoAcrilico !== '0mm' && `Acrílico cristal extra: +${d.acrescimoAcrilico}`,
+    d.acrescimoAcrilicoAAlinhar && 'Acréscimo de espessura: a definir',
+    d.tipoAcrilico === 'pintado' && d.espessura && `Espessura: ${d.espessura}`,
+    d.medida && `Medida do letreiro: ${formatMeasure(d)}`,
+    d.arteModo && `Arte: ${d.arteModo}`, d.arteTexto && `Descrição da arte: ${d.arteTexto}`,
+    media && `Arquivos/referências recebidos: ${media}`, d.cidade && `Cidade: ${d.cidade}`,
+    d.envio && `Forma de recebimento: ${d.envio}`, d.endereco && `Endereço: ${d.endereco}`,
+    d.observacaoPedido && `Observação do cliente: ${d.observacaoPedido}`,
   ].filter(Boolean).join('\n');
 }
-
-async function maybeSetBusinessNote(channel, clientId, session, reason = 'lead') {
-  if (!env.enableContactNotes || !channel?.setContactNote) return;
-  await channel.setContactNote(clientId, buildBusinessNote(session, reason)).catch(() => null);
-}
-
-async function markAwaitingQuote(channel, clientId, session) {
-  await maybeSetBusinessNote(channel, clientId, session, 'letreiro_aguardando_orcamento');
-  await replaceServiceLabel(channel, clientId, 'letreiro').catch(() => null);
-}
-
-async function markSellerHandoff(channel, clientId, session, service, reason) {
+async function finish(channel, clientId, session, reason) {
   session.completed = true;
+  session.etapa = 'concluido';
   session.dados.botDone = true;
-  session.dados.pausedBySeller = true;
-  session.etapa = `aguardando_vendedor_${service}`;
+  session.dados.completedAt = new Date().toISOString();
   Store.saveSession(session);
-  const lead = Store.appendLead(buildLead(session, reason));
-  await replaceServiceLabel(channel, clientId, service).catch(() => null);
-  await maybeSetBusinessNote(channel, clientId, session, reason);
-  await channel.sendText(clientId, messages.handoffSeller);
-  if (channel?.markUnread) await channel.markUnread(clientId).catch(() => null);
-  return { ...session, lead };
-}
-
-async function askTipoAcrilico(channel, clientId) {
-  await sendMenu(channel, clientId, 'tipoAcrilico');
-}
-
-async function askService(channel, clientId) {
-  await sendMenu(channel, clientId, 'servicos');
-}
-
-async function startLetteringFlow(channel, clientId, session) {
-  session.dados.flow = 'letreiro';
-  session.etapa = 'tipo_acrilico';
-  Store.saveSession(session);
-  await replaceServiceLabel(channel, clientId, 'letreiro').catch(() => null);
-  await sendMostruarioLetreiro(channel, clientId);
-  await askTipoAcrilico(channel, clientId);
-  return session;
-}
-
-async function startPlotagemFlow(channel, clientId, session) {
-  session.dados.flow = 'plotagem';
-  session.dados.demanda = session.dados.demanda || {};
-  session.etapa = 'plotagem_descricao';
-  Store.saveSession(session);
-  await replaceServiceLabel(channel, clientId, 'plotagem').catch(() => null);
-  await channel.sendText(clientId, messages.plotagem);
-  await channel.sendText(clientId, messages.askPlotagemDescricao);
-  return session;
-}
-
-async function startOtherFlow(channel, clientId, session) {
-  session.dados.flow = 'outros';
-  session.dados.demanda = session.dados.demanda || {};
-  session.etapa = 'outros_descricao';
-  Store.saveSession(session);
-  await replaceServiceLabel(channel, clientId, 'outros').catch(() => null);
-  await channel.sendText(clientId, messages.otherService);
-  await channel.sendText(clientId, messages.askOtherDescricao);
-  return session;
-}
-
-async function processCustomerMessage({ clientId, text, channel }) {
-  const session = Store.getSession(clientId);
-  const input = String(text || '').trim();
-  if (!session || !input) return session;
-
-  if (session.dados?.botDone || session.dados?.pausedBySeller) {
-    return session;
+  Store.appendLead({ clientId: session.id, reason, etapa: session.etapa, dados: session.dados });
+  await replaceServiceLabel(channel, clientId, session.dados.flow || 'outros').catch(() => null);
+  if (env.enableContactNotes && channel?.setContactNote) {
+    const ok = await channel.setContactNote(clientId, buildBusinessNote(session, reason)).catch(() => false);
+    session.dados.noteSaved = ok !== false;
+    session.dados.noteUpdatedAt = new Date().toISOString();
+    Store.saveSession(session);
   }
+  await channel.sendText(clientId, messages.completedContactNote);
+  return session;
+}
 
-  if (env.enableTestCommands && /^\/resetarsys$/i.test(input)) {
-    const result = Store.resetSystem();
-    await channel.sendText(
-      clientId,
-      `Sistema resetado para teste.\n\nSessões apagadas: ${result.previousSessionCount}\nLeads apagados: ${result.previousLeadCount}\n\nMe envie uma nova mensagem para começar como primeiro contato.`
-    );
+async function startMeasure(channel, id, s) {
+  s.dados.medida = null; s.dados.tamanhoModo = null; s.dados.tamanhoDescricao = null;
+  s.etapa = 'tamanho'; Store.saveSession(s); await channel.sendText(id, messages.askMeasure);
+}
+async function toThickness(channel, id, s) {
+  if (s.dados.tipoAcrilico === 'colorido') {
+    s.etapa = 'espessura_extra_3mm'; Store.saveSession(s);
+    await sendTabelaProfundidade(channel, id);
+    await sendMenu(channel, id, buildDepthMenu(s.dados.coresSelecionadas || []));
+  } else {
+    s.etapa = 'espessura_personalizada'; Store.saveSession(s);
+    await sendTabelaEspessura(channel, id); await sendMenu(channel, id, 'espessuraPersonalizada');
+  }
+}
+async function startArt(channel, id, s) { s.etapa = 'arte_menu'; Store.saveSession(s); await sendMenu(channel, id, 'arte'); }
+async function startCity(channel, id, s) { s.etapa = 'cidade'; Store.saveSession(s); await channel.sendText(id, messages.askCity); }
+async function startDelivery(channel, id, s) {
+  s.etapa = 'envio'; Store.saveSession(s);
+  await channel.sendText(id, 'Qual a melhor forma pra te enviarmos seu pedido?');
+  await sendMenu(channel, id, buildDeliveryMenu(isGrandeBH(s.dados.cidade)));
+}
+async function askObservation(channel, id, s) {
+  s.etapa = 'observacao_pedido_menu'; Store.saveSession(s);
+  await channel.sendText(id, messages.askObservation); await sendMenu(channel, id, 'observacao');
+}
+async function finishColor(channel, id, s, color) {
+  const d = s.dados;
+  const total = Math.max(1, Math.min(5, Number(d.corBasicaQtd || 1)));
+  if (!Array.isArray(d.coresSelecionadas)) d.coresSelecionadas = [];
+  if (d.coresSelecionadas.length >= total) d.coresSelecionadas = [];
+  d.coresSelecionadas.push(color);
+  const count = d.coresSelecionadas.length;
+  d.corUnica = total === 1 ? color : null;
+  if (count < total) {
+    d.corBasicaIndex = count + 1; s.etapa = 'cor_basica_tipo'; Store.saveSession(s);
+    await channel.sendText(id, `Cor ${count} anotada: ${color}. Agora selecione a próxima cor.`);
+    await sendMenu(channel, id, buildColorTypeMenu(count + 1, total));
+    return s;
+  }
+  d.coresSelecionadas = d.coresSelecionadas.slice(0, total);
+  d.corBasicaIndex = total;
+  d.espessuraBaseCores = buildBaseThicknessSnapshot(d.coresSelecionadas);
+  d.espessuraBaseDescricao = buildBaseThicknessMessage(d.coresSelecionadas);
+  d.espessuraBaseLabel = buildBaseThicknessLabel(d.coresSelecionadas);
+  d.espessura = d.espessuraBaseLabel; d.acrescimoAcrilico = null; d.acrescimoAcrilicoAAlinhar = false;
+  Store.saveSession(s);
+  await channel.sendText(id, total === 1 ? `Cor anotada: ${color}.` : `Cores anotadas: ${d.coresSelecionadas.join(', ')}.`);
+  await channel.sendText(id, d.espessuraBaseDescricao);
+  await startMeasure(channel, id, s);
+  return s;
+}
+
+async function processCustomerMessage({ clientId, text, channel, messages: inbound = [] }) {
+  const s = Store.getSession(clientId);
+  const input = clean(text);
+  if (!s || !input) return s;
+
+  if (env.enableTestCommands && /^\/resetarsys$/i.test(first(input))) {
+    const r = Store.resetSystem();
+    await channel.sendText(clientId, `Sistema resetado para teste.\n\nSessões apagadas: ${r.previousSessionCount}\nLeads apagados: ${r.previousLeadCount}\n\nMe envie uma nova mensagem para começar como primeiro contato.`);
     return Store.resetSession(clientId);
   }
-
-  const d = session.dados;
-  const foundName = extractName(input);
-  const foundPhone = extractPhone(input);
-  if (foundName && !d.nome) d.nome = foundName;
-  if (foundPhone && !d.telefone) d.telefone = foundPhone;
-
-  if (env.enableTestCommands && /^\/(reset|reiniciar)$/i.test(input)) {
+  if (env.enableTestCommands && /^\/(reset|reiniciar)$/i.test(first(input))) {
     const fresh = Store.resetSession(clientId);
     await channel.sendText(clientId, 'Atendimento reiniciado para teste. Envie uma nova mensagem para começar.');
     return fresh;
   }
 
-  if (session.etapa === 'inicio') {
+  const d = s.dados || (s.dados = {});
+  const foundName = extractName(input), foundPhone = extractPhone(input);
+  if (foundName && !d.nome) d.nome = foundName;
+  if (foundPhone && !d.telefone) d.telefone = foundPhone;
+  if (d.botDone || s.completed) {
+    await channel.sendText(clientId, 'Seu atendimento já foi registrado na sua ficha de contato. Para começar novamente, use */reset* durante os testes.');
+    return s;
+  }
+
+  if (s.etapa === 'inicio') {
     const initial = detectInitialContext(input);
-    d.initial = initial;
-    d.origem = initial.isLanding ? 'landing/site' : 'whatsapp';
+    d.initial = initial; d.origem = initial.isLanding ? 'landing/site' : 'whatsapp';
     if (initial.name && !d.nome) d.nome = initial.name;
     if (initial.phone && !d.telefone) d.telefone = initial.phone;
-
     await channel.sendText(clientId, messages.welcome(d.nome));
-    session.etapa = 'escolher_servico';
-    Store.saveSession(session);
-    await askService(channel, clientId);
-    return session;
+    s.etapa = 'escolher_servico'; Store.saveSession(s); await sendMenu(channel, clientId, 'servicos'); return s;
   }
 
-  if (session.etapa === 'escolher_servico') {
-    const service = serviceFromText(input);
+  if (s.etapa === 'escolher_servico') {
+    const service = serviceOf(input);
+    if (!service) { await sendMenu(channel, clientId, 'servicos'); return s; }
+    d.flow = service; d.demanda = {};
+    await replaceServiceLabel(channel, clientId, service).catch(() => null);
     if (service === 'letreiro') {
-      return startLetteringFlow(channel, clientId, session);
+      s.etapa = 'tipo_acrilico'; Store.saveSession(s);
+      await sendMostruarioLetreiro(channel, clientId); await sendMenu(channel, clientId, 'tipoAcrilico'); return s;
     }
-    if (service === 'plotagem') {
-      return startPlotagemFlow(channel, clientId, session);
+    s.etapa = service === 'plotagem' ? 'plotagem_descricao' : 'outros_descricao'; Store.saveSession(s);
+    await channel.sendText(clientId, service === 'plotagem' ? messages.plotagem : messages.otherService);
+    await channel.sendText(clientId, service === 'plotagem' ? messages.askPlotagemDescricao : messages.askOtherDescricao);
+    return s;
+  }
+
+  if (s.etapa === 'plotagem_descricao') { d.demanda.descricao = input; s.etapa = 'plotagem_medida'; Store.saveSession(s); await channel.sendText(clientId, messages.askPlotagemMedida); return s; }
+  if (s.etapa === 'plotagem_medida') { d.demanda.medida = input; s.etapa = 'plotagem_local'; Store.saveSession(s); await channel.sendText(clientId, messages.askPlotagemLocal); return s; }
+  if (s.etapa === 'plotagem_local') { d.demanda.local = input; s.etapa = 'plotagem_prazo'; Store.saveSession(s); await channel.sendText(clientId, messages.askPlotagemPrazo); return s; }
+  if (s.etapa === 'plotagem_prazo') { d.demanda.prazo = input; return finish(channel, clientId, s, 'plotagem_coleta_completa'); }
+  if (s.etapa === 'outros_descricao') { d.demanda.descricao = input; s.etapa = 'outros_referencia'; Store.saveSession(s); await channel.sendText(clientId, messages.askOtherReferencia); return s; }
+  if (s.etapa === 'outros_referencia') { d.demanda.referencia = input; s.etapa = 'outros_prazo'; Store.saveSession(s); await channel.sendText(clientId, messages.askOtherPrazo); return s; }
+  if (s.etapa === 'outros_prazo') { d.demanda.prazo = input; return finish(channel, clientId, s, 'outros_coleta_completa'); }
+
+  if (s.etapa === 'tipo_acrilico') {
+    const type = acrylicOf(input);
+    if (!type) { await sendMenu(channel, clientId, 'tipoAcrilico'); return s; }
+    Object.assign(d, { tipoAcrilico: type, coresSelecionadas: [], corUnica: null, corBasicaQtd: null,
+      corBasicaIndex: null, acrescimoAcrilico: null, acrescimoAcrilicoAAlinhar: false,
+      espessuraBaseCores: [], espessuraBaseDescricao: null, espessuraBaseLabel: null });
+    if (type === 'pintado') {
+      d.tipoCor = 'pantone'; s.etapa = 'pantone'; Store.saveSession(s);
+      await channel.sendText(clientId, messages.askPantone); return s;
     }
-    if (service === 'outros') {
-      return startOtherFlow(channel, clientId, session);
-    }
-    await askService(channel, clientId);
-    return session;
+    d.tipoCor = 'prontas'; s.etapa = 'cor_basica_qtd'; Store.saveSession(s);
+    await sendTabelaCores(channel, clientId); await sendMenu(channel, clientId, 'quantidadeCores'); return s;
   }
 
-  if (session.etapa === 'plotagem_descricao') {
-    d.demanda = d.demanda || {};
-    d.demanda.descricao = input;
-    session.etapa = 'plotagem_medida';
-    Store.saveSession(session);
-    await channel.sendText(clientId, messages.askPlotagemMedida);
-    return session;
+  if (s.etapa === 'pantone') {
+    d.pantoneDescricao = input; d.pantoneMedias = mediaSummary(inbound); Store.saveSession(s);
+    await startMeasure(channel, clientId, s); return s;
+  }
+  if (s.etapa === 'cor_basica_qtd') {
+    if (isBack(input, 'corq_voltar')) { s.etapa = 'tipo_acrilico'; d.tipoAcrilico = null; d.tipoCor = null; Store.saveSession(s); await sendMenu(channel, clientId, 'tipoAcrilico'); return s; }
+    const q = quantityOf(input);
+    if (!q) { await sendMenu(channel, clientId, 'quantidadeCores'); return s; }
+    d.corBasicaQtd = q; d.corBasicaIndex = 1; d.coresSelecionadas = []; d.corUnica = null;
+    s.etapa = 'cor_basica_tipo'; Store.saveSession(s); await sendMenu(channel, clientId, buildColorTypeMenu(1, q)); return s;
+  }
+  if (s.etapa === 'cor_basica_tipo') {
+    if (isBack(input, 'cor_tipo_voltar')) { s.etapa = 'cor_basica_qtd'; Store.saveSession(s); await sendMenu(channel, clientId, 'quantidadeCores'); return s; }
+    const type = colorTypeOf(input), total = Math.max(1, Number(d.corBasicaQtd || 1));
+    const index = Math.min(total, (d.coresSelecionadas?.length || 0) + 1);
+    if (type === 'solida') { s.etapa = 'cor_basica_select_solida'; d.corBasicaIndex = index; Store.saveSession(s); await sendMenu(channel, clientId, buildSolidColorMenu(index, total)); return s; }
+    if (type === 'espelhada') { s.etapa = 'cor_basica_select_espelhado'; d.corBasicaIndex = index; Store.saveSession(s); await sendMenu(channel, clientId, buildMirrorColorMenu(index, total)); return s; }
+    await sendMenu(channel, clientId, buildColorTypeMenu(index, total)); return s;
+  }
+  if (s.etapa === 'cor_basica_select_solida' || s.etapa === 'cor_basica_select_espelhado') {
+    const type = s.etapa.endsWith('espelhado') ? 'espelhada' : 'solida';
+    const total = Math.max(1, Number(d.corBasicaQtd || 1)), index = Math.min(total, (d.coresSelecionadas?.length || 0) + 1);
+    if (isBack(input, 'cor_voltar')) { s.etapa = 'cor_basica_tipo'; Store.saveSession(s); await sendMenu(channel, clientId, buildColorTypeMenu(index, total)); return s; }
+    const color = colorOf(input, type);
+    if (!color) { await sendMenu(channel, clientId, type === 'espelhada' ? buildMirrorColorMenu(index, total) : buildSolidColorMenu(index, total)); return s; }
+    return finishColor(channel, clientId, s, color);
   }
 
-  if (session.etapa === 'plotagem_medida') {
-    d.demanda = d.demanda || {};
-    d.demanda.medida = input;
-    session.etapa = 'plotagem_local';
-    Store.saveSession(session);
-    await channel.sendText(clientId, messages.askPlotagemLocal);
-    return session;
+  if (s.etapa === 'tamanho') {
+    const p = parseMedidasFromText(input, { largura: null, altura: null });
+    if (p.modo === 'pedir_descricao') { await channel.sendText(clientId, messages.askMeasureDescription); return s; }
+    if (p.modo === 'invalido') { await channel.sendText(clientId, messages.invalidMeasure); return s; }
+    d.medida = { largura: p.largura ?? null, altura: p.altura ?? null }; d.tamanhoModo = p.modo; d.tamanhoDescricao = p.descricao || null; Store.saveSession(s);
+    if (p.modo === 'descricao') await channel.sendText(clientId, 'Beleza! Vou registrar essa descrição como referência de proporção para a arte.');
+    else if (p.modo === 'altura') await channel.sendText(clientId, `Entendi ${p.altura} cm de altura. A outra medida será ajustada proporcionalmente à arte.`);
+    else if (p.modo === 'largura') await channel.sendText(clientId, `Entendi ${p.largura} cm de largura. A outra medida será ajustada proporcionalmente à arte.`);
+    else await channel.sendText(clientId, `Medida anotada: ${p.largura} x ${p.altura} cm.`);
+    await toThickness(channel, clientId, s); return s;
+  }
+  if (s.etapa === 'espessura_extra_3mm') {
+    if (isBack(input, 'esp3_back')) { d.acrescimoAcrilico = null; await startMeasure(channel, clientId, s); return s; }
+    const depth = depthOf(input);
+    if (!depth) { await sendMenu(channel, clientId, buildDepthMenu(d.coresSelecionadas || [])); return s; }
+    const [kind, extra] = depth;
+    if (kind === 'keep') { d.acrescimoAcrilico = '0mm'; d.acrescimoAcrilicoAAlinhar = false; }
+    else if (kind === 'extra') { d.acrescimoAcrilico = extra; d.acrescimoAcrilicoAAlinhar = false; await channel.sendText(clientId, buildExtraThicknessMessage(d.coresSelecionadas || [], extra)); }
+    else { d.acrescimoAcrilico = null; d.acrescimoAcrilicoAAlinhar = true; await channel.sendText(clientId, 'Certo! Registrei o acréscimo de espessura como *a definir*.'); }
+    d.espessura = d.espessuraBaseLabel || buildBaseThicknessLabel(d.coresSelecionadas || []); Store.saveSession(s); await startArt(channel, clientId, s); return s;
+  }
+  if (s.etapa === 'espessura_personalizada') {
+    if (isBack(input, 'esp_voltar')) { await startMeasure(channel, clientId, s); return s; }
+    const t = personalizedThicknessOf(input);
+    if (!t) { await sendMenu(channel, clientId, 'espessuraPersonalizada'); return s; }
+    d.espessura = t; d.espessuraAAlinhar = t === 'a definir'; Store.saveSession(s);
+    await channel.sendText(clientId, t === 'a definir' ? 'Certo! Registrei a espessura como *a definir*.' : `Espessura anotada: ${t}.`);
+    await startArt(channel, clientId, s); return s;
   }
 
-  if (session.etapa === 'plotagem_local') {
-    d.demanda = d.demanda || {};
-    d.demanda.local = input;
-    session.etapa = 'plotagem_prazo';
-    Store.saveSession(session);
-    await channel.sendText(clientId, messages.askPlotagemPrazo);
-    return session;
+  if (s.etapa === 'arte_menu') {
+    if (isBack(input, 'art_voltar')) { await toThickness(channel, clientId, s); return s; }
+    const mode = artOf(input);
+    if (!mode) { await sendMenu(channel, clientId, 'arte'); return s; }
+    d.arteModo = mode; d.arteTexto = null; d.arteMedias = []; s.etapa = 'arte_coleta'; Store.saveSession(s);
+    await channel.sendText(clientId, mode === 'arquivo' ? messages.askArtFile : mode === 'imagem' ? messages.askArtImage : messages.askArtDescription);
+    await channel.sendText(clientId, messages.askArtFree); return s;
   }
-
-  if (session.etapa === 'plotagem_prazo') {
-    d.demanda = d.demanda || {};
-    d.demanda.prazo = input;
-    return markSellerHandoff(channel, clientId, session, 'plotagem', 'plotagem_pre_triagem_completa');
+  if (s.etapa === 'arte_coleta') {
+    const medias = mediaSummary(inbound);
+    const description = input.split(/\r?\n/).map((x) => x.trim()).filter(Boolean)
+      .filter((x) => !/^\[(imagem|arquivo|documento|video) enviado/i.test(x)).join(' | ').trim();
+    if (!description && !medias.length) { await channel.sendText(clientId, messages.askArtFree); return s; }
+    d.arteTexto = description || null; d.arteMedias = medias; d.arte = { modo: d.arteModo, texto: d.arteTexto, medias }; Store.saveSession(s);
+    await channel.sendText(clientId, 'Arte e referências anotadas!'); await startCity(channel, clientId, s); return s;
   }
-
-  if (session.etapa === 'outros_descricao') {
-    d.demanda = d.demanda || {};
-    d.demanda.descricao = input;
-    session.etapa = 'outros_referencia';
-    Store.saveSession(session);
-    await channel.sendText(clientId, messages.askOtherReferencia);
-    return session;
-  }
-
-  if (session.etapa === 'outros_referencia') {
-    d.demanda = d.demanda || {};
-    d.demanda.referencia = input;
-    session.etapa = 'outros_prazo';
-    Store.saveSession(session);
-    await channel.sendText(clientId, messages.askOtherPrazo);
-    return session;
-  }
-
-  if (session.etapa === 'outros_prazo') {
-    d.demanda = d.demanda || {};
-    d.demanda.prazo = input;
-    return markSellerHandoff(channel, clientId, session, 'outros', 'outros_pre_triagem_completa');
-  }
-
-  if (session.etapa === 'tipo_acrilico') {
-    const tipo = acrylicTypeFromText(input);
-    if (!tipo) {
-      await askTipoAcrilico(channel, clientId);
-      return session;
-    }
-    d.tipoAcrilico = tipo;
-    if (tipo === 'Personalizado') {
-      session.etapa = 'pantone';
-      Store.saveSession(session);
-      await channel.sendText(clientId, messages.askPantone);
-      await sendTabelaEspessura(channel, clientId);
-      return session;
-    }
-    session.etapa = 'qtd_cores';
-    Store.saveSession(session);
-    await sendTabelaCores(channel, clientId);
-    await sendMenu(channel, clientId, 'quantidadeCores');
-    return session;
-  }
-
-  if (session.etapa === 'pantone') {
-    d.pantoneDescricao = input;
-    session.etapa = 'espessura_personalizada';
-    Store.saveSession(session);
-    await sendMenu(channel, clientId, 'espessuraPersonalizada');
-    return session;
-  }
-
-  if (session.etapa === 'qtd_cores') {
-    const n = optionNumber(input);
-    if (!n || n < 1 || n > 5) {
-      await sendMenu(channel, clientId, 'quantidadeCores');
-      return session;
-    }
-    d.corBasicaQtd = n;
-    session.etapa = 'cores';
-    Store.saveSession(session);
-    await channel.sendText(clientId, messages.askSolidColors);
-    return session;
-  }
-
-  if (session.etapa === 'cores') {
-    const colors = splitColors(input);
-    if (!colors.length) {
-      await channel.sendText(clientId, messages.askSolidColors);
-      return session;
-    }
-    d.coresSelecionadas = colors;
-    session.etapa = 'profundidade';
-    Store.saveSession(session);
-    await channel.sendText(clientId, messages.fixed3mm);
-    await sendTabelaProfundidade(channel, clientId);
-    await sendMenu(channel, clientId, 'profundidade');
-    return session;
-  }
-
-  if (session.etapa === 'profundidade') {
-    const depth = depthFromText(input);
-    if (!depth) {
-      await sendMenu(channel, clientId, 'profundidade');
-      return session;
-    }
-    d.espessura = depth;
-    session.etapa = 'arte';
-    Store.saveSession(session);
-    await sendMenu(channel, clientId, 'arte');
-    return session;
-  }
-
-  if (session.etapa === 'espessura_personalizada') {
-    const thickness = personalizedThicknessFromText(input);
-    if (!thickness) {
-      await sendMenu(channel, clientId, 'espessuraPersonalizada');
-      return session;
-    }
-    d.espessura = thickness;
-    session.etapa = 'arte';
-    Store.saveSession(session);
-    await sendMenu(channel, clientId, 'arte');
-    return session;
-  }
-
-  if (session.etapa === 'arte') {
-    const art = artFromText(input);
-    if (!art) {
-      await sendMenu(channel, clientId, 'arte');
-      return session;
-    }
-    d.arte = art;
-    session.etapa = 'medida';
-    Store.saveSession(session);
-    await channel.sendText(clientId, messages.askArtFree);
-    await channel.sendText(clientId, messages.askMeasure);
-    return session;
-  }
-
-  if (session.etapa === 'medida') {
-    const measure = parseMeasure(input);
-    if (!measure) {
-      await channel.sendText(clientId, messages.invalidMeasure);
-      return session;
-    }
-    d.medida = measure;
-    session.etapa = 'cidade';
-    Store.saveSession(session);
-    await channel.sendText(clientId, messages.askCity);
-    return session;
-  }
-
-  if (session.etapa === 'cidade') {
-    d.cidade = input;
-    session.etapa = 'envio';
-    Store.saveSession(session);
-    await sendMenu(channel, clientId, 'envio');
-    return session;
-  }
-
-  if (session.etapa === 'envio') {
-    const delivery = deliveryFromText(input);
-    if (!delivery) {
-      await sendMenu(channel, clientId, 'envio');
-      return session;
-    }
+  if (s.etapa === 'cidade') { d.cidade = input.replace(/\s{2,}/g, ' ').replace(/\s*\/\s*/g, '/').trim(); Store.saveSession(s); await startDelivery(channel, clientId, s); return s; }
+  if (s.etapa === 'envio') {
+    if (isBack(input, 'envio_voltar')) { d.cidade = null; d.envio = null; d.endereco = null; await startCity(channel, clientId, s); return s; }
+    const delivery = deliveryOf(input);
+    if (!delivery || (delivery === 'Instalação' && !isGrandeBH(d.cidade))) { await sendMenu(channel, clientId, buildDeliveryMenu(isGrandeBH(d.cidade))); return s; }
     d.envio = delivery;
-    if (delivery === 'Retirada') {
-      session.etapa = 'lead_completo';
-      session.completed = true;
-      d.botDone = true;
-      Store.saveSession(session);
-      const lead = Store.appendLead(buildLead(session, 'letreiro_pre_atendimento_completo'));
-      await markAwaitingQuote(channel, clientId, session);
-      await channel.sendText(clientId, messages.pickupAddress);
-      await channel.sendText(clientId, messages.forwardQuote);
-      if (channel?.markUnread) await channel.markUnread(clientId).catch(() => null);
-      return { ...session, lead };
-    }
-    if (delivery === 'Instalação') {
-      await channel.sendText(clientId, messages.installationNote);
-    }
-    session.etapa = 'endereco';
-    Store.saveSession(session);
-    await channel.sendText(clientId, messages.askAddress);
-    return session;
+    if (delivery === 'Retirada') { d.endereco = null; Store.saveSession(s); await channel.sendText(clientId, messages.pickupAddress); await askObservation(channel, clientId, s); return s; }
+    s.etapa = 'endereco'; Store.saveSession(s);
+    if (delivery === 'Instalação') await channel.sendText(clientId, messages.installationNote);
+    await channel.sendText(clientId, messages.askAddress); return s;
+  }
+  if (s.etapa === 'endereco') {
+    const address = input.replace(/\s{2,}/g, ' ').trim();
+    if (!address) { await channel.sendText(clientId, messages.askAddress); return s; }
+    d.endereco = address; Store.saveSession(s); await channel.sendText(clientId, 'Endereço anotado!'); await askObservation(channel, clientId, s); return s;
+  }
+  if (s.etapa === 'observacao_pedido_menu') {
+    const x = norm(input);
+    if (x === normalizeText('OBS_PEDIDO|ADD') || /fazer observacao/.test(x)) { s.etapa = 'observacao_pedido_coleta'; Store.saveSession(s); await channel.sendText(clientId, messages.askObservationText); return s; }
+    if (x === normalizeText('OBS_PEDIDO|SKIP') || /nao preciso/.test(x)) { d.observacaoPedido = null; return finish(channel, clientId, s, 'letreiro_coleta_completa'); }
+    await sendMenu(channel, clientId, 'observacao'); return s;
+  }
+  if (s.etapa === 'observacao_pedido_coleta') {
+    d.observacaoPedido = sanitizeObservation(input) || null; Store.saveSession(s);
+    await channel.sendText(clientId, d.observacaoPedido ? 'Observação anotada!' : 'Sem problemas! Finalizei sem observação.');
+    return finish(channel, clientId, s, 'letreiro_coleta_completa');
   }
 
-  if (session.etapa === 'endereco') {
-    d.endereco = input;
-    session.etapa = 'lead_completo';
-    session.completed = true;
-    d.botDone = true;
-    Store.saveSession(session);
-    const lead = Store.appendLead(buildLead(session, 'letreiro_pre_atendimento_completo'));
-    await markAwaitingQuote(channel, clientId, session);
-    await channel.sendText(clientId, messages.forwardQuote);
-    if (channel?.markUnread) await channel.markUnread(clientId).catch(() => null);
-    return { ...session, lead };
-  }
-
-  await channel.sendText(clientId, 'Seu atendimento já foi registrado. Um vendedor poderá continuar por aqui.');
-  return session;
+  await channel.sendText(clientId, messages.fallback);
+  return s;
 }
 
-module.exports = { processCustomerMessage, buildBusinessNote };
+module.exports = { processCustomerMessage, buildBusinessNote, isGrandeBH, quantityOf, colorTypeOf, colorOf };
