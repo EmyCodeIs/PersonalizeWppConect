@@ -7,14 +7,55 @@ const { createWppChannel, createMockChannel, collectUnreadMessages } = require('
 const { isAllowedClient } = require('./core/allowedClient');
 const Identity = require('./services/contactIdentity');
 
+const BUILD_ID = 'link-only-no-pdf-2026-07-10-01';
+
 function messageKey(message) {
   const rawId = message?.id?._serialized || message?.id || message?.messageId || message?.key?.id;
   if (rawId) return String(rawId);
   return `${message?.from || message?.chatId || 'unknown'}:${message?.text || message?.body || ''}:${message?.timestamp || ''}`;
 }
 
+function blockPdfSending(channel) {
+  if (!channel) return;
+
+  if (typeof channel.sendDocument === 'function') {
+    channel.sendDocument = async () => {
+      console.warn('[BLOQUEIO PDF] tentativa de envio de documento bloqueada. O mostruário deve ser enviado apenas como link.');
+      return false;
+    };
+  }
+
+  const client = channel.client;
+  if (typeof client?.sendFile !== 'function' || client.__personalizePdfGuardInstalled) return;
+
+  const originalSendFile = client.sendFile.bind(client);
+  client.sendFile = async (...args) => {
+    const serializedArgs = args
+      .map((value) => {
+        if (typeof value === 'string') return value;
+        try {
+          return JSON.stringify(value);
+        } catch (_) {
+          return String(value || '');
+        }
+      })
+      .join(' ')
+      .toLowerCase();
+
+    if (serializedArgs.includes('.pdf') || serializedArgs.includes('mostruario')) {
+      console.warn('[BLOQUEIO PDF] client.sendFile bloqueado para PDF/mostruário.');
+      return false;
+    }
+
+    return originalSendFile(...args);
+  };
+  client.__personalizePdfGuardInstalled = true;
+}
+
 async function main() {
   console.log('[PersonalizeWppConect] iniciando...');
+  console.log(`[PersonalizeWppConect] BUILD: ${BUILD_ID}`);
+  console.log('[PersonalizeWppConect] MODO MOSTRUÁRIO: SOMENTE LINK, PDF BLOQUEADO');
   console.log(`[PersonalizeWppConect] modo: ${env.mockMode ? 'mock/local' : 'WPPConnect'}`);
   console.log(`[PersonalizeWppConect] link do mostruário: ${env.mostruarioLinkUrl}`);
 
@@ -58,11 +99,13 @@ async function main() {
 
   if (env.mockMode) {
     channel = createMockChannel();
+    blockPdfSending(channel);
     console.log('[PersonalizeWppConect] MOCK_MODE ativo. Use npm run test:flow para simular conversa.');
     return;
   }
 
   channel = await createWppChannel({ onMessage });
+  blockPdfSending(channel);
   console.log('[PersonalizeWppConect] conectado. Aguardando mensagens...');
 
   if (env.enableUnreadBootstrap) {
