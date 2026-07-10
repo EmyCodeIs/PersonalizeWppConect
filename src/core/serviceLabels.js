@@ -2,12 +2,44 @@
 
 const { env } = require('../config/env');
 
+function onlyDigits(value) {
+  return String(value || '').replace(/\D/g, '');
+}
+
+function toWhatsAppNumber(value) {
+  let digits = onlyDigits(value);
+  if (!digits) return '';
+
+  // Mapeamentos locais brasileiros podem vir sem DDI.
+  if (digits.length === 10 || digits.length === 11) {
+    digits = `55${digits}`;
+  }
+
+  return digits;
+}
+
 function normalizeChatId(clientId) {
   const raw = String(clientId || '').trim();
   if (!raw) return '';
-  if (/@(c\.us|g\.us|lid)$/i.test(raw)) return raw;
-  const digits = raw.replace(/\D/g, '');
-  return digits ? `${digits}@c.us` : raw;
+
+  if (/@lid$/i.test(raw)) {
+    const mapped = env.lidNumberMap?.[raw.toLowerCase()];
+    const number = toWhatsAppNumber(mapped);
+    if (number) {
+      const resolved = `${number}@c.us`;
+      console.log(`[ETIQUETA] LID resolvido para aplicação: ${raw} -> ${resolved}`);
+      return resolved;
+    }
+
+    console.warn(`[ETIQUETA] não existe LID_NUMBER_MAP para ${raw}; etiqueta não será aplicada pelo @lid.`);
+    return '';
+  }
+
+  if (/@c\.us$/i.test(raw)) return raw;
+  if (/@g\.us$/i.test(raw)) return '';
+
+  const number = toWhatsAppNumber(raw);
+  return number ? `${number}@c.us` : '';
 }
 
 function normalizeName(value) {
@@ -68,11 +100,9 @@ async function findOrCreateLabel(client, name, color) {
   if (typeof client?.addNewLabel !== 'function') return null;
 
   try {
-    const created = await client.addNewLabel(name, {
+    await client.addNewLabel(name, {
       labelColor: colorToHex(color),
     });
-
-    if (created && typeof created === 'object') return created;
 
     labels = await getAllLabels(client);
     found = labels.find((label) => normalizeName(labelName(label)) === normalizeName(name));
@@ -86,9 +116,12 @@ async function findOrCreateLabel(client, name, color) {
 async function replaceWithCurrentApi(client, chatId, target, replaceGroup) {
   if (typeof client?.addOrRemoveLabels !== 'function') return false;
 
-  const labels = await getAllLabels(client);
+  let labels = await getAllLabels(client);
   let targetLabel = labels.find((label) => normalizeName(labelName(label)) === normalizeName(target.name));
-  if (!targetLabel) targetLabel = await findOrCreateLabel(client, target.name, target.color);
+  if (!targetLabel) {
+    targetLabel = await findOrCreateLabel(client, target.name, target.color);
+    labels = await getAllLabels(client);
+  }
 
   const targetId = labelId(targetLabel);
   if (!targetId) return false;
@@ -96,10 +129,16 @@ async function replaceWithCurrentApi(client, chatId, target, replaceGroup) {
   const removableNames = new Set(replaceGroup.map(normalizeName));
   const options = labels
     .filter((label) => removableNames.has(normalizeName(labelName(label))))
-    .map((label) => ({ labelId: labelId(label), type: 'remove' }))
-    .filter((item) => item.labelId && item.labelId !== targetId);
+    .map((label) => ({
+      labelId: labelId(label),
+      type: labelId(label) === targetId ? 'add' : 'remove',
+    }))
+    .filter((item) => item.labelId);
 
-  options.push({ labelId: targetId, type: 'add' });
+  if (!options.some((item) => item.labelId === targetId && item.type === 'add')) {
+    options.push({ labelId: targetId, type: 'add' });
+  }
+
   await client.addOrRemoveLabels([chatId], options);
   return true;
 }
@@ -120,7 +159,10 @@ async function replaceWithPageFallback(client, chatId, target, replaceGroup) {
 
       const options = list
         .filter((label) => normalizedGroup.includes(String(label?.name || '').trim().toLowerCase()))
-        .map((label) => ({ labelId: String(label.id), type: String(label.id) === String(target.id) ? 'add' : 'remove' }));
+        .map((label) => ({
+          labelId: String(label.id),
+          type: String(label.id) === String(target.id) ? 'add' : 'remove',
+        }));
 
       if (!options.some((item) => item.type === 'add')) {
         options.push({ labelId: String(target.id), type: 'add' });
@@ -133,7 +175,8 @@ async function replaceWithPageFallback(client, chatId, target, replaceGroup) {
       targetName: target.name,
       replaceGroup,
     });
-  } catch (_) {
+  } catch (err) {
+    console.warn('[ETIQUETA] fallback interno falhou:', err?.message || err);
     return false;
   }
 }
@@ -160,7 +203,7 @@ async function replaceServiceLabel(channel, clientId, service) {
   if (!ok) ok = await replaceWithPageFallback(client, chatId, target, replaceGroup);
 
   if (ok) {
-    console.log(`[ETIQUETA] aplicada: ${target.name} (${target.color}) em ${chatId}`);
+    console.log(`[ETIQUETA] solicitação enviada: ${target.name} (${target.color}) em ${chatId}`);
     return true;
   }
 
