@@ -172,7 +172,7 @@ async function sendTextFast(channel, clientId, text, logPrefix = 'LINK') {
   if (typeof channel?.client?.sendText === 'function') {
     await channel.client.sendText(chatId, String(text || ''));
   } else {
-    await channel.sendText(clientId, text);
+    await channel.sendText(clientId, text, { noTyping: true });
   }
 
   console.log(`[${logPrefix}] enviado em ${Date.now() - startedAt}ms`);
@@ -204,15 +204,20 @@ function getMostruarioLink() {
 async function sendLinkedImage(channel, clientId, { imagePath, link, label }) {
   const totalStartedAt = Date.now();
 
-  // Regra visual: imagem sem legenda e URL crua no balão seguinte.
+  // Regra visual: a URL crua fica na legenda/título da própria imagem.
+  // Não existe um segundo balão de texto para o link.
   if (imagePath) {
-    await sendImageIfExists(channel, clientId, imagePath, '', { fast: true });
+    const ok = await sendImageIfExists(channel, clientId, imagePath, link, { fast: true });
+    if (!ok) {
+      console.warn(`[${label}] falha no envio da imagem; usando link cru como fallback.`);
+      await sendTextFast(channel, clientId, link, `${label} LINK FALLBACK`);
+    }
   } else {
-    console.warn(`[${label}] imagem não encontrada; enviando somente o link cru.`);
+    console.warn(`[${label}] imagem não encontrada; enviando somente o link cru como fallback.`);
+    await sendTextFast(channel, clientId, link, `${label} LINK FALLBACK`);
   }
 
-  await sendTextFast(channel, clientId, link, `${label} LINK`);
-  console.log(`[${label}] imagem sem legenda + link cru concluídos em ${Date.now() - totalStartedAt}ms`);
+  console.log(`[${label}] imagem com URL crua na legenda concluída em ${Date.now() - totalStartedAt}ms`);
   return true;
 }
 
