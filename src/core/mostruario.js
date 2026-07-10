@@ -142,7 +142,6 @@ async function sendImageIfExists(channel, clientId, filePath, caption) {
 
 async function sendMostruarioLetreiro(channel, clientId) {
   const imagePath = getMostruarioImagePath();
-  const pdfPath = getMostruarioPdfPath();
   const pdfUrl = String(env.mostruarioLetreiroPdfUrl || '').trim();
 
   if (imagePath) {
@@ -157,26 +156,12 @@ async function sendMostruarioLetreiro(channel, clientId) {
       clientId,
       `${messages.mostruarioLink || '🔗 Ver Mostruário'}\n${pdfUrl}`,
     );
-    console.log('[MOSTRUARIO] imagem e link público enviados.');
-    return;
+    console.log(`[MOSTRUARIO] link enviado: ${pdfUrl}`);
+    return true;
   }
 
-  if (pdfPath && channel?.sendDocument) {
-    try {
-      console.log(`[ASSET] enviando PDF: ${pdfPath}`);
-      const ok = await channel.sendDocument(
-        clientId,
-        pdfPath,
-        'mostruario.pdf',
-        'Confira nosso mostruário de Letreiros e Cores.',
-      );
-      if (ok) return;
-    } catch (err) {
-      console.warn('[MOSTRUARIO] não foi possível enviar PDF:', err?.message || err);
-    }
-  }
-
-  console.warn('[MOSTRUARIO] nenhum link público nem PDF local pôde ser enviado.');
+  console.warn('[MOSTRUARIO] nenhuma URL disponível. O PDF local não será enviado como anexo.');
+  return false;
 }
 
 async function sendTabelaCores(channel, clientId) {
