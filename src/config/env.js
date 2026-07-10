@@ -48,9 +48,13 @@ const env = {
   enableTestCommands: bool('ENABLE_TEST_COMMANDS', true),
   businessName: process.env.BUSINESS_NAME || 'Personalize',
   sellerName: process.env.SELLER_NAME || 'Vendedor Personalize',
-  bufferMs: Math.max(1000, num('BUFFER_MS', 4500)),
+  bufferMs: Math.max(800, num('BUFFER_MS', 2500)),
   minReplyDelayMs: Math.max(0, num('MIN_REPLY_DELAY_MS', 1800)),
   maxReplyDelayMs: Math.max(0, num('MAX_REPLY_DELAY_MS', 4200)),
+  enableTyping: bool('ENABLE_TYPING', true),
+  typingMinMs: Math.max(0, num('TYPING_MIN_MS', 650)),
+  typingMaxMs: Math.max(0, num('TYPING_MAX_MS', 1600)),
+  typingCharsPerSecond: Math.max(10, num('TYPING_CHARS_PER_SECOND', 45)),
   stopNonLetteringFlow: bool('STOP_NON_LETTERING_FLOW', true),
   enableContactNotes: bool('ENABLE_CONTACT_NOTES', true),
   enableContactLabels: bool('ENABLE_CONTACT_LABELS', true),
@@ -84,6 +88,10 @@ const env = {
 
 if (env.maxReplyDelayMs < env.minReplyDelayMs) {
   env.maxReplyDelayMs = env.minReplyDelayMs;
+}
+
+if (env.typingMaxMs < env.typingMinMs) {
+  env.typingMaxMs = env.typingMinMs;
 }
 
 module.exports = { env };
