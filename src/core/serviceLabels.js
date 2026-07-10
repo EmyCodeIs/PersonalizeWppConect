@@ -52,6 +52,69 @@ async function getAllLabels(client) {
   }
 }
 
+async function syncExistingServiceLabelColor(client, target) {
+  if (!client?.page?.evaluate || !target?.name || !target?.color) return false;
+
+  try {
+    return await client.page.evaluate(async ({ target, requestedHex }) => {
+      const WPP = window.WPP || null;
+      if (!WPP?.labels?.getAllLabels || !WPP?.labels?.getLabelColorPalette || !WPP?.labels?.editLabel) {
+        return false;
+      }
+
+      const normalize = (value) => String(value || '').trim().toLowerCase();
+      const labelsValue = await WPP.labels.getAllLabels();
+      const labels = Array.isArray(labelsValue) ? labelsValue : Object.values(labelsValue || {});
+      const found = labels.find((item) => normalize(item?.name) === normalize(target.name));
+      if (!found?.id) return false;
+
+      const rgb = (hex) => {
+        const clean = String(hex || '').replace('#', '');
+        if (!/^[0-9a-f]{6}$/i.test(clean)) return null;
+        return [
+          parseInt(clean.slice(0, 2), 16),
+          parseInt(clean.slice(2, 4), 16),
+          parseInt(clean.slice(4, 6), 16),
+        ];
+      };
+
+      const palette = await WPP.labels.getLabelColorPalette();
+      const wanted = rgb(requestedHex);
+      if (!wanted || !Array.isArray(palette) || !palette.length) return false;
+
+      let colorIndex;
+      let bestDistance = Number.POSITIVE_INFINITY;
+      palette.forEach((item, index) => {
+        const candidate = rgb(item);
+        if (!candidate) return;
+        const distance = ((candidate[0] - wanted[0]) ** 2)
+          + ((candidate[1] - wanted[1]) ** 2)
+          + ((candidate[2] - wanted[2]) ** 2);
+        if (distance < bestDistance) {
+          bestDistance = distance;
+          colorIndex = index;
+        }
+      });
+
+      if (!Number.isInteger(colorIndex)) return false;
+      const currentIndex = Number(found?.colorIndex ?? found?.colorId ?? found?.color);
+      if (Number.isFinite(currentIndex) && currentIndex === colorIndex) return true;
+
+      await WPP.labels.editLabel(String(found.id), {
+        name: target.name,
+        labelColor: colorIndex,
+      });
+      return true;
+    }, {
+      target,
+      requestedHex: desiredHex(target.color),
+    });
+  } catch (err) {
+    console.warn(`[LISTA] não foi possível atualizar a cor de "${target.name}":`, err?.message || err);
+    return false;
+  }
+}
+
 async function applyThroughListsApi(client, chatId, target, replaceGroup) {
   if (!client?.page?.evaluate) {
     return { applied: false, verified: false, reason: 'page_unavailable' };
@@ -225,6 +288,10 @@ async function replaceServiceLabel(channel, clientId, service) {
   const client = channel.client;
   const target = getServiceLabel(service);
   if (!target?.name) return false;
+
+  // Atualiza a cor da lista de serviço já existente. Isso não remove clientes e
+  // não toca nas listas dos vendedores, que ficam fora do grupo de substituição.
+  await syncExistingServiceLabelColor(client, target);
 
   const replaceGroup = env.serviceLabelReplaceGroup?.length
     ? env.serviceLabelReplaceGroup
