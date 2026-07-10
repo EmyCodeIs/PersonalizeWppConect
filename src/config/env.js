@@ -40,6 +40,7 @@ function mapList(name) {
 const serviceLabelLetreiro = process.env.SERVICE_LABEL_LETREIRO || 'Orçamento letreiro';
 const serviceLabelPlotagem = process.env.SERVICE_LABEL_PLOTAGEM || 'Plotagens';
 const serviceLabelOutros = process.env.SERVICE_LABEL_OUTROS || 'Outros';
+const serviceLabelLetreiroColor = process.env.SERVICE_LABEL_LETREIRO_COLOR || 'purple';
 
 const env = {
   sessionName: process.env.WPP_SESSION_NAME || 'personalize-wppconnect',
@@ -74,11 +75,11 @@ const env = {
   enableContactNotes: bool('ENABLE_CONTACT_NOTES', true),
   enableContactLabels: bool('ENABLE_CONTACT_LABELS', true),
   awaitingQuoteLabelName: process.env.AWAITING_QUOTE_LABEL_NAME || serviceLabelLetreiro,
-  awaitingQuoteLabelColor: process.env.AWAITING_QUOTE_LABEL_COLOR || 'green',
+  awaitingQuoteLabelColor: process.env.AWAITING_QUOTE_LABEL_COLOR || serviceLabelLetreiroColor,
   serviceLabelLetreiro,
   serviceLabelPlotagem,
   serviceLabelOutros,
-  serviceLabelLetreiroColor: process.env.SERVICE_LABEL_LETREIRO_COLOR || 'green',
+  serviceLabelLetreiroColor,
   serviceLabelPlotagemColor: process.env.SERVICE_LABEL_PLOTAGEM_COLOR || 'gray',
   serviceLabelOutrosColor: process.env.SERVICE_LABEL_OUTROS_COLOR || 'red',
   serviceLabelReplaceGroup: list('SERVICE_LABEL_REPLACE_GROUP', [serviceLabelLetreiro, serviceLabelPlotagem, serviceLabelOutros]),
@@ -90,18 +91,13 @@ const env = {
   allowedChatIds: list('ALLOWED_CHAT_IDS', []),
   lidNumberMap: mapList('LID_NUMBER_MAP'),
   assetsDir: process.env.ASSETS_DIR || 'assets',
-
-  // Imagens acompanhadas de link: sempre enviadas sem legenda e seguidas da URL crua.
   bemVindosImageBaseName: process.env.BEM_VINDOS_IMAGE_BASENAME || 'capa_bem_vindos',
-  bemVindosLinkUrl:
-    process.env.BEM_VINDOS_LINK_URL
-    || 'https://personalizeseuambiente.com.br/bem-vindos',
+  bemVindosLinkUrl: process.env.BEM_VINDOS_LINK_URL || 'https://personalizeseuambiente.com.br/bem-vindos',
   mostruarioLetreiroImageBaseName: process.env.MOSTRUARIO_LETREIRO_IMAGE_BASENAME || 'capa-mostruario',
   mostruarioLinkUrl:
     process.env.MOSTRUARIO_LINK_URL
     || process.env.MOSTRUARIO_LETREIRO_LINK_URL
     || 'https://personalizeseuambiente.com.br/mostruario-letreiros',
-
   assetTabelaCoresBaseName: process.env.ASSET_TABELA_CORES_BASENAME || 'tabela-cores-v2',
   assetTabelaEspessuraBaseName: process.env.ASSET_TABELA_ESPESSURA_BASENAME || 'tabela-espessura',
   assetTabelaProfundidadeBaseName: process.env.ASSET_TABELA_PROFUNDIDADE_BASENAME || 'tabela-profundidade-3mm',
