@@ -37,10 +37,10 @@ function mapList(name) {
     }, {});
 }
 
-const serviceLabelLetreiro = process.env.SERVICE_LABEL_LETREIRO || 'Orçamento letreiro';
+const serviceLabelLetreiro = process.env.SERVICE_LABEL_LETREIRO || 'Orçamento letreiros';
 const serviceLabelPlotagem = process.env.SERVICE_LABEL_PLOTAGEM || 'Plotagens';
 const serviceLabelOutros = process.env.SERVICE_LABEL_OUTROS || 'Outros';
-const serviceLabelLetreiroColor = process.env.SERVICE_LABEL_LETREIRO_COLOR || 'purple';
+const serviceLabelLetreiroColor = process.env.SERVICE_LABEL_LETREIRO_COLOR || 'green';
 
 const env = {
   sessionName: process.env.WPP_SESSION_NAME || 'personalize-wppconnect',
@@ -85,6 +85,7 @@ const env = {
   serviceLabelPlotagemColor: process.env.SERVICE_LABEL_PLOTAGEM_COLOR || 'gray',
   serviceLabelOutrosColor: process.env.SERVICE_LABEL_OUTROS_COLOR || 'red',
   serviceLabelReplaceGroup: list('SERVICE_LABEL_REPLACE_GROUP', [serviceLabelLetreiro, serviceLabelPlotagem, serviceLabelOutros]),
+  legacyGhostLabelIds: list('LEGACY_GHOST_LABEL_IDS', ['15']),
   enableUnreadBootstrap: bool('ENABLE_UNREAD_BOOTSTRAP', true),
   unreadBootstrapDelayMs: Math.max(1000, num('UNREAD_BOOTSTRAP_DELAY_MS', 6000)),
   unreadBootstrapMaxChats: Math.max(1, num('UNREAD_BOOTSTRAP_MAX_CHATS', 30)),
@@ -101,7 +102,7 @@ const env = {
     || process.env.MOSTRUARIO_LETREIRO_LINK_URL
     || 'https://personalizeseuambiente.com.br/mostruario-letreiros',
   assetTabelaCoresBaseName: process.env.ASSET_TABELA_CORES_BASENAME || 'tabela-cores-v2',
-  assetTabelaEspessuraBaseName: process.env.ASSET_TABELA_ESPESSURA_BASENAME || 'tabela-espessura',
+  assetTabelaEspessuraImageBaseName: process.env.ASSET_TABELA_ESPESSURA_BASENAME || 'tabela-espessura',
   assetTabelaProfundidadeBaseName: process.env.ASSET_TABELA_PROFUNDIDADE_BASENAME || 'tabela-profundidade-3mm',
 };
 
