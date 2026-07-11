@@ -19,46 +19,12 @@ function ensureParentDir() {
 
 function emptyState() {
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     trackingStartedAt: null,
     updatedAt: null,
     catalog: {},
     contacts: {},
   };
-}
-
-function readState() {
-  try {
-    if (!fs.existsSync(STORE_PATH)) return emptyState();
-    const parsed = JSON.parse(fs.readFileSync(STORE_PATH, 'utf8'));
-    return {
-      schemaVersion: 1,
-      trackingStartedAt: parsed?.trackingStartedAt || null,
-      updatedAt: parsed?.updatedAt || null,
-      catalog: parsed?.catalog && typeof parsed.catalog === 'object' ? parsed.catalog : {},
-      contacts: parsed?.contacts && typeof parsed.contacts === 'object' ? parsed.contacts : {},
-    };
-  } catch (_) {
-    return emptyState();
-  }
-}
-
-const state = readState();
-
-function saveState() {
-  ensureParentDir();
-  state.updatedAt = nowIso();
-  const tempPath = `${STORE_PATH}.tmp`;
-  fs.writeFileSync(tempPath, JSON.stringify(state, null, 2), 'utf8');
-  fs.renameSync(tempPath, STORE_PATH);
-}
-
-function initializeTracking() {
-  if (!state.trackingStartedAt) {
-    state.trackingStartedAt = nowIso();
-    saveState();
-  }
-  return state.trackingStartedAt;
 }
 
 function clone(value) {
@@ -77,6 +43,29 @@ function normalizeDefinition(definition = {}) {
     color: String(definition.color || '').trim() || 'gray',
     kind,
     role,
+    service: definition.service ? String(definition.service).trim() : null,
+  };
+}
+
+function normalizeSeller(value, fallbackSource = 'migration') {
+  if (!value) return null;
+  const name = String(typeof value === 'string' ? value : value.name || '').trim();
+  if (!name) return null;
+  return {
+    name,
+    source: String(typeof value === 'object' ? value.source || fallbackSource : fallbackSource),
+    updatedAt: typeof value === 'object' && value.updatedAt ? value.updatedAt : nowIso(),
+  };
+}
+
+function normalizeAttention(value, hasSeller = false) {
+  const source = value && typeof value === 'object' ? value : {};
+  return {
+    needsAttention: source.needsAttention === undefined ? Boolean(hasSeller) : Boolean(source.needsAttention),
+    lastMarkedUnreadAt: source.lastMarkedUnreadAt || null,
+    lastClearedAt: source.lastClearedAt || null,
+    lastUnreadError: source.lastUnreadError || null,
+    lastUnreadSource: source.lastUnreadSource || null,
   };
 }
 
@@ -106,6 +95,7 @@ function buildContact(clientId, identity = null) {
       operational: null,
       seller: null,
     },
+    attention: normalizeAttention(null, false),
     observedRequiredLabels: [],
     lastObservedAt: null,
     lastReconciledAt: null,
@@ -114,13 +104,70 @@ function buildContact(clientId, identity = null) {
   };
 }
 
+function migrateContact(record, key) {
+  const next = record && typeof record === 'object' ? record : {};
+  next.contactKey = next.contactKey || key;
+  next.aliases = Array.isArray(next.aliases) ? next.aliases.filter(Boolean) : [];
+  next.expected = next.expected && typeof next.expected === 'object'
+    ? next.expected
+    : { operational: null, seller: null };
+  next.expected.operational = next.expected.operational || null;
+  next.expected.seller = normalizeSeller(next.expected.seller);
+  next.attention = normalizeAttention(next.attention, Boolean(next.expected.seller));
+  next.observedRequiredLabels = Array.isArray(next.observedRequiredLabels)
+    ? next.observedRequiredLabels
+    : [];
+  next.status = next.expected.operational ? 'tagged' : 'pending';
+  return next;
+}
+
+function readState() {
+  try {
+    if (!fs.existsSync(STORE_PATH)) return emptyState();
+    const parsed = JSON.parse(fs.readFileSync(STORE_PATH, 'utf8'));
+    const contacts = parsed?.contacts && typeof parsed.contacts === 'object' ? parsed.contacts : {};
+    for (const [key, value] of Object.entries(contacts)) contacts[key] = migrateContact(value, key);
+    return {
+      schemaVersion: 2,
+      trackingStartedAt: parsed?.trackingStartedAt || null,
+      updatedAt: parsed?.updatedAt || null,
+      catalog: parsed?.catalog && typeof parsed.catalog === 'object' ? parsed.catalog : {},
+      contacts,
+    };
+  } catch (_) {
+    return emptyState();
+  }
+}
+
+const state = readState();
+
+function saveState() {
+  ensureParentDir();
+  state.schemaVersion = 2;
+  state.updatedAt = nowIso();
+  const tempPath = `${STORE_PATH}.tmp`;
+  fs.writeFileSync(tempPath, JSON.stringify(state, null, 2), 'utf8');
+  fs.renameSync(tempPath, STORE_PATH);
+}
+
+function initializeTracking() {
+  if (!state.trackingStartedAt) {
+    state.trackingStartedAt = nowIso();
+    saveState();
+  }
+  return state.trackingStartedAt;
+}
+
 function registerContact({ clientId, identity = null, source = 'event', profileName = null } = {}) {
   initializeTracking();
   const resolved = identity || Identity.resolveContact(clientId) || null;
   const contactKey = resolved?.contactKey || contactKeyFor(clientId);
   if (!contactKey) return null;
 
-  const existing = state.contacts[contactKey] || buildContact(clientId, resolved);
+  const existing = migrateContact(
+    state.contacts[contactKey] || buildContact(clientId, resolved),
+    contactKey,
+  );
   const aliases = [...new Set([
     ...(existing.aliases || []),
     resolved?.primaryChatId,
@@ -138,7 +185,6 @@ function registerContact({ clientId, identity = null, source = 'event', profileN
   existing.firstSeenAt = existing.firstSeenAt || nowIso();
   existing.lastSeenAt = nowIso();
   existing.lastSource = source;
-  existing.expected = existing.expected || { operational: null, seller: null };
   existing.status = existing.expected.operational ? 'tagged' : 'pending';
 
   state.contacts[contactKey] = existing;
@@ -154,19 +200,85 @@ function getContact(value) {
 function setExpectedLabel(clientId, definition, { source = 'flow' } = {}) {
   const normalized = normalizeDefinition(definition);
   if (!normalized) return null;
+  if (normalized.role === 'seller') {
+    return setSellerResponsibility(clientId, normalized.name, { source });
+  }
+  if (normalized.role !== 'operational') return null;
+
   const record = registerContact({ clientId, source });
   if (!record) return null;
   const stored = state.contacts[record.contactKey];
-  const entry = {
+  stored.expected.operational = {
     ...normalized,
     source,
     updatedAt: nowIso(),
   };
-
-  if (normalized.role === 'operational') stored.expected.operational = entry;
-  if (normalized.role === 'seller') stored.expected.seller = entry;
-  stored.status = stored.expected.operational ? 'tagged' : 'pending';
+  stored.status = 'tagged';
   stored.lastError = null;
+  saveState();
+  return clone(stored);
+}
+
+function setSellerResponsibility(clientId, sellerName, { source = 'seller-assignment' } = {}) {
+  const name = String(sellerName || '').trim();
+  if (!name) return null;
+  const record = registerContact({ clientId, source });
+  if (!record) return null;
+  const stored = state.contacts[record.contactKey];
+  stored.expected.seller = {
+    name,
+    source,
+    updatedAt: nowIso(),
+  };
+  stored.attention = normalizeAttention(stored.attention, true);
+  stored.attention.needsAttention = true;
+  stored.attention.lastClearedAt = null;
+  stored.lastError = null;
+  saveState();
+  return clone(stored);
+}
+
+function clearSellerResponsibility(clientId, { source = 'seller-cleared' } = {}) {
+  const key = state.contacts[clientId] ? clientId : contactKeyFor(clientId);
+  const stored = state.contacts[key];
+  if (!stored) return null;
+  stored.expected.seller = null;
+  stored.attention = normalizeAttention(stored.attention, false);
+  stored.attention.needsAttention = false;
+  stored.attention.lastClearedAt = nowIso();
+  stored.lastSource = source;
+  saveState();
+  return clone(stored);
+}
+
+function clearAttention(clientId, { source = 'attention-cleared' } = {}) {
+  const key = state.contacts[clientId] ? clientId : contactKeyFor(clientId);
+  const stored = state.contacts[key];
+  if (!stored) return null;
+  stored.attention = normalizeAttention(stored.attention, Boolean(stored.expected?.seller));
+  stored.attention.needsAttention = false;
+  stored.attention.lastClearedAt = nowIso();
+  stored.attention.lastUnreadSource = source;
+  saveState();
+  return clone(stored);
+}
+
+function markUnreadResult(clientId, {
+  success,
+  source = 'seller-attention',
+  error = null,
+} = {}) {
+  const key = state.contacts[clientId] ? clientId : contactKeyFor(clientId);
+  const stored = state.contacts[key];
+  if (!stored) return null;
+  stored.attention = normalizeAttention(stored.attention, Boolean(stored.expected?.seller));
+  if (success) {
+    stored.attention.lastMarkedUnreadAt = nowIso();
+    stored.attention.lastUnreadError = null;
+  } else if (error) {
+    stored.attention.lastUnreadError = String(error);
+  }
+  stored.attention.lastUnreadSource = source;
   saveState();
   return clone(stored);
 }
@@ -175,7 +287,9 @@ function captureObservedLabels(clientId, definitions = [], { source = 'whatsapp'
   const record = registerContact({ clientId, source });
   if (!record) return null;
   const stored = state.contacts[record.contactKey];
-  const normalized = definitions.map(normalizeDefinition).filter(Boolean);
+  const normalized = definitions
+    .map(normalizeDefinition)
+    .filter((item) => item?.role === 'operational');
 
   stored.observedRequiredLabels = normalized.map((item) => ({
     ...item,
@@ -184,20 +298,10 @@ function captureObservedLabels(clientId, definitions = [], { source = 'whatsapp'
   }));
   stored.lastObservedAt = nowIso();
 
-  const operational = normalized.filter((item) => item.role === 'operational');
-  const sellers = normalized.filter((item) => item.role === 'seller');
-
-  // O que ainda veio do WhatsApp/mobile prevalece. Quando o Web perde o vínculo
-  // e a leitura retorna vazia, o esperado salvo não é apagado.
-  if (operational.length) {
+  if (normalized.length) {
     const currentKey = stored.expected?.operational?.key;
-    const chosen = operational.find((item) => item.key === currentKey) || operational[0];
+    const chosen = normalized.find((item) => item.key === currentKey) || normalized[0];
     stored.expected.operational = { ...chosen, source, updatedAt: nowIso() };
-  }
-  if (sellers.length) {
-    const currentKey = stored.expected?.seller?.key;
-    const chosen = sellers.find((item) => item.key === currentKey) || sellers[0];
-    stored.expected.seller = { ...chosen, source, updatedAt: nowIso() };
   }
 
   stored.status = stored.expected?.operational ? 'tagged' : 'pending';
@@ -207,7 +311,7 @@ function captureObservedLabels(clientId, definitions = [], { source = 'whatsapp'
 
 function saveCatalog(definition, item = {}) {
   const normalized = normalizeDefinition(definition);
-  if (!normalized) return null;
+  if (!normalized || normalized.role !== 'operational') return null;
   state.catalog[normalized.key] = {
     ...normalized,
     id: String(item.id || item.labelId || '').trim() || null,
@@ -242,6 +346,8 @@ function stats() {
     total: contacts.length,
     tagged: contacts.filter((item) => item.expected?.operational).length,
     pending: contacts.filter((item) => !item.expected?.operational).length,
+    sellerAssigned: contacts.filter((item) => item.expected?.seller?.name).length,
+    needsAttention: contacts.filter((item) => item.attention?.needsAttention).length,
   };
 }
 
@@ -250,6 +356,10 @@ module.exports = {
   registerContact,
   getContact,
   setExpectedLabel,
+  setSellerResponsibility,
+  clearSellerResponsibility,
+  clearAttention,
+  markUnreadResult,
   captureObservedLabels,
   saveCatalog,
   markReconciled,
@@ -258,5 +368,6 @@ module.exports = {
   _test: {
     STORE_PATH,
     normalizeDefinition,
+    normalizeSeller,
   },
 };
