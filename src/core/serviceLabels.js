@@ -2,12 +2,8 @@
 
 const { env } = require('../config/env');
 const Identity = require('../services/contactIdentity');
-const Store = require('../services/leadStore');
 
-const resolvedLists = new Map();
-const creationLocks = new Map();
-let initializationPromise = null;
-let initializationFinished = false;
+const completedGhostCleanupChats = new Set();
 
 const COLOR_HEX = Object.freeze({
   green: '#00a884',
@@ -34,12 +30,6 @@ function normalizeName(value) {
     .trim();
 }
 
-function desiredHex(color) {
-  const raw = String(color || '').trim();
-  if (/^#[0-9a-f]{6}$/i.test(raw)) return raw.toLowerCase();
-  return COLOR_HEX[normalizeName(raw)] || COLOR_HEX.gray;
-}
-
 function listId(item) {
   return String(item?.id?._serialized || item?.id || item?.labelId || '').trim();
 }
@@ -48,9 +38,10 @@ function listName(item) {
   return String(item?.name || item?.label || '').trim();
 }
 
-function listCount(item) {
-  const value = Number(item?.count);
-  return Number.isFinite(value) ? value : 0;
+function desiredHex(color) {
+  const raw = String(color || '').trim();
+  if (/^#[0-9a-f]{6}$/i.test(raw)) return raw.toLowerCase();
+  return COLOR_HEX[normalizeName(raw)] || COLOR_HEX.gray;
 }
 
 function getServiceLabel(service) {
@@ -63,152 +54,169 @@ function getServiceLabel(service) {
   return { name: env.serviceLabelOutros, color: env.serviceLabelOutrosColor };
 }
 
-function serviceTargets() {
-  return [
-    getServiceLabel('letreiro'),
-    getServiceLabel('plotagem'),
-    getServiceLabel('outros'),
-  ].filter((item) => item?.name);
+function orderedCandidateIds(clientId) {
+  const direct = Identity.normalizeChatId(clientId);
+  const known = Identity.getLabelCandidateIds(clientId);
+  return [...new Set([direct, ...known].filter(Boolean))];
 }
 
-function managedServiceLabelNames() {
+function configuredReplaceGroup() {
   const configured = Array.isArray(env.serviceLabelReplaceGroup)
     ? env.serviceLabelReplaceGroup
     : [];
-  const fallback = serviceTargets().map((item) => item.name);
-  return [...new Set((configured.length ? configured : fallback)
-    .map((item) => String(item || '').trim())
+  return configured.length
+    ? configured
+    : [env.serviceLabelLetreiro, env.serviceLabelPlotagem, env.serviceLabelOutros];
+}
+
+function configuredGhostIds() {
+  return [...new Set((env.legacyGhostLabelIds || [])
+    .map((value) => String(value || '').trim())
     .filter(Boolean))];
 }
 
-async function readBusinessLists(client) {
-  if (!client?.page?.evaluate) return [];
+async function removeLegacyGhostIds(client, chatId) {
+  const ghostIds = configuredGhostIds();
+  if (completedGhostCleanupChats.has(chatId)) {
+    return { removed: [], skipped: ghostIds, alreadyChecked: true };
+  }
+  if (!ghostIds.length || !client?.page?.evaluate || !chatId) {
+    return { removed: [], skipped: [] };
+  }
 
   try {
-    return await client.page.evaluate(async () => {
+    const result = await client.page.evaluate(async ({ chatId, ghostIds }) => {
       const WPP = window.WPP || null;
-      if (!WPP?.labels?.getAllLabels) return [];
-      const value = await WPP.labels.getAllLabels();
-      const list = Array.isArray(value) ? value : Object.values(value || {});
-      return list.map((item) => ({
-        id: String(item?.id?._serialized || item?.id || item?.labelId || ''),
-        name: String(item?.name || item?.label || ''),
-        colorIndex: item?.colorIndex ?? item?.colorId ?? item?.color ?? null,
-        hexColor: item?.hexColor || null,
-        count: Number(item?.count || 0),
-      }));
-    });
+      if (!WPP?.labels?.getAllLabels || !WPP?.labels?.addOrRemoveLabels) {
+        return { removed: [], skipped: ghostIds, reason: 'labels_api_unavailable' };
+      }
+
+      const StoreWindow = window.Store || null;
+      let chat = StoreWindow?.Chat?.get?.(chatId) || null;
+      if (!chat && typeof StoreWindow?.Chat?.find === 'function') {
+        try { chat = await StoreWindow.Chat.find(chatId); } catch (_) {}
+      }
+      if (!chat) {
+        return { removed: [], skipped: ghostIds, reason: 'chat_not_found' };
+      }
+
+      const catalogValue = await WPP.labels.getAllLabels();
+      const catalog = Array.isArray(catalogValue)
+        ? catalogValue
+        : Object.values(catalogValue || {});
+
+      // Se a leitura falhou e retornou vazio, não arriscamos remover nada.
+      if (!catalog.length) {
+        return { removed: [], skipped: ghostIds, reason: 'empty_catalog' };
+      }
+
+      const visibleIds = new Set(catalog.map((item) => String(
+        item?.id?._serialized || item?.id || item?.labelId || '',
+      )).filter(Boolean));
+
+      const labelStore = StoreWindow?.Label || StoreWindow?.Labels || null;
+      if (typeof labelStore?.getLabelsForModel !== 'function') {
+        return { removed: [], skipped: ghostIds, reason: 'store_unavailable' };
+      }
+      const attachedValue = labelStore.getLabelsForModel(chat) || [];
+      const attached = Array.isArray(attachedValue)
+        ? attachedValue
+        : Object.values(attachedValue || {});
+      const attachedIds = new Set(attached.map((entry) => String(
+        entry?.id?._serialized || entry?.id || entry?.labelId || entry || '',
+      )).filter(Boolean));
+
+      const orphanIds = ghostIds.filter((id) => (
+        attachedIds.has(String(id)) && !visibleIds.has(String(id))
+      ));
+      if (!orphanIds.length) return { removed: [], skipped: ghostIds };
+
+      const removed = [];
+      for (const id of orphanIds) {
+        let detached = false;
+
+        // O editLabel antigo deixou o modelo no LabelStore, mas fora do catálogo.
+        // removeChats consegue retirar o vínculo enquanto esse modelo oculto ainda existe.
+        try {
+          if (WPP?.lists?.removeChats) {
+            await WPP.lists.removeChats(String(id), [chatId]);
+            detached = true;
+          }
+        } catch (_) {}
+
+        // Fallback direto para versões em que removeChats não encontra o modelo.
+        if (!detached) {
+          try {
+            await WPP.labels.addOrRemoveLabels(
+              [chatId],
+              [{ labelId: String(id), type: 'remove' }],
+            );
+            detached = true;
+          } catch (_) {}
+        }
+
+        // Só apagamos o modelo local depois de confirmar que o contato foi desvinculado.
+        if (detached) {
+          try {
+            if (WPP?.lists?.remove) await WPP.lists.remove(String(id));
+          } catch (_) {}
+          removed.push(String(id));
+        }
+      }
+
+      return { removed, skipped: ghostIds.filter((id) => !removed.includes(String(id))) };
+    }, { chatId, ghostIds });
+
+    if (!result?.reason || result.removed?.length) {
+      completedGhostCleanupChats.add(chatId);
+    }
+    return result;
   } catch (err) {
-    console.warn('[LISTAS] não foi possível ler as listas:', err?.message || err);
-    return [];
+    return {
+      removed: [],
+      skipped: ghostIds,
+      reason: 'cleanup_failed',
+      error: String(err?.message || err),
+    };
   }
 }
 
-function compareIds(a, b) {
-  const aId = listId(a);
-  const bId = listId(b);
-  const aNumber = Number(aId);
-  const bNumber = Number(bId);
-  if (Number.isFinite(aNumber) && Number.isFinite(bNumber)) return aNumber - bNumber;
-  return aId.localeCompare(bId);
-}
-
-function findCanonicalList(items, targetName) {
-  const wanted = normalizeName(targetName);
-  const matches = items
-    .filter((item) => normalizeName(listName(item)) === wanted)
-    .filter((item) => listId(item) && listName(item));
-
-  if (!matches.length) return null;
-
-  const canonical = [...matches].sort((a, b) => {
-    const exactA = listName(a) === String(targetName || '').trim() ? 1 : 0;
-    const exactB = listName(b) === String(targetName || '').trim() ? 1 : 0;
-    if (exactA !== exactB) return exactB - exactA;
-
-    const countDifference = listCount(b) - listCount(a);
-    if (countDifference) return countDifference;
-
-    return compareIds(a, b);
-  })[0];
-
-  if (matches.length > 1) {
-    console.warn(
-      `[LISTAS] duplicatas de "${targetName}": ${matches.map((item) => listId(item)).join(', ')}. `
-      + `Reutilizando ${listId(canonical)} sem apagar nenhuma.`,
-    );
+async function applyThroughListsApi(client, chatId, target, replaceGroup) {
+  if (!client?.page?.evaluate) {
+    return { applied: false, verified: false, reason: 'page_unavailable' };
   }
 
-  return canonical;
-}
-
-async function resolveExistingList(client, target, { refresh = false, attempts = 5, delayMs = 600 } = {}) {
-  const key = normalizeName(target?.name);
-  if (!key) return null;
-
-  if (!refresh && resolvedLists.has(key)) return resolvedLists.get(key);
-
-  for (let attempt = 1; attempt <= attempts; attempt += 1) {
-    const items = await readBusinessLists(client);
-    const found = findCanonicalList(items, target.name);
-    if (found) {
-      resolvedLists.set(key, found);
-      return found;
-    }
-    if (attempt < attempts) await wait(delayMs);
-  }
-
-  resolvedLists.delete(key);
-  return null;
-}
-
-function hexToRgb(hex) {
-  const clean = String(hex || '').replace('#', '');
-  if (!/^[0-9a-f]{6}$/i.test(clean)) return null;
-  return [
-    parseInt(clean.slice(0, 2), 16),
-    parseInt(clean.slice(2, 4), 16),
-    parseInt(clean.slice(4, 6), 16),
-  ];
-}
-
-function nearestPaletteIndex(palette, requestedHex) {
-  const wanted = hexToRgb(requestedHex);
-  if (!wanted || !Array.isArray(palette) || !palette.length) return null;
-
-  let bestIndex = null;
-  let bestDistance = Number.POSITIVE_INFINITY;
-
-  palette.forEach((entry, index) => {
-    const candidateHex = typeof entry === 'string'
-      ? entry
-      : entry?.hex || entry?.hexColor || entry?.color || entry?.value;
-    const candidate = hexToRgb(candidateHex);
-    if (!candidate) return;
-
-    const distance = ((candidate[0] - wanted[0]) ** 2)
-      + ((candidate[1] - wanted[1]) ** 2)
-      + ((candidate[2] - wanted[2]) ** 2);
-
-    if (distance < bestDistance) {
-      bestDistance = distance;
-      bestIndex = index;
-    }
-  });
-
-  return Number.isInteger(bestIndex) ? bestIndex : null;
-}
-
-async function createRealBusinessList(client, target) {
-  if (!client?.page?.evaluate) return null;
-
-  return client.page.evaluate(async ({ name, requestedHex }) => {
+  return client.page.evaluate(async ({ chatId, target, replaceGroup, requestedHex }) => {
     const WPP = window.WPP || null;
-    if (!WPP?.lists?.create || !WPP?.labels?.getAllLabels) {
-      return { ok: false, reason: 'lists_api_unavailable' };
+    if (
+      !WPP?.lists?.create
+      || !WPP?.lists?.addChats
+      || !WPP?.lists?.removeChats
+      || !WPP?.labels?.getAllLabels
+    ) {
+      return { applied: false, verified: false, reason: 'lists_api_unavailable' };
     }
 
-    const hexToRgbInner = (hex) => {
+    const StoreWindow = window.Store || null;
+    let existingChat = StoreWindow?.Chat?.get?.(chatId) || null;
+    if (!existingChat && typeof StoreWindow?.Chat?.find === 'function') {
+      try { existingChat = await StoreWindow.Chat.find(chatId); } catch (_) {}
+    }
+    if (!existingChat) {
+      return { applied: false, verified: false, reason: 'chat_not_found' };
+    }
+
+    const normalize = (value) => String(value || '')
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .toLowerCase()
+      .replace(/\s+/g, ' ')
+      .trim();
+    const idOf = (item) => String(item?.id?._serialized || item?.id || item?.labelId || '');
+    const nameOf = (item) => String(item?.name || item?.label || '');
+    const toArray = (value) => (Array.isArray(value) ? value : Object.values(value || {}));
+
+    const rgb = (hex) => {
       const clean = String(hex || '').replace('#', '');
       if (!/^[0-9a-f]{6}$/i.test(clean)) return null;
       return [
@@ -218,404 +226,179 @@ async function createRealBusinessList(client, target) {
       ];
     };
 
-    const normalize = (value) => String(value || '')
-      .normalize('NFD')
-      .replace(/[\u0300-\u036f]/g, '')
-      .toLowerCase()
-      .replace(/\s+/g, ' ')
-      .trim();
-
-    const beforeValue = await WPP.labels.getAllLabels();
-    const before = Array.isArray(beforeValue) ? beforeValue : Object.values(beforeValue || {});
-    const existing = before.find((item) => normalize(item?.name || item?.label) === normalize(name));
-    if (existing?.id) {
-      return {
-        ok: true,
-        existing: true,
-        id: String(existing.id),
-        name: String(existing.name || name),
-        colorIndex: existing?.colorIndex ?? existing?.colorId ?? existing?.color ?? null,
-      };
-    }
-
-    let palette = [];
-    try {
-      palette = WPP.labels.getLabelColorPalette
-        ? await WPP.labels.getLabelColorPalette()
-        : [];
-    } catch (_) {}
-
-    const wanted = hexToRgbInner(requestedHex);
-    let colorIndex = null;
-    let bestDistance = Number.POSITIVE_INFINITY;
-
-    if (wanted && Array.isArray(palette)) {
+    const closestPaletteIndex = (palette, wantedHex) => {
+      const wanted = rgb(wantedHex);
+      if (!wanted || !Array.isArray(palette) || !palette.length) return undefined;
+      let bestIndex;
+      let bestDistance = Number.POSITIVE_INFINITY;
       palette.forEach((entry, index) => {
         const candidateHex = typeof entry === 'string'
           ? entry
           : entry?.hex || entry?.hexColor || entry?.color || entry?.value;
-        const candidate = hexToRgbInner(candidateHex);
+        const candidate = rgb(candidateHex);
         if (!candidate) return;
         const distance = ((candidate[0] - wanted[0]) ** 2)
           + ((candidate[1] - wanted[1]) ** 2)
           + ((candidate[2] - wanted[2]) ** 2);
         if (distance < bestDistance) {
           bestDistance = distance;
-          colorIndex = index;
+          bestIndex = index;
         }
       });
-    }
-
-    const attempts = [];
-    if (Number.isInteger(colorIndex)) attempts.push(colorIndex);
-    attempts.push(undefined);
-
-    let createdId = '';
-    let lastError = '';
-
-    for (const requestedIndex of attempts) {
-      try {
-        createdId = String(await WPP.lists.create(name, [], requestedIndex));
-        if (createdId) break;
-      } catch (err) {
-        lastError = String(err?.message || err?.text || err || '');
-      }
-    }
-
-    if (!createdId) {
-      return {
-        ok: false,
-        reason: 'create_failed',
-        error: lastError,
-        colorIndex,
-        palette,
-      };
-    }
-
-    await new Promise((resolve) => setTimeout(resolve, 1400));
-
-    const afterValue = await WPP.labels.getAllLabels();
-    const after = Array.isArray(afterValue) ? afterValue : Object.values(afterValue || {});
-    const found = after.find((item) => String(item?.id || item?.labelId || '') === createdId)
-      || after.find((item) => normalize(item?.name || item?.label) === normalize(name));
-
-    return {
-      ok: Boolean(found?.id || createdId),
-      id: String(found?.id || found?.labelId || createdId),
-      name: String(found?.name || found?.label || name),
-      colorIndex: found?.colorIndex ?? found?.colorId ?? found?.color ?? colorIndex ?? null,
-      requestedColorIndex: colorIndex,
-      paletteColor: Number.isInteger(colorIndex) ? palette[colorIndex] : null,
-      paletteSize: Array.isArray(palette) ? palette.length : 0,
+      return bestIndex;
     };
-  }, {
-    name: String(target.name || '').trim(),
-    requestedHex: desiredHex(target.color),
-  });
-}
 
-async function ensureServiceList(client, target) {
-  const key = normalizeName(target?.name);
-  if (!key) return null;
+    let lists = toArray(await WPP.labels.getAllLabels());
+    let targetList = lists.find((item) => normalize(nameOf(item)) === normalize(target.name));
 
-  const existing = await resolveExistingList(client, target, {
-    refresh: true,
-    attempts: 4,
-    delayMs: 600,
-  });
-  if (existing) {
-    console.log(`[LISTAS] reutilizando: ${listName(existing)} | ID ${listId(existing)}`);
-    return existing;
-  }
-
-  if (creationLocks.has(key)) return creationLocks.get(key);
-
-  const task = (async () => {
-    for (let attempt = 1; attempt <= 3; attempt += 1) {
-      const confirmed = await resolveExistingList(client, target, {
-        refresh: true,
-        attempts: 2,
-        delayMs: 500,
-      });
-      if (confirmed) return confirmed;
-
-      console.log(`[LISTAS] criação ${attempt}/3: ${target.name} | cor=${target.color} | hex=${desiredHex(target.color)}`);
-
-      let created = null;
+    if (!targetList) {
+      let colorIndex;
       try {
-        created = await createRealBusinessList(client, target);
-      } catch (err) {
-        console.warn(`[LISTAS] erro ao criar "${target.name}":`, err?.message || err);
-      }
-
-      if (created?.ok) {
-        console.log(
-          `[LISTAS] criada: ${created.name} | ID ${created.id} | `
-          + `índice solicitado=${String(created.requestedColorIndex)} | índice final=${String(created.colorIndex)}`,
-        );
-        await wait(1800);
-        const refreshed = await resolveExistingList(client, target, {
-          refresh: true,
-          attempts: 8,
-          delayMs: 700,
-        });
-        if (refreshed) return refreshed;
-      } else {
-        console.warn(
-          `[LISTAS] tentativa ${attempt} falhou para "${target.name}": `
-          + `${created?.reason || 'sem retorno'} ${created?.error || ''}`.trim(),
-        );
-      }
-
-      await wait(2200);
-    }
-
-    return null;
-  })().finally(() => {
-    creationLocks.delete(key);
-  });
-
-  creationLocks.set(key, task);
-  return task;
-}
-
-async function initializeServiceLabels(channel) {
-  if (!env.enableContactLabels || !channel?.client) return false;
-  if (initializationFinished) return true;
-  if (initializationPromise) return initializationPromise;
-
-  initializationPromise = (async () => {
-    console.log('[LISTAS] verificando e criando separadamente as listas de atendimento...');
-    await wait(1500);
-
-    let ready = true;
-    for (const target of serviceTargets()) {
-      const item = await ensureServiceList(channel.client, target);
-      if (!item) {
-        ready = false;
-        console.warn(`[LISTAS] AUSENTE após 3 tentativas: ${target.name}`);
-      } else {
-        console.log(`[LISTAS] PRONTA: ${listName(item)} | ID ${listId(item)} | cor=${target.color}`);
-      }
-      await wait(1600);
-    }
-
-    initializationFinished = true;
-    return ready;
-  })().finally(() => {
-    initializationPromise = null;
-  });
-
-  return initializationPromise;
-}
-
-async function inspectChatLists(client, chatId) {
-  if (!client?.page?.evaluate || !chatId) {
-    return { available: false, chatFound: null, items: [] };
-  }
-
-  try {
-    return await client.page.evaluate(async ({ chatId }) => {
-      const WPP = window.WPP || null;
-      const Store = window.Store || null;
-      let chat = null;
-
-      try {
-        chat = Store?.Chat?.get?.(chatId) || null;
-        if (!chat && typeof Store?.Chat?.find === 'function') chat = await Store.Chat.find(chatId);
-      } catch (_) {}
-
-      if (!chat) return { available: true, chatFound: false, items: [] };
-
-      let all = [];
-      try {
-        if (WPP?.labels?.getAllLabels) {
-          const value = await WPP.labels.getAllLabels();
-          all = Array.isArray(value) ? value : Object.values(value || {});
+        if (WPP.labels.getLabelColorPalette) {
+          colorIndex = closestPaletteIndex(
+            toArray(await WPP.labels.getLabelColorPalette()),
+            requestedHex,
+          );
         }
       } catch (_) {}
 
-      const labelStore = Store?.Label || Store?.Labels || null;
-      if (typeof labelStore?.getLabelsForModel !== 'function') {
-        return { available: false, chatFound: true, items: [] };
+      const createdId = String(await WPP.lists.create(
+        target.name,
+        [],
+        Number.isInteger(colorIndex) ? colorIndex : undefined,
+      ) || '');
+
+      // O ID retornado não é aceito sozinho. A lista precisa aparecer no catálogo.
+      for (let attempt = 1; attempt <= 10; attempt += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 400));
+        lists = toArray(await WPP.labels.getAllLabels());
+        targetList = lists.find((item) => idOf(item) === createdId)
+          || lists.find((item) => normalize(nameOf(item)) === normalize(target.name));
+        if (targetList) break;
       }
 
-      let attached = [];
-      try {
-        const value = labelStore.getLabelsForModel(chat) || [];
-        attached = Array.isArray(value) ? value : Object.values(value || {});
-      } catch (_) {}
-
-      const items = attached.map((entry) => {
-        const id = String(entry?.id?._serialized || entry?.id || entry?.labelId || entry || '');
-        const known = all.find((item) => String(item?.id || item?.labelId || '') === id) || null;
+      if (!targetList) {
         return {
-          id,
-          name: String(entry?.name || entry?.label || known?.name || known?.label || ''),
-          colorIndex: entry?.colorIndex ?? entry?.colorId ?? entry?.color
-            ?? known?.colorIndex ?? known?.colorId ?? known?.color ?? null,
+          applied: false,
+          verified: false,
+          reason: 'created_not_visible',
+          createdId,
         };
-      }).filter((item) => item.id);
-
-      return { available: true, chatFound: true, items };
-    }, { chatId });
-  } catch (err) {
-    console.warn(`[LISTAS] não foi possível verificar ${chatId}:`, err?.message || err);
-    return { available: false, chatFound: null, items: [] };
-  }
-}
-
-function persistManualLists(clientId, items = []) {
-  if (!env.storeManualContactLabels) return;
-
-  try {
-    const managed = new Set(managedServiceLabelNames().map(normalizeName));
-    const manual = items
-      .filter((item) => item?.name && !managed.has(normalizeName(item.name)))
-      .map((item) => ({
-        id: String(item.id || ''),
-        name: String(item.name || '').trim(),
-        colorIndex: Number.isFinite(Number(item.colorIndex)) ? Number(item.colorIndex) : null,
-      }))
-      .filter((item, index, list) => item.name
-        && list.findIndex((candidate) => candidate.id === item.id && candidate.name === item.name) === index)
-      .sort((a, b) => a.name.localeCompare(b.name, 'pt-BR'));
-
-    const session = Store.getSession(clientId);
-    if (!session) return;
-    session.dados = session.dados || {};
-    session.dados.manualContactLabels = manual;
-    session.dados.manualContactLabelNames = manual.map((item) => item.name);
-    session.dados.manualContactLabelsDetectedAt = new Date().toISOString();
-    Store.saveSession(session);
-  } catch (err) {
-    console.warn('[LISTAS] não foi possível registrar listas manuais:', err?.message || err);
-  }
-}
-
-async function addChatToList(client, chatId, targetId) {
-  if (!client?.page?.evaluate) return { submitted: false, mode: 'unavailable' };
-
-  try {
-    return await client.page.evaluate(async ({ chatId, targetId }) => {
-      const WPP = window.WPP || null;
-      if (WPP?.lists?.addChats) {
-        await WPP.lists.addChats(String(targetId), [chatId]);
-        return { submitted: true, mode: 'wpp-lists' };
       }
-      if (WPP?.labels?.addOrRemoveLabels) {
-        await WPP.labels.addOrRemoveLabels(
-          [chatId],
-          [{ labelId: String(targetId), type: 'add' }],
-        );
-        return { submitted: true, mode: 'wpp-labels-fallback' };
+    }
+
+    const targetId = idOf(targetList);
+    if (!targetId) {
+      return { applied: false, verified: false, reason: 'target_list_missing' };
+    }
+
+    const managedNames = new Set((replaceGroup || []).map(normalize));
+    const otherServiceLists = lists.filter((item) => {
+      const id = idOf(item);
+      return id
+        && id !== targetId
+        && managedNames.has(normalize(nameOf(item)));
+    });
+
+    // Substitui apenas etiquetas de serviço. Etiquetas de vendedores ficam intactas.
+    for (const item of otherServiceLists) {
+      try {
+        await WPP.lists.removeChats(idOf(item), [chatId]);
+      } catch (err) {
+        const text = String(err?.message || err?.text || err || '');
+        if (!/not found|not attached|not in list/i.test(text)) throw err;
       }
-      return { submitted: false, mode: 'unavailable' };
-    }, { chatId, targetId: String(targetId) });
-  } catch (err) {
-    return { submitted: false, mode: 'error', error: String(err?.message || err) };
-  }
-}
-
-function orderedCandidateIds(clientId) {
-  const direct = Identity.normalizeChatId(clientId);
-  const known = Identity.getLabelCandidateIds(clientId);
-  return [...new Set([direct, ...known].filter(Boolean))];
-}
-
-async function applyListToCandidates(client, clientId, item) {
-  const targetId = listId(item);
-  const candidates = orderedCandidateIds(clientId);
-  const unverified = [];
-
-  for (const chatId of candidates) {
-    const before = await inspectChatLists(client, chatId);
-    if (before.chatFound === false && candidates.length > 1) continue;
-
-    persistManualLists(clientId, before.items);
-
-    if (before.items.some((entry) => String(entry.id) === targetId)) {
-      return { applied: true, verified: true, alreadyAttached: true, mode: 'existing', chatId };
     }
 
-    const operation = await addChatToList(client, chatId, targetId);
-    if (!operation.submitted) {
-      if (operation.error) console.warn(`[LISTAS] falha ao incluir ${chatId}: ${operation.error}`);
-      continue;
-    }
+    await WPP.lists.addChats(targetId, [chatId]);
 
-    await wait(1000);
-    const after = await inspectChatLists(client, chatId);
-    persistManualLists(clientId, after.items.length ? after.items : before.items);
+    let verified = null;
+    try {
+      const labelStore = StoreWindow?.Label || StoreWindow?.Labels || null;
+      if (typeof labelStore?.getLabelsForModel === 'function') {
+        const attachedValue = labelStore.getLabelsForModel(existingChat) || [];
+        const attached = toArray(attachedValue);
+        verified = attached.some((entry) => String(
+          entry?.id?._serialized || entry?.id || entry?.labelId || entry || '',
+        ) === targetId);
+      }
+    } catch (_) {}
 
-    if (after.items.some((entry) => String(entry.id) === targetId)) {
-      return { applied: true, verified: true, mode: operation.mode, chatId };
-    }
-
-    if (after.available && after.chatFound) continue;
-    unverified.push({ chatId, mode: operation.mode });
-  }
-
-  if (unverified.length) {
     return {
       applied: true,
-      verified: null,
-      chatId: unverified[0].chatId,
-      mode: unverified[0].mode,
+      verified,
+      mode: 'wpp-lists',
+      chatId,
+      targetId,
+      targetName: nameOf(targetList) || target.name,
     };
-  }
-
-  return { applied: false, verified: false };
+  }, {
+    chatId,
+    target,
+    replaceGroup,
+    requestedHex: desiredHex(target.color),
+  });
 }
 
 async function applyNamedLabel(channel, clientId, target) {
   if (!env.enableContactLabels || !channel?.client || !target?.name) return false;
 
   const client = channel.client;
-  let item = await resolveExistingList(client, target);
-  if (!item) item = await ensureServiceList(client, target);
+  const candidates = orderedCandidateIds(clientId);
+  const replaceGroup = configuredReplaceGroup();
 
-  if (!item) {
-    console.warn(`[LISTAS] não foi possível criar ou localizar "${target.name}".`);
-    return false;
+  for (const chatId of candidates) {
+    const cleanup = await removeLegacyGhostIds(client, chatId);
+    if (cleanup.removed?.length) {
+      console.log(`[LISTAS] vínculo fantasma removido de ${chatId}: ${cleanup.removed.join(', ')}`);
+    }
+
+    let result;
+    try {
+      result = await applyThroughListsApi(client, chatId, target, replaceGroup);
+    } catch (err) {
+      console.warn(`[LISTAS] falha no caminho WPP.lists para ${chatId}:`, err?.message || err);
+      continue;
+    }
+
+    if (result?.applied) {
+      console.log(
+        `[LISTAS] aplicada: ${result.targetName} | ID ${result.targetId} `
+        + `| ${result.chatId} | verificada=${String(result.verified)}`,
+      );
+      return result;
+    }
+
+    if (result?.reason && result.reason !== 'page_unavailable') {
+      console.warn(`[LISTAS] não aplicada em ${chatId}: ${result.reason}`);
+    }
   }
 
-  const result = await applyListToCandidates(client, clientId, item);
-  if (!result?.applied) {
-    console.warn(`[LISTAS] não foi possível incluir o contato em "${target.name}".`);
-    return false;
-  }
-
-  console.log(
-    `[LISTAS] aplicada sem remover outras: ${listName(item)} | ID ${listId(item)} `
-    + `| ${result.chatId} | modo=${result.mode} | verificada=${String(result.verified)}`,
-  );
-
-  return {
-    ...result,
-    targetId: listId(item),
-    targetName: listName(item),
-  };
+  console.warn(`[LISTAS] não foi possível incluir o contato em "${target.name}".`);
+  return false;
 }
 
 async function replaceServiceLabel(channel, clientId, service) {
   return applyNamedLabel(channel, clientId, getServiceLabel(service));
 }
 
+// Mantido apenas por compatibilidade de importação. Não cria, edita ou recolore
+// etiquetas na inicialização. A escrita acontece somente quando o cliente escolhe o serviço.
+async function initializeServiceLabels() {
+  return true;
+}
+
 module.exports = {
   initializeServiceLabels,
   replaceServiceLabel,
   applyNamedLabel,
-  managedServiceLabelNames,
   getServiceLabel,
   normalizeChatId: Identity.normalizeChatId,
   _test: {
+    configuredGhostIds,
     desiredHex,
-    findCanonicalLabel: findCanonicalList,
-    listId,
-    listName,
-    nearestPaletteIndex,
     normalizeName,
     orderedCandidateIds,
+    removeLegacyGhostIds,
   },
 };
