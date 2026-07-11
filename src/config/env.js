@@ -37,10 +37,10 @@ function mapList(name) {
     }, {});
 }
 
-const serviceLabelLetreiro = process.env.SERVICE_LABEL_LETREIRO || 'Orçamento letreiro';
+const serviceLabelLetreiro = process.env.SERVICE_LABEL_LETREIRO || 'Orçamento letreiros';
 const serviceLabelPlotagem = process.env.SERVICE_LABEL_PLOTAGEM || 'Plotagens';
 const serviceLabelOutros = process.env.SERVICE_LABEL_OUTROS || 'Outros';
-const serviceLabelLetreiroColor = process.env.SERVICE_LABEL_LETREIRO_COLOR || 'purple';
+const serviceLabelLetreiroColor = process.env.SERVICE_LABEL_LETREIRO_COLOR || 'green';
 
 const env = {
   sessionName: process.env.WPP_SESSION_NAME || 'personalize-wppconnect',
