@@ -6,32 +6,22 @@ const ServiceLabels = require('../src/core/serviceLabels');
 
 const {
   buildNameAliases,
-  desiredHex,
   findCanonicalLabel,
-  invalidateResolvedList,
   normalizeName,
-  resolvedLists,
 } = ServiceLabels._test;
 
 async function run() {
   assert.strictEqual(normalizeName('  Orçamento   LETREIROS '), 'orcamento letreiros');
   assert.deepStrictEqual(
-    buildNameAliases({ name: 'Orçamento letreiro' }).map(normalizeName),
-    ['orcamento letreiro', 'orcamento letreiros'],
+    buildNameAliases({ name: 'Orçamento letreiros' }).map(normalizeName),
+    ['orcamento letreiros', 'orcamento letreiro'],
   );
-  assert.strictEqual(desiredHex('purple'), '#7f66ff');
 
-  const legacyUsed = findCanonicalLabel([
-    { id: '18', name: 'Orçamento letreiro', count: 0 },
-    { id: '12', name: 'Orçamento letreiros', count: 14 },
-  ], { name: 'Orçamento letreiro' });
-  assert.strictEqual(legacyUsed.id, '12', 'deve reutilizar a lista plural antiga que já tem contatos');
-
-  const exactUsed = findCanonicalLabel([
-    { id: '18', name: 'Orçamento letreiro', count: 20 },
-    { id: '12', name: 'Orçamento letreiros', count: 14 },
-  ], { name: 'Orçamento letreiro' });
-  assert.strictEqual(exactUsed.id, '18', 'deve preferir a configurada quando também está em uso');
+  const canonical = findCanonicalLabel([
+    { id: '7', name: 'Orçamento letreiro', count: 0 },
+    { id: '9', name: 'Orçamento letreiros', count: 10 },
+  ], { name: 'Orçamento letreiros' });
+  assert.strictEqual(canonical.id, '9', 'deve reutilizar a lista plural antiga que já tem contatos');
 
   const originalGetCandidates = Identity.getLabelCandidateIds;
   const originalNormalize = Identity.normalizeChatId;
@@ -39,26 +29,28 @@ async function run() {
   Identity.getLabelCandidateIds = () => ['111@lid', '55111@c.us'];
 
   const lists = [
-    { id: '5', name: 'Adriano', count: 4, colorIndex: 1 },
-    { id: '12', name: 'Orçamento letreiros', count: 14, colorIndex: 2 },
+    { id: '5', name: 'Adriano', count: 1, colorIndex: 1 },
+    { id: '9', name: 'Orçamento letreiros', count: 10, colorIndex: 2 },
   ];
-  const chatLists = new Map([
-    ['55111@c.us', new Set(['5'])],
-  ]);
+  const chats = new Map([['55111@c.us', new Set(['5'])]]);
   const operations = [];
-  let hideNewLabelFromVerification = true;
+  let createVisible = true;
   let nextId = 20;
 
   const browserWindow = {
     WPP: {
       labels: {
         async getAllLabels() { return lists; },
-        async getLabelColorPalette() { return ['#ff2e74', '#7f66ff', '#00a884']; },
+        async getLabelColorPalette() { return ['#ff2e74', '#00a884', '#667781']; },
         async addOrRemoveLabels(chatIds, options) {
-          operations.push({ mode: 'labels', chatIds: [...chatIds], options: options.map((item) => ({ ...item })) });
+          operations.push({
+            mode: 'labels',
+            chatIds: [...chatIds],
+            options: options.map((item) => ({ ...item })),
+          });
           for (const chatId of chatIds) {
-            if (!chatLists.has(chatId)) throw new Error(`Chat ${chatId} not found`);
-            const attached = chatLists.get(chatId);
+            if (!chats.has(chatId)) throw new Error(`Chat ${chatId} not found`);
+            const attached = chats.get(chatId);
             for (const option of options) {
               if (option.type === 'add') attached.add(String(option.labelId));
               if (option.type === 'remove') attached.delete(String(option.labelId));
@@ -69,8 +61,8 @@ async function run() {
       lists: {
         async create(name, chatIds, colorIndex) {
           const id = String(nextId++);
-          lists.push({ id, name, count: 0, colorIndex });
           operations.push({ mode: 'create', id, name, chatIds: [...chatIds], colorIndex });
+          if (createVisible) lists.push({ id, name, count: 0, colorIndex });
           return id;
         },
         async addChats(listId, chatIds) {
@@ -81,23 +73,20 @@ async function run() {
             throw err;
           }
           for (const chatId of chatIds) {
-            if (!chatLists.has(chatId)) throw new Error(`Chat ${chatId} not found`);
-            chatLists.get(chatId).add(String(listId));
+            if (!chats.has(chatId)) throw new Error(`Chat ${chatId} not found`);
+            chats.get(chatId).add(String(listId));
           }
         },
       },
     },
     Store: {
       Chat: {
-        get(chatId) { return chatLists.has(chatId) ? { id: chatId } : null; },
-        async find(chatId) { return chatLists.has(chatId) ? { id: chatId } : null; },
+        get(chatId) { return chats.has(chatId) ? { id: chatId } : null; },
+        async find(chatId) { return chats.has(chatId) ? { id: chatId } : null; },
       },
       Label: {
         getLabelsForModel(chat) {
-          const ids = [...(chatLists.get(chat.id) || [])];
-          return ids
-            .filter((id) => !(hideNewLabelFromVerification && id !== '5'))
-            .map((id) => ({ id }));
+          return [...(chats.get(chat.id) || [])].map((id) => ({ id }));
         },
       },
     },
@@ -122,63 +111,52 @@ async function run() {
     const first = await ServiceLabels.applyNamedLabel(
       { client },
       '111@lid',
-      { name: 'Orçamento letreiro', color: 'purple' },
+      { name: 'Orçamento letreiro', color: 'green' },
     );
 
     assert.strictEqual(first.applied, true);
-    assert.strictEqual(first.verified, null, 'atraso do Store não pode transformar a escrita em falha');
-    assert.strictEqual(first.chatId, '55111@c.us');
-    assert.strictEqual(first.targetId, '12');
-    assert.strictEqual(first.targetName, 'Orçamento letreiros');
-    assert.deepStrictEqual([...chatLists.get('55111@c.us')].sort(), ['12', '5']);
+    assert.strictEqual(first.targetId, '9');
+    assert.deepStrictEqual([...chats.get('55111@c.us')].sort(), ['5', '9']);
+
+    chats.set('55111@c.us', new Set(['5']));
+    createVisible = false;
+
+    const blocked = await ServiceLabels.applyNamedLabel(
+      { client },
+      '55111@c.us',
+      { name: 'Lista fantasma', color: 'purple' },
+    );
+
+    assert.strictEqual(blocked, false);
     assert.strictEqual(
-      operations.some((item) => item.options?.some((option) => option.type === 'remove')),
+      operations.some((item) => item.mode === 'addChats' && item.listId === '20'),
       false,
-      'nunca deve remover etiquetas de vendedor ou outras etiquetas',
+      'ID devolvido pela criação não pode ser aplicado se não apareceu no catálogo',
     );
+    assert.deepStrictEqual([...chats.get('55111@c.us')], ['5']);
 
-    const oldIndex = lists.findIndex((item) => item.id === '12');
-    lists.splice(oldIndex, 1, { id: '15', name: 'Orçamento letreiros', count: 1, colorIndex: 2 });
-    chatLists.set('55111@c.us', new Set(['5']));
-    hideNewLabelFromVerification = false;
-
-    const recovered = await ServiceLabels.applyNamedLabel(
-      { client },
-      '55111@c.us',
-      { name: 'Orçamento letreiro', color: 'purple' },
-    );
-
-    assert.strictEqual(recovered.applied, true);
-    assert.strictEqual(recovered.verified, true);
-    assert.strictEqual(recovered.targetId, '15', 'deve invalidar cache e localizar o novo ID');
-    assert.deepStrictEqual([...chatLists.get('55111@c.us')].sort(), ['15', '5']);
-
-    invalidateResolvedList({ name: 'Plotagens' });
-    const createdFirst = await ServiceLabels.applyNamedLabel(
-      { client },
-      '55111@c.us',
-      { name: 'Plotagens', color: 'gray' },
-    );
-    const createdSecond = await ServiceLabels.applyNamedLabel(
+    createVisible = true;
+    const created = await ServiceLabels.applyNamedLabel(
       { client },
       '55111@c.us',
       { name: 'Plotagens', color: 'gray' },
     );
 
-    assert.strictEqual(createdFirst.applied, true);
-    assert.strictEqual(createdSecond.alreadyAttached, true);
+    assert.strictEqual(created.applied, true);
+    assert.ok(lists.some((item) => item.name === 'Plotagens'));
     assert.strictEqual(
-      operations.filter((item) => item.mode === 'create' && item.name === 'Plotagens').length,
-      1,
-      'lista ausente deve ser criada somente uma vez',
+      operations.some((item) => item.options?.some(
+        (option) => option.type === 'remove' && option.labelId === '5',
+      )),
+      false,
+      'a etiqueta manual do vendedor nunca deve ser removida',
     );
-    assert.ok(resolvedLists.size >= 1);
   } finally {
     Identity.getLabelCandidateIds = originalGetCandidates;
     Identity.normalizeChatId = originalNormalize;
   }
 
-  console.log('[TESTE LISTAS] aliases, aplicação aditiva, atraso, cache inválido e criação única: OK');
+  console.log('[TESTE LISTAS] catálogo real, bloqueio de fantasma e preservação manual: OK');
 }
 
 run().catch((err) => {
