@@ -18,7 +18,7 @@ const Store = require('./services/leadStore');
 const Identity = require('./services/contactIdentity');
 const { env } = require('./config/env');
 
-const BUILD_ID = 'real-whatsapp-business-lists-create-once-2026-07-10-06';
+const BUILD_ID = 'real-whatsapp-business-lists-create-and-recover-2026-07-10-07';
 const ACTIVE_SERVICE_FLOWS = new Set(['letreiro', 'plotagem', 'outros']);
 const MULTI_MESSAGE_STAGES = new Set([
   'plotagem_descricao',
@@ -196,6 +196,28 @@ async function repairSessionServiceLabel(channel, clientId, repairedKeys, source
   return false;
 }
 
+async function reconcileActiveServiceLists(channel, repairedKeys) {
+  if (!channel?.client) return { found: 0, repaired: 0 };
+
+  const sessions = Store.listSessions();
+  let found = 0;
+  let repaired = 0;
+
+  for (const session of sessions) {
+    const flow = getActiveServiceFlow(session);
+    if (!flow) continue;
+
+    found += 1;
+    const contactId = session.chatId || session.clientId || session.id;
+    if (await repairSessionServiceLabel(channel, contactId, repairedKeys, 'reinício')) {
+      repaired += 1;
+    }
+  }
+
+  console.log(`[LISTAS] recuperação pós-reinício concluída: ativos=${found} recuperados=${repaired}`);
+  return { found, repaired };
+}
+
 function blockPdfSending(channel) {
   if (!channel) return;
   if (typeof channel.sendDocument === 'function') {
@@ -230,7 +252,7 @@ async function main() {
   console.log(`[PersonalizeWppConect] buffer listas/botões: ${env.interactiveBufferMs}ms`);
   console.log('[PersonalizeWppConect] respostas comuns: digitação única + balões sem pausa artificial');
   console.log('[PersonalizeWppConect] boas-vindas: saudação + imagem com link na legenda + lista, sem digitação e sem delay artificial');
-  console.log('[PersonalizeWppConect] listas: cria uma única vez com WPP.lists, reutiliza pelo nome e nunca remove listas manuais');
+  console.log('[PersonalizeWppConect] listas: cria uma única vez com WPP.lists, reutiliza pelo nome, recupera sessões ativas e nunca remove listas manuais');
   console.log('[PersonalizeWppConect] finalização: dados salvos na nota do contato; sem encaminhamento ao vendedor');
 
   if (env.allowedClientNumbers?.length || env.allowedChatIds?.length) {
@@ -284,7 +306,7 @@ async function main() {
       return;
     }
 
-    // Primeira mensagem depois de um reinício também repara a lista da sessão ativa.
+    // Primeira mensagem depois de um reinício também confere a lista da sessão ativa.
     await repairSessionServiceLabel(channel, canonicalChatId, repairedServiceLabels, 'primeira mensagem');
 
     const key = messageKey(raw || { from: canonicalChatId, text: effectiveText });
@@ -319,6 +341,9 @@ async function main() {
   installMessageExperience(channel);
   await initializeServiceLabels(channel).catch((err) => {
     console.warn('[LISTAS] preparação inicial falhou:', err?.message || err);
+  });
+  await reconcileActiveServiceLists(channel, repairedServiceLabels).catch((err) => {
+    console.warn('[LISTAS] recuperação das sessões ativas falhou:', err?.message || err);
   });
   console.log('[PersonalizeWppConect] conectado. Aguardando mensagens...');
 
