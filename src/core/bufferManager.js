@@ -40,6 +40,26 @@ class BufferManager {
     this.map.set(id, item);
   }
 
+  async flush(clientId) {
+    const id = normalizeBufferId(clientId);
+    const item = this.map.get(id);
+    if (!item?.messages?.length) return false;
+    if (item.timer) clearTimeout(item.timer);
+    this.map.delete(id);
+    await this.onFlush(id, item.messages);
+    return true;
+  }
+
+  async flushAll() {
+    const ids = [...this.map.keys()];
+    for (const id of ids) await this.flush(id);
+    return ids.length;
+  }
+
+  pendingCount() {
+    return this.map.size;
+  }
+
   clear(clientId) {
     const id = normalizeBufferId(clientId);
     const item = this.map.get(id);
