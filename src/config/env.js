@@ -101,7 +101,7 @@ const env = {
     || process.env.MOSTRUARIO_LETREIRO_LINK_URL
     || 'https://personalizeseuambiente.com.br/mostruario-letreiros',
   assetTabelaCoresBaseName: process.env.ASSET_TABELA_CORES_BASENAME || 'tabela-cores-v2',
-  assetTabelaEspessuraBaseName: process.env.ASSET_TABELA_ESPESSURA_BASENAME || 'tabela-espessura',
+  assetTabelaEspessuraImageBaseName: process.env.ASSET_TABELA_ESPESSURA_BASENAME || 'tabela-espessura',
   assetTabelaProfundidadeBaseName: process.env.ASSET_TABELA_PROFUNDIDADE_BASENAME || 'tabela-profundidade-3mm',
 };
 
