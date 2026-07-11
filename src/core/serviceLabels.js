@@ -4,7 +4,6 @@ const { env } = require('../config/env');
 const Identity = require('../services/contactIdentity');
 const Store = require('../services/leadStore');
 
-const resolvedLists = new Map();
 const creationLocks = new Map();
 let initializationPromise = null;
 let initializationFinished = false;
@@ -133,7 +132,7 @@ function findCanonicalList(items, target) {
 
   if (!matches.length) return null;
 
-  const canonical = [...matches].sort((a, b) => {
+  return [...matches].sort((a, b) => {
     const usedDifference = Number(listCount(b) > 0) - Number(listCount(a) > 0);
     if (usedDifference) return usedDifference;
 
@@ -150,16 +149,6 @@ function findCanonicalList(items, target) {
 
     return compareIds(a, b);
   })[0];
-
-  if (matches.length > 1) {
-    console.warn(
-      `[LISTAS] equivalentes/duplicadas para "${targetObject.name}": `
-      + `${matches.map((item) => `${listName(item)}#${listId(item)}`).join(', ')}. `
-      + `Reutilizando ${listName(canonical)}#${listId(canonical)} sem apagar nenhuma.`,
-    );
-  }
-
-  return canonical;
 }
 
 async function readBusinessLists(client) {
@@ -174,11 +163,10 @@ async function readBusinessLists(client) {
           id: String(item?.id?._serialized || item?.id || item?.labelId || ''),
           name: String(item?.name || item?.label || ''),
           colorIndex: item?.colorIndex ?? item?.colorId ?? item?.color ?? null,
-          hexColor: item?.hexColor || null,
           count: Number(item?.count || 0),
         }));
       });
-      if (Array.isArray(pageItems) && pageItems.length) return pageItems;
+      if (Array.isArray(pageItems)) return pageItems;
     } catch (err) {
       console.warn('[LISTAS] leitura pelo WA-JS falhou:', err?.message || err);
     }
@@ -194,39 +182,6 @@ async function readBusinessLists(client) {
   }
 
   return [];
-}
-
-function cacheKey(target) {
-  return normalizeName(target?.name);
-}
-
-function invalidateResolvedList(target) {
-  const key = cacheKey(target);
-  if (key) resolvedLists.delete(key);
-}
-
-async function resolveExistingList(client, target, options = {}) {
-  const key = cacheKey(target);
-  if (!key) return null;
-
-  const refresh = Boolean(options.refresh);
-  const attempts = Math.max(1, Number(options.attempts || 3));
-  const delayMs = Math.max(0, Number(options.delayMs || 400));
-
-  if (!refresh && resolvedLists.has(key)) return resolvedLists.get(key);
-
-  for (let attempt = 1; attempt <= attempts; attempt += 1) {
-    const items = await readBusinessLists(client);
-    const found = findCanonicalList(items, target);
-    if (found) {
-      resolvedLists.set(key, found);
-      return found;
-    }
-    if (attempt < attempts) await wait(delayMs);
-  }
-
-  resolvedLists.delete(key);
-  return null;
 }
 
 function hexToRgb(hex) {
@@ -263,7 +218,7 @@ function nearestPaletteIndex(palette, requestedHex) {
   return Number.isInteger(bestIndex) ? bestIndex : null;
 }
 
-async function createRealBusinessList(client, target) {
+async function createAndConfirmBusinessList(client, target) {
   if (!client?.page?.evaluate) return null;
 
   return client.page.evaluate(async ({ name, aliases, requestedHex }) => {
@@ -281,15 +236,19 @@ async function createRealBusinessList(client, target) {
     const wantedNames = new Set((aliases || []).map(normalize));
     const toArray = (value) => (Array.isArray(value) ? value : Object.values(value || {}));
 
+    const findVisible = (items, expectedId = '') => items.find((item) => (
+      expectedId && String(item?.id?._serialized || item?.id || item?.labelId || '') === expectedId
+    )) || items.find((item) => wantedNames.has(normalize(item?.name || item?.label)));
+
     const before = toArray(await WPP.labels.getAllLabels());
-    const existing = before.find((item) => wantedNames.has(normalize(item?.name || item?.label)));
-    if (existing?.id || existing?.labelId) {
+    const existing = findVisible(before);
+    if (existing) {
       return {
         ok: true,
         existing: true,
-        id: String(existing.id || existing.labelId),
-        name: String(existing.name || existing.label || name),
-        count: Number(existing.count || 0),
+        id: String(existing?.id?._serialized || existing?.id || existing?.labelId || ''),
+        name: String(existing?.name || existing?.label || name),
+        count: Number(existing?.count || 0),
         colorIndex: existing?.colorIndex ?? existing?.colorId ?? existing?.color ?? null,
       };
     }
@@ -332,34 +291,41 @@ async function createRealBusinessList(client, target) {
     }
 
     let createdId = '';
-    let lastError = '';
-    for (const requestedIndex of [colorIndex, undefined]) {
-      if (requestedIndex === undefined && colorIndex === undefined && createdId) break;
-      try {
-        createdId = String(await WPP.lists.create(
-          name,
-          [],
-          Number.isInteger(requestedIndex) ? requestedIndex : undefined,
-        ));
-        if (createdId) break;
-      } catch (err) {
-        lastError = String(err?.message || err?.text || err || '');
+    try {
+      createdId = String(await WPP.lists.create(
+        name,
+        [],
+        Number.isInteger(colorIndex) ? colorIndex : undefined,
+      ) || '');
+    } catch (err) {
+      return {
+        ok: false,
+        reason: 'create_failed',
+        error: String(err?.message || err?.text || err || ''),
+      };
+    }
+
+    for (let attempt = 1; attempt <= 8; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      const after = toArray(await WPP.labels.getAllLabels());
+      const visible = findVisible(after, createdId);
+      if (visible) {
+        return {
+          ok: true,
+          created: true,
+          id: String(visible?.id?._serialized || visible?.id || visible?.labelId || ''),
+          name: String(visible?.name || visible?.label || name),
+          count: Number(visible?.count || 0),
+          colorIndex: visible?.colorIndex ?? visible?.colorId ?? visible?.color ?? colorIndex ?? null,
+        };
       }
     }
 
-    if (!createdId) return { ok: false, reason: 'create_failed', error: lastError };
-
-    await new Promise((resolve) => setTimeout(resolve, 800));
-    const after = toArray(await WPP.labels.getAllLabels());
-    const found = after.find((item) => String(item?.id || item?.labelId || '') === createdId)
-      || after.find((item) => wantedNames.has(normalize(item?.name || item?.label)));
-
     return {
-      ok: true,
-      id: String(found?.id || found?.labelId || createdId),
-      name: String(found?.name || found?.label || name),
-      count: Number(found?.count || 0),
-      colorIndex: found?.colorIndex ?? found?.colorId ?? found?.color ?? colorIndex ?? null,
+      ok: false,
+      reason: 'created_not_visible',
+      createdId,
+      error: 'A API retornou um ID, mas a lista não apareceu no catálogo real do WhatsApp.',
     };
   }, {
     name: String(target.name || '').trim(),
@@ -369,50 +335,35 @@ async function createRealBusinessList(client, target) {
 }
 
 async function ensureServiceList(client, target) {
-  const key = cacheKey(target);
+  const key = normalizeName(target?.name);
   if (!key) return null;
 
-  const existing = await resolveExistingList(client, target, {
-    refresh: true,
-    attempts: 3,
-    delayMs: 400,
-  });
-  if (existing) return existing;
+  const current = findCanonicalList(await readBusinessLists(client), target);
+  if (current) return current;
 
   if (creationLocks.has(key)) return creationLocks.get(key);
 
   const task = (async () => {
-    const confirmed = await resolveExistingList(client, target, {
-      refresh: true,
-      attempts: 2,
-      delayMs: 500,
-    });
+    const confirmed = findCanonicalList(await readBusinessLists(client), target);
     if (confirmed) return confirmed;
 
-    let created = null;
-    try {
-      created = await createRealBusinessList(client, target);
-    } catch (err) {
-      console.warn(`[LISTAS] erro ao criar "${target.name}":`, err?.message || err);
-    }
-
+    const created = await createAndConfirmBusinessList(client, target);
     if (!created?.ok || !created?.id) {
       console.warn(
-        `[LISTAS] não foi possível criar "${target.name}": `
+        `[LISTAS] "${target.name}" não foi confirmada no catálogo; nenhuma etiqueta será aplicada. `
         + `${created?.reason || 'sem retorno'} ${created?.error || ''}`.trim(),
       );
       return null;
     }
 
-    const refreshed = await resolveExistingList(client, target, {
-      refresh: true,
-      attempts: 5,
-      delayMs: 500,
-    });
-    const item = refreshed || created;
-    resolvedLists.set(key, item);
-    console.log(`[LISTAS] pronta: ${listName(item)} | ID ${listId(item)}`);
-    return item;
+    const visible = findCanonicalList(await readBusinessLists(client), target);
+    if (!visible || listId(visible) !== String(created.id)) {
+      console.warn(`[LISTAS] "${target.name}" ainda não está visível; aplicação bloqueada.`);
+      return null;
+    }
+
+    console.log(`[LISTAS] pronta e visível: ${listName(visible)} | ID ${listId(visible)}`);
+    return visible;
   })().finally(() => {
     creationLocks.delete(key);
   });
@@ -430,10 +381,7 @@ async function initializeServiceLabels(channel) {
     let ready = true;
     for (const target of serviceTargets()) {
       const item = await ensureServiceList(channel.client, target);
-      if (!item) {
-        ready = false;
-        console.warn(`[LISTAS] ausente: ${target.name}`);
-      }
+      if (!item) ready = false;
     }
     initializationFinished = ready;
     return ready;
@@ -452,11 +400,13 @@ async function inspectChatLists(client, chatId) {
   try {
     return await client.page.evaluate(async ({ chatId }) => {
       const WPP = window.WPP || null;
-      const Store = window.Store || null;
+      const StoreWindow = window.Store || null;
       let chat = null;
       try {
-        chat = Store?.Chat?.get?.(chatId) || null;
-        if (!chat && typeof Store?.Chat?.find === 'function') chat = await Store.Chat.find(chatId);
+        chat = StoreWindow?.Chat?.get?.(chatId) || null;
+        if (!chat && typeof StoreWindow?.Chat?.find === 'function') {
+          chat = await StoreWindow.Chat.find(chatId);
+        }
       } catch (_) {}
       if (!chat) return { available: true, chatFound: false, items: [] };
 
@@ -468,7 +418,7 @@ async function inspectChatLists(client, chatId) {
         }
       } catch (_) {}
 
-      const labelStore = Store?.Label || Store?.Labels || null;
+      const labelStore = StoreWindow?.Label || StoreWindow?.Labels || null;
       if (typeof labelStore?.getLabelsForModel !== 'function') {
         return { available: false, chatFound: true, items: [] };
       }
@@ -481,7 +431,7 @@ async function inspectChatLists(client, chatId) {
 
       const items = attached.map((entry) => {
         const id = String(entry?.id?._serialized || entry?.id || entry?.labelId || entry || '');
-        const known = all.find((item) => String(item?.id || item?.labelId || '') === id) || null;
+        const known = all.find((item) => String(item?.id?._serialized || item?.id || item?.labelId || '') === id) || null;
         return {
           id,
           name: String(entry?.name || entry?.label || known?.name || known?.label || ''),
@@ -526,19 +476,22 @@ function persistManualLists(clientId, items = []) {
   }
 }
 
-function errorText(error) {
-  return String(error?.code || error?.name || '') + ' ' + String(error?.message || error?.text || error || '');
-}
-
-function isListNotFound(error) {
-  return /list_not_found|label_not_found|list\s+[^\s]+\s+not found|etiqueta.+nao encontrada/i.test(errorText(error));
-}
-
-async function addChatToList(client, chatId, targetId) {
+async function addChatToVisibleList(client, chatId, targetId) {
   if (client?.page?.evaluate) {
     try {
       return await client.page.evaluate(async ({ chatId, targetId }) => {
         const WPP = window.WPP || null;
+        if (!WPP?.labels?.getAllLabels) {
+          return { submitted: false, mode: 'unavailable', reason: 'catalog_unavailable' };
+        }
+
+        const value = await WPP.labels.getAllLabels();
+        const lists = Array.isArray(value) ? value : Object.values(value || {});
+        const visible = lists.some((item) => String(item?.id?._serialized || item?.id || item?.labelId || '') === String(targetId));
+        if (!visible) {
+          return { submitted: false, mode: 'blocked', reason: 'target_not_visible' };
+        }
+
         if (WPP?.lists?.addChats) {
           await WPP.lists.addChats(String(targetId), [chatId]);
           return { submitted: true, mode: 'wpp-lists' };
@@ -550,20 +503,24 @@ async function addChatToList(client, chatId, targetId) {
           );
           return { submitted: true, mode: 'wpp-labels' };
         }
-        return { submitted: false, mode: 'unavailable' };
+        return { submitted: false, mode: 'unavailable', reason: 'write_unavailable' };
       }, { chatId, targetId: String(targetId) });
     } catch (err) {
       return {
         submitted: false,
         mode: 'wpp-error',
+        reason: 'write_failed',
         error: String(err?.message || err),
-        staleList: isListNotFound(err),
       };
     }
   }
 
   if (typeof client?.addOrRemoveLabels === 'function') {
     try {
+      const lists = await readBusinessLists(client);
+      if (!lists.some((item) => listId(item) === String(targetId))) {
+        return { submitted: false, mode: 'blocked', reason: 'target_not_visible' };
+      }
       await client.addOrRemoveLabels(
         [chatId],
         [{ labelId: String(targetId), type: 'add' }],
@@ -573,13 +530,30 @@ async function addChatToList(client, chatId, targetId) {
       return {
         submitted: false,
         mode: 'wrapper-error',
+        reason: 'write_failed',
         error: String(err?.message || err),
-        staleList: isListNotFound(err),
       };
     }
   }
 
-  return { submitted: false, mode: 'unavailable' };
+  return { submitted: false, mode: 'unavailable', reason: 'write_unavailable' };
+}
+
+async function removeExactSubmittedLabel(client, chatId, targetId) {
+  if (!client?.page?.evaluate) return false;
+  try {
+    return await client.page.evaluate(async ({ chatId, targetId }) => {
+      const WPP = window.WPP || null;
+      if (!WPP?.labels?.addOrRemoveLabels) return false;
+      await WPP.labels.addOrRemoveLabels(
+        [chatId],
+        [{ labelId: String(targetId), type: 'remove' }],
+      );
+      return true;
+    }, { chatId, targetId: String(targetId) });
+  } catch (_) {
+    return false;
+  }
 }
 
 function orderedCandidateIds(clientId) {
@@ -595,7 +569,6 @@ async function verifyAttachment(client, chatId, targetId) {
     if (!inspection.available || inspection.chatFound === false) return null;
     if (attempt < 3) await wait(650);
   }
-  // A escrita não é revertida só porque o Store visual ainda não sincronizou.
   return null;
 }
 
@@ -603,19 +576,19 @@ async function applyNamedLabel(channel, clientId, target) {
   if (!env.enableContactLabels || !channel?.client || !target?.name) return false;
 
   const client = channel.client;
-  let item = await resolveExistingList(client, target);
-  if (!item) item = await ensureServiceList(client, target);
+  const item = await ensureServiceList(client, target);
   if (!item) {
-    console.warn(`[LISTAS] não foi possível criar ou localizar "${target.name}".`);
+    console.warn(`[LISTAS] aplicação bloqueada: "${target.name}" não existe no catálogo real.`);
     return false;
   }
 
+  const targetId = listId(item);
   const candidates = orderedCandidateIds(clientId);
+
   for (const chatId of candidates) {
     const before = await inspectChatLists(client, chatId);
     persistManualLists(clientId, before.items);
 
-    let targetId = listId(item);
     if (before.items.some((entry) => String(entry.id) === targetId)) {
       return {
         applied: true,
@@ -628,24 +601,22 @@ async function applyNamedLabel(channel, clientId, target) {
       };
     }
 
-    let operation = await addChatToList(client, chatId, targetId);
-
-    if (!operation.submitted && operation.staleList) {
-      console.warn(`[LISTAS] ID ${targetId} ficou inválido; atualizando cache de "${target.name}".`);
-      invalidateResolvedList(target);
-      item = await resolveExistingList(client, target, {
-        refresh: true,
-        attempts: 3,
-        delayMs: 350,
-      });
-      if (!item) item = await ensureServiceList(client, target);
-      targetId = listId(item);
-      if (targetId) operation = await addChatToList(client, chatId, targetId);
-    }
-
+    const operation = await addChatToVisibleList(client, chatId, targetId);
     if (!operation.submitted) {
       if (operation.error) console.warn(`[LISTAS] falha ao incluir ${chatId}: ${operation.error}`);
+      if (operation.reason === 'target_not_visible') {
+        console.warn(`[LISTAS] ID ${targetId} não está visível; escrita cancelada para evitar etiqueta fantasma.`);
+        return false;
+      }
       continue;
+    }
+
+    const catalogAfter = await readBusinessLists(client);
+    const stillVisible = catalogAfter.some((entry) => listId(entry) === targetId);
+    if (!stillVisible) {
+      await removeExactSubmittedLabel(client, chatId, targetId);
+      console.warn(`[LISTAS] ID ${targetId} sumiu do catálogo; etiqueta revertida para evitar marcador fantasma.`);
+      return false;
     }
 
     const verified = await verifyAttachment(client, chatId, targetId);
@@ -686,12 +657,10 @@ module.exports = {
     buildNameAliases,
     desiredHex,
     findCanonicalLabel: findCanonicalList,
-    invalidateResolvedList,
     listId,
     listName,
     nearestPaletteIndex,
     normalizeName,
     orderedCandidateIds,
-    resolvedLists,
   },
 };
