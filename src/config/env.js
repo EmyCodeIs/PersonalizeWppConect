@@ -23,24 +23,6 @@ function list(name, fallback = []) {
     .filter(Boolean);
 }
 
-function namedColors(name, fallback = []) {
-  const raw = process.env[name];
-  const source = raw === undefined || raw === null ? fallback : String(raw).split(/[;,\n]/);
-  return source
-    .map((item) => {
-      if (item && typeof item === 'object') return item;
-      const text = String(item || '').trim();
-      if (!text) return null;
-      const separator = text.includes('|') ? '|' : ':';
-      const index = text.lastIndexOf(separator);
-      if (index <= 0) return null;
-      const labelName = text.slice(0, index).trim();
-      const color = text.slice(index + 1).trim();
-      return labelName && color ? { name: labelName, color } : null;
-    })
-    .filter(Boolean);
-}
-
 function mapList(name) {
   const raw = process.env[name];
   if (!raw) return {};
@@ -58,7 +40,7 @@ function mapList(name) {
 const serviceLabelLetreiro = process.env.SERVICE_LABEL_LETREIRO || 'Orçamento letreiros';
 const serviceLabelPlotagem = process.env.SERVICE_LABEL_PLOTAGEM || 'Plotagens';
 const serviceLabelOutros = process.env.SERVICE_LABEL_OUTROS || 'Outros';
-const serviceLabelLetreiroColor = process.env.SERVICE_LABEL_LETREIRO_COLOR || 'green';
+const serviceLabelLetreiroColor = process.env.SERVICE_LABEL_LETREIRO_COLOR || 'purple';
 
 const env = {
   sessionName: process.env.WPP_SESSION_NAME || 'personalize-wppconnect',
@@ -68,8 +50,6 @@ const env = {
   businessName: process.env.BUSINESS_NAME || 'Personalize',
   sellerName: process.env.SELLER_NAME || 'Vendedor Personalize',
 
-  // Entrada do cliente. O buffer curto atende respostas simples; o longo é usado
-  // em medidas, arte, endereço, Pantone e observações com várias mensagens.
   bufferMs: Math.max(800, num('BUFFER_MS', 4500)),
   multiMessageBufferMs: Math.max(2500, num('MULTI_MESSAGE_BUFFER_MS', 8000)),
   measureBufferMs: Math.max(2500, num('MEASURE_BUFFER_MS', 8000)),
@@ -80,8 +60,6 @@ const env = {
   cityBufferMs: Math.max(800, num('CITY_BUFFER_MS', 2500)),
   interactiveBufferMs: Math.max(100, num('INTERACTIVE_BUFFER_MS', 350)),
 
-  // Mantidos para respostas avulsas. Dentro de um grupo de resposta o sistema
-  // ignora esses delays e envia os balões em sequência, sem pausas artificiais.
   minReplyDelayMs: Math.max(0, num('MIN_REPLY_DELAY_MS', 1800)),
   maxReplyDelayMs: Math.max(0, num('MAX_REPLY_DELAY_MS', 4200)),
   enableTyping: bool('ENABLE_TYPING', true),
@@ -94,6 +72,7 @@ const env = {
   enableContactLabels: bool('ENABLE_CONTACT_LABELS', true),
   detectManualContactLabels: bool('DETECT_MANUAL_CONTACT_LABELS', true),
   storeManualContactLabels: bool('STORE_MANUAL_CONTACT_LABELS', true),
+
   awaitingQuoteLabelName: process.env.AWAITING_QUOTE_LABEL_NAME || serviceLabelLetreiro,
   awaitingQuoteLabelColor: process.env.AWAITING_QUOTE_LABEL_COLOR || serviceLabelLetreiroColor,
   serviceLabelLetreiro,
@@ -104,18 +83,25 @@ const env = {
   serviceLabelOutrosColor: process.env.SERVICE_LABEL_OUTROS_COLOR || 'red',
   supportLabelName: process.env.SUPPORT_LABEL_NAME || 'Suporte',
   supportLabelColor: process.env.SUPPORT_LABEL_COLOR || 'red',
-  sellerLabels: namedColors('SELLER_LABELS', [
-    { name: 'Adriano', color: 'green' },
-    { name: 'Aninha', color: 'blue' },
-    { name: 'Carlos', color: 'yellow' },
+
+  // Vendedores são responsabilidades salvas no banco, não etiquetas textuais.
+  sellerNames: list('SELLER_NAMES', ['Adriano', 'Aninha', 'Carlos']),
+  markSellerClientUnread: bool('MARK_SELLER_CLIENT_UNREAD', true),
+
+  serviceLabelReplaceGroup: list('SERVICE_LABEL_REPLACE_GROUP', [
+    serviceLabelLetreiro,
+    serviceLabelPlotagem,
+    serviceLabelOutros,
+    process.env.SUPPORT_LABEL_NAME || 'Suporte',
   ]),
-  serviceLabelReplaceGroup: list('SERVICE_LABEL_REPLACE_GROUP', [serviceLabelLetreiro, serviceLabelPlotagem, serviceLabelOutros]),
+  recreateMismatchedOperationalLabels: bool('RECREATE_MISMATCHED_OPERATIONAL_LABELS', true),
   labelObservationMinIntervalMs: Math.max(0, num('LABEL_OBSERVATION_MIN_INTERVAL_MS', 30000)),
   labelReconcileDelayMs: Math.max(0, num('LABEL_RECONCILE_DELAY_MS', 120)),
   labelReconcileIntervalMs: (() => {
     const value = num('LABEL_RECONCILE_INTERVAL_MS', 300000);
     return value <= 0 ? 0 : Math.max(60000, value);
   })(),
+
   enableUnreadBootstrap: bool('ENABLE_UNREAD_BOOTSTRAP', true),
   unreadBootstrapDelayMs: Math.max(1000, num('UNREAD_BOOTSTRAP_DELAY_MS', 6000)),
   unreadBootstrapMaxChats: Math.max(1, num('UNREAD_BOOTSTRAP_MAX_CHATS', 30)),
