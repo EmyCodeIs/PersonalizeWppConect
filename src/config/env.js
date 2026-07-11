@@ -23,6 +23,24 @@ function list(name, fallback = []) {
     .filter(Boolean);
 }
 
+function namedColors(name, fallback = []) {
+  const raw = process.env[name];
+  const source = raw === undefined || raw === null ? fallback : String(raw).split(/[;,\n]/);
+  return source
+    .map((item) => {
+      if (item && typeof item === 'object') return item;
+      const text = String(item || '').trim();
+      if (!text) return null;
+      const separator = text.includes('|') ? '|' : ':';
+      const index = text.lastIndexOf(separator);
+      if (index <= 0) return null;
+      const labelName = text.slice(0, index).trim();
+      const color = text.slice(index + 1).trim();
+      return labelName && color ? { name: labelName, color } : null;
+    })
+    .filter(Boolean);
+}
+
 function mapList(name) {
   const raw = process.env[name];
   if (!raw) return {};
@@ -37,10 +55,10 @@ function mapList(name) {
     }, {});
 }
 
-const serviceLabelLetreiro = process.env.SERVICE_LABEL_LETREIRO || 'Orçamento letreiro';
+const serviceLabelLetreiro = process.env.SERVICE_LABEL_LETREIRO || 'Orçamento letreiros';
 const serviceLabelPlotagem = process.env.SERVICE_LABEL_PLOTAGEM || 'Plotagens';
 const serviceLabelOutros = process.env.SERVICE_LABEL_OUTROS || 'Outros';
-const serviceLabelLetreiroColor = process.env.SERVICE_LABEL_LETREIRO_COLOR || 'purple';
+const serviceLabelLetreiroColor = process.env.SERVICE_LABEL_LETREIRO_COLOR || 'green';
 
 const env = {
   sessionName: process.env.WPP_SESSION_NAME || 'personalize-wppconnect',
@@ -84,7 +102,20 @@ const env = {
   serviceLabelLetreiroColor,
   serviceLabelPlotagemColor: process.env.SERVICE_LABEL_PLOTAGEM_COLOR || 'gray',
   serviceLabelOutrosColor: process.env.SERVICE_LABEL_OUTROS_COLOR || 'red',
+  supportLabelName: process.env.SUPPORT_LABEL_NAME || 'Suporte',
+  supportLabelColor: process.env.SUPPORT_LABEL_COLOR || 'red',
+  sellerLabels: namedColors('SELLER_LABELS', [
+    { name: 'Adriano', color: 'green' },
+    { name: 'Aninha', color: 'blue' },
+    { name: 'Carlos', color: 'yellow' },
+  ]),
   serviceLabelReplaceGroup: list('SERVICE_LABEL_REPLACE_GROUP', [serviceLabelLetreiro, serviceLabelPlotagem, serviceLabelOutros]),
+  labelObservationMinIntervalMs: Math.max(0, num('LABEL_OBSERVATION_MIN_INTERVAL_MS', 30000)),
+  labelReconcileDelayMs: Math.max(0, num('LABEL_RECONCILE_DELAY_MS', 120)),
+  labelReconcileIntervalMs: (() => {
+    const value = num('LABEL_RECONCILE_INTERVAL_MS', 300000);
+    return value <= 0 ? 0 : Math.max(60000, value);
+  })(),
   enableUnreadBootstrap: bool('ENABLE_UNREAD_BOOTSTRAP', true),
   unreadBootstrapDelayMs: Math.max(1000, num('UNREAD_BOOTSTRAP_DELAY_MS', 6000)),
   unreadBootstrapMaxChats: Math.max(1, num('UNREAD_BOOTSTRAP_MAX_CHATS', 30)),
