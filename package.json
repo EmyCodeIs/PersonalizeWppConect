@@ -1,7 +1,7 @@
 {
   "name": "personalize-wppconnect-cliente-flow",
-  "version": "0.7.0",
-  "description": "Port local do fluxo cliente da Personalize para WPPConnect, com etiquetas Business aplicadas exclusivamente por WPP.labels, preservação das etiquetas manuais, recuperação pós-reinício, links em legendas de imagem e finalização em nota do contato.",
+  "version": "0.7.1",
+  "description": "Port local do fluxo cliente da Personalize para WPPConnect, com criação única das listas reais do WhatsApp Business, preservação das listas manuais, recuperação pós-reinício, links em legendas de imagem e finalização em nota do contato.",
   "main": "src/index.js",
   "type": "commonjs",
   "scripts": {
