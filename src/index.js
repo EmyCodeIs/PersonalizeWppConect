@@ -11,15 +11,16 @@ const { installMessageExperience } = require('./core/messageExperience');
 const { isAllowedClient } = require('./core/allowedClient');
 const { extractName, normalizeText, titleCase } = require('./core/parsers');
 const {
-  initializeServiceLabels,
-  replaceServiceLabel,
+  ensureRequiredCatalog,
+  observeContactLabels,
+  reconcileTrackedContacts,
 } = require('./core/serviceLabels');
 const Store = require('./services/leadStore');
 const Identity = require('./services/contactIdentity');
+const ContactLabels = require('./services/contactLabelStore');
 const { env } = require('./config/env');
 
-const BUILD_ID = 'real-whatsapp-business-lists-create-and-recover-2026-07-10-07';
-const ACTIVE_SERVICE_FLOWS = new Set(['letreiro', 'plotagem', 'outros']);
+const BUILD_ID = 'persistent-contact-label-registry-2026-07-11-01';
 const MULTI_MESSAGE_STAGES = new Set([
   'plotagem_descricao',
   'plotagem_medida',
@@ -155,69 +156,6 @@ function resolveBufferDelay(clientId, raw, interactiveId) {
   return env.bufferMs;
 }
 
-function getActiveServiceFlow(session) {
-  if (!session || session.completed || session.dados?.botDone) return null;
-  const flow = String(session.dados?.flow || '').trim().toLowerCase();
-  if (!ACTIVE_SERVICE_FLOWS.has(flow)) return null;
-
-  const stage = String(session.etapa || '').trim();
-  if (!stage || ['inicio', 'escolher_servico', 'concluido'].includes(stage)) return null;
-  return flow;
-}
-
-function serviceRepairKey(session, flow, fallbackClientId = '') {
-  const contactId = session?.chatId || session?.clientId || session?.id || fallbackClientId;
-  return `${Store.normalizeClientId(contactId)}:${flow}`;
-}
-
-async function repairSessionServiceLabel(channel, clientId, repairedKeys, source = 'runtime') {
-  if (!channel?.client) return false;
-
-  const session = Store.getSession(clientId);
-  const flow = getActiveServiceFlow(session);
-  if (!flow) return false;
-
-  const contactId = session.chatId || session.clientId || session.id || clientId;
-  const key = serviceRepairKey(session, flow, contactId);
-  if (repairedKeys.has(key)) return true;
-
-  try {
-    const result = await replaceServiceLabel(channel, contactId, flow);
-    const applied = result === true || result?.applied === true;
-    if (applied) {
-      repairedKeys.add(key);
-      console.log(`[LISTAS] atendimento ativo recuperado (${source}): ${contactId} -> ${flow}`);
-      return true;
-    }
-  } catch (err) {
-    console.warn(`[LISTAS] falha ao recuperar atendimento ativo ${contactId} (${flow}):`, err?.message || err);
-  }
-
-  return false;
-}
-
-async function reconcileActiveServiceLists(channel, repairedKeys) {
-  if (!channel?.client) return { found: 0, repaired: 0 };
-
-  const sessions = Store.listSessions();
-  let found = 0;
-  let repaired = 0;
-
-  for (const session of sessions) {
-    const flow = getActiveServiceFlow(session);
-    if (!flow) continue;
-
-    found += 1;
-    const contactId = session.chatId || session.clientId || session.id;
-    if (await repairSessionServiceLabel(channel, contactId, repairedKeys, 'reinício')) {
-      repaired += 1;
-    }
-  }
-
-  console.log(`[LISTAS] recuperação pós-reinício concluída: ativos=${found} recuperados=${repaired}`);
-  return { found, repaired };
-}
-
 function blockPdfSending(channel) {
   if (!channel) return;
   if (typeof channel.sendDocument === 'function') {
@@ -244,6 +182,25 @@ function blockPdfSending(channel) {
   client.__personalizePdfGuardInstalled = true;
 }
 
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, Math.max(0, Number(ms || 0))));
+}
+
+function registerIncomingContact({ from, raw, source = 'event' }) {
+  const profileName = extractProfileName(raw);
+  const identity = Identity.registerContact({ chatId: from, raw });
+  const canonicalChatId = identity?.primaryChatId || from;
+  const allowed = isAllowedClient({ from: canonicalChatId, raw });
+  if (!allowed.allowed) return { allowed: false, canonicalChatId, identity, profileName };
+  const tracked = ContactLabels.registerContact({
+    clientId: canonicalChatId,
+    identity,
+    source,
+    profileName,
+  });
+  return { allowed: true, canonicalChatId, identity, profileName, tracked };
+}
+
 async function main() {
   console.log('[PersonalizeWppConect] iniciando...');
   console.log(`[PersonalizeWppConect] BUILD: ${BUILD_ID}`);
@@ -252,7 +209,7 @@ async function main() {
   console.log(`[PersonalizeWppConect] buffer listas/botões: ${env.interactiveBufferMs}ms`);
   console.log('[PersonalizeWppConect] respostas comuns: digitação única + balões sem pausa artificial');
   console.log('[PersonalizeWppConect] boas-vindas: saudação + imagem com link na legenda + lista, sem digitação e sem delay artificial');
-  console.log('[PersonalizeWppConect] listas: cria uma única vez com WPP.lists, reutiliza pelo nome, recupera sessões ativas e nunca remove listas manuais');
+  console.log('[PersonalizeWppConect] etiquetas: catálogo obrigatório + banco persistente por cliente + reconciliação após não lidas');
   console.log('[PersonalizeWppConect] finalização: dados salvos na nota do contato; sem encaminhamento ao vendedor');
 
   if (env.allowedClientNumbers?.length || env.allowedChatIds?.length) {
@@ -261,7 +218,6 @@ async function main() {
 
   let channel = null;
   const processedMessageIds = new Set();
-  const repairedServiceLabels = new Set();
 
   const buffer = new BufferManager({
     delayMs: env.bufferMs,
@@ -296,18 +252,19 @@ async function main() {
     const effectiveText = interactiveId || String(text || '').trim() || mediaMarker(raw);
     if (!effectiveText) return;
 
-    const profileName = extractProfileName(raw);
-    const identity = Identity.registerContact({ chatId: from, raw });
-    const canonicalChatId = identity?.primaryChatId || from;
-
-    const allowed = isAllowedClient({ from: canonicalChatId, raw });
-    if (!allowed.allowed) {
+    const registered = registerIncomingContact({ from, raw, source });
+    const { canonicalChatId, identity, profileName } = registered;
+    if (!registered.allowed) {
       console.log(`[PersonalizeWppConect] ignorado (${source}) fora da whitelist: ${canonicalChatId}`);
       return;
     }
 
-    // Primeira mensagem depois de um reinício também confere a lista da sessão ativa.
-    await repairSessionServiceLabel(channel, canonicalChatId, repairedServiceLabels, 'primeira mensagem');
+    await observeContactLabels(channel, canonicalChatId, {
+      force: false,
+      source: `entrada:${source}`,
+    }).catch((err) => {
+      console.warn(`[ETIQUETAS] leitura do contato ${canonicalChatId} falhou:`, err?.message || err);
+    });
 
     const key = messageKey(raw || { from: canonicalChatId, text: effectiveText });
     if (processedMessageIds.has(key)) return;
@@ -336,31 +293,91 @@ async function main() {
     return;
   }
 
+  ContactLabels.initializeTracking();
   channel = await createWppChannel({ onMessage });
   blockPdfSending(channel);
   installMessageExperience(channel);
-  await initializeServiceLabels(channel).catch((err) => {
-    console.warn('[LISTAS] preparação inicial falhou:', err?.message || err);
-  });
-  await reconcileActiveServiceLists(channel, repairedServiceLabels).catch((err) => {
-    console.warn('[LISTAS] recuperação das sessões ativas falhou:', err?.message || err);
-  });
-  console.log('[PersonalizeWppConect] conectado. Aguardando mensagens...');
+  console.log('[PersonalizeWppConect] conectado. Iniciando recuperação de etiquetas e mensagens...');
 
+  let unread = [];
   if (env.enableUnreadBootstrap) {
     console.log(`[PersonalizeWppConect] buscando mensagens não lidas em ${env.unreadBootstrapDelayMs}ms...`);
-    setTimeout(async () => {
-      try {
-        const unread = await collectUnreadMessages(channel.client);
-        console.log(`[PersonalizeWppConect] mensagens não lidas encontradas: ${unread.length}`);
-        for (const item of unread) {
-          await onMessage({ from: item.from, text: item.text, raw: item.raw, source: 'unread-bootstrap' });
-        }
-      } catch (err) {
-        console.warn('[PersonalizeWppConect] não foi possível buscar mensagens não lidas:', err?.message || err);
+    await sleep(env.unreadBootstrapDelayMs);
+    try {
+      unread = await collectUnreadMessages(channel.client);
+      console.log(`[PersonalizeWppConect] mensagens não lidas identificadas: ${unread.length}`);
+      for (const item of unread) {
+        registerIncomingContact({ from: item.from, raw: item.raw, source: 'unread-discovery' });
       }
-    }, env.unreadBootstrapDelayMs).unref?.();
+    } catch (err) {
+      console.warn('[PersonalizeWppConect] não foi possível buscar mensagens não lidas:', err?.message || err);
+    }
   }
+
+  const catalog = await ensureRequiredCatalog(channel).catch((err) => ({
+    ready: false,
+    missing: [],
+    error: err?.message || String(err),
+  }));
+  console.log(
+    `[ETIQUETAS] catálogo obrigatório: pronto=${String(catalog.ready)} `
+    + `ausentes=${catalog.missing?.join(', ') || '-'}`,
+  );
+
+  const beforeUnread = await reconcileTrackedContacts(channel).catch((err) => ({
+    total: 0,
+    reconciled: 0,
+    pending: 0,
+    failed: 1,
+    error: err?.message || String(err),
+  }));
+  console.log(
+    `[ETIQUETAS] reconciliação inicial: clientes=${beforeUnread.total || 0} `
+    + `restaurados=${beforeUnread.reconciled || 0} pendentes=${beforeUnread.pending || 0} `
+    + `falhas=${beforeUnread.failed || 0}`,
+  );
+
+  for (const item of unread) {
+    await onMessage({ from: item.from, text: item.text, raw: item.raw, source: 'unread-bootstrap' });
+  }
+  if (unread.length) await buffer.flushAll();
+
+  const afterUnread = await reconcileTrackedContacts(channel).catch((err) => ({
+    total: 0,
+    reconciled: 0,
+    pending: 0,
+    failed: 1,
+    error: err?.message || String(err),
+  }));
+  const labelStats = ContactLabels.stats();
+  console.log(
+    `[ETIQUETAS] banco ativo desde ${labelStats.trackingStartedAt}; `
+    + `clientes=${labelStats.total} com_tag=${labelStats.tagged} pendentes=${labelStats.pending}; `
+    + `restaurados_após_não_lidas=${afterUnread.reconciled || 0}`,
+  );
+
+  if (env.labelReconcileIntervalMs > 0) {
+    let periodicReconciliationRunning = false;
+    const timer = setInterval(async () => {
+      if (periodicReconciliationRunning) return;
+      periodicReconciliationRunning = true;
+      try {
+        const result = await reconcileTrackedContacts(channel);
+        console.log(
+          `[ETIQUETAS] conferência periódica: clientes=${result.total || 0} `
+          + `restaurados=${result.reconciled || 0} pendentes=${result.pending || 0} `
+          + `falhas=${result.failed || 0}`,
+        );
+      } catch (err) {
+        console.warn('[ETIQUETAS] conferência periódica falhou:', err?.message || err);
+      } finally {
+        periodicReconciliationRunning = false;
+      }
+    }, env.labelReconcileIntervalMs);
+    timer.unref?.();
+  }
+
+  console.log('[PersonalizeWppConect] recuperação concluída. Aguardando mensagens...');
 }
 
 main().catch((err) => {
