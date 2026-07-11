@@ -7,6 +7,7 @@ const LabelStore = require('../services/contactLabelStore');
 
 const creationLocks = new Map();
 const observationLocks = new Map();
+const sellerAttentionMarkedThisRuntime = new Set();
 
 const COLOR_HEX = Object.freeze({
   green: '#00a884',
@@ -59,7 +60,7 @@ function normalizeDefinition(definition = {}) {
     name,
     color: String(definition.color || 'gray').trim(),
     kind: String(definition.kind || 'service').trim(),
-    role: String(definition.role || 'operational').trim(),
+    role: 'operational',
     service: definition.service ? String(definition.service).trim() : null,
   };
 }
@@ -69,7 +70,6 @@ function getServiceLabel(service) {
     return normalizeDefinition({
       key: 'service:letreiro',
       kind: 'service',
-      role: 'operational',
       service: 'letreiro',
       name: env.serviceLabelLetreiro,
       color: env.serviceLabelLetreiroColor,
@@ -79,7 +79,6 @@ function getServiceLabel(service) {
     return normalizeDefinition({
       key: 'service:plotagem',
       kind: 'service',
-      role: 'operational',
       service: 'plotagem',
       name: env.serviceLabelPlotagem,
       color: env.serviceLabelPlotagemColor,
@@ -88,7 +87,6 @@ function getServiceLabel(service) {
   return normalizeDefinition({
     key: 'service:outros',
     kind: 'service',
-    role: 'operational',
     service: 'outros',
     name: env.serviceLabelOutros,
     color: env.serviceLabelOutrosColor,
@@ -99,39 +97,18 @@ function getSupportLabel() {
   return normalizeDefinition({
     key: 'support',
     kind: 'support',
-    role: 'operational',
     name: env.supportLabelName,
     color: env.supportLabelColor,
   });
 }
 
-function getSellerLabels() {
-  return (env.sellerLabels || [])
-    .map((item) => normalizeDefinition({
-      key: `seller:${slug(item.name)}`,
-      kind: 'seller',
-      role: 'seller',
-      name: item.name,
-      color: item.color,
-    }))
-    .filter(Boolean);
-}
-
 function requiredLabelDefinitions() {
-  const definitions = [
+  return [
     getServiceLabel('letreiro'),
     getServiceLabel('plotagem'),
     getServiceLabel('outros'),
     getSupportLabel(),
-    ...getSellerLabels(),
   ].filter(Boolean);
-  const seen = new Set();
-  return definitions.filter((item) => {
-    const key = normalizeName(item.name);
-    if (!key || seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
 }
 
 function definitionByName(name) {
@@ -147,6 +124,14 @@ function orderedCandidateIds(clientId) {
   const direct = Identity.normalizeChatId(clientId);
   const known = Identity.getLabelCandidateIds(clientId);
   return [...new Set([direct, ...known].filter(Boolean))];
+}
+
+function canonicalSellerName(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return null;
+  const configured = Array.isArray(env.sellerNames) ? env.sellerNames : [];
+  if (!configured.length) return raw;
+  return configured.find((item) => normalizeName(item) === normalizeName(raw)) || null;
 }
 
 async function readBusinessLists(client) {
@@ -263,6 +248,38 @@ async function createMissingList(client, definition, palette) {
   return task;
 }
 
+async function recreateListWithExpectedColor(client, definition, existing, palette) {
+  if (!env.recreateMismatchedOperationalLabels || !client?.page?.evaluate) return null;
+  const existingId = listId(existing);
+  if (!existingId) return null;
+
+  console.warn(
+    `[ETIQUETAS] recriando "${definition.name}" para corrigir a cor para ${definition.color}. `
+    + `Os clientes rastreados serão restaurados pelo banco.`,
+  );
+
+  try {
+    await client.page.evaluate(async ({ listId: targetId }) => {
+      const WPP = window.WPP || null;
+      if (!WPP?.lists?.remove) throw new Error('WPP.lists.remove indisponível');
+      await WPP.lists.remove(String(targetId));
+    }, { listId: existingId });
+  } catch (err) {
+    console.warn(`[ETIQUETAS] não foi possível remover a versão com cor incorreta:`, err?.message || err);
+    return null;
+  }
+
+  for (let attempt = 1; attempt <= 10; attempt += 1) {
+    await wait(400);
+    const catalog = await readBusinessLists(client);
+    const stillThere = catalog.some((item) => listId(item) === existingId);
+    if (!stillThere) break;
+    if (attempt === 10) return null;
+  }
+
+  return createMissingList(client, definition, palette);
+}
+
 async function ensureRequiredCatalog(channel, { definitions = requiredLabelDefinitions() } = {}) {
   if (!env.enableContactLabels || !channel?.client) {
     return { ready: false, catalog: {}, missing: definitions.map((item) => item.key), colorMismatches: [] };
@@ -288,16 +305,20 @@ async function ensureRequiredCatalog(channel, { definitions = requiredLabelDefin
     const expectedIndex = nearestPaletteIndex(palette, desiredHex(definition.color));
     const actualIndex = Number(item.colorIndex);
     if (Number.isInteger(expectedIndex) && Number.isFinite(actualIndex) && actualIndex !== expectedIndex) {
-      colorMismatches.push({
-        key: definition.key,
-        name: definition.name,
-        expectedIndex,
-        actualIndex,
-      });
-      console.warn(
-        `[ETIQUETAS] "${definition.name}" existe com índice de cor ${actualIndex}; `
-        + `esperado=${expectedIndex}. Mantida sem edição para preservar os clientes.`,
-      );
+      const recreated = await recreateListWithExpectedColor(client, definition, item, palette);
+      if (recreated) {
+        item = recreated;
+      } else {
+        colorMismatches.push({
+          key: definition.key,
+          name: definition.name,
+          expectedIndex,
+          actualIndex,
+        });
+        console.warn(
+          `[ETIQUETAS] "${definition.name}" continua com índice ${actualIndex}; esperado=${expectedIndex}.`,
+        );
+      }
     }
 
     catalogByKey[definition.key] = { ...item, definition };
@@ -315,12 +336,12 @@ async function ensureRequiredCatalog(channel, { definitions = requiredLabelDefin
 async function inspectCandidate(client, chatId) {
   if (!client?.page?.evaluate || !chatId) return { chatFound: false, items: [] };
   try {
-    return await client.page.evaluate(async ({ chatId }) => {
+    return await client.page.evaluate(async ({ chatId: targetChatId }) => {
       const WPP = window.WPP || null;
       const StoreWindow = window.Store || null;
-      let chat = StoreWindow?.Chat?.get?.(chatId) || null;
+      let chat = StoreWindow?.Chat?.get?.(targetChatId) || null;
       if (!chat && typeof StoreWindow?.Chat?.find === 'function') {
-        try { chat = await StoreWindow.Chat.find(chatId); } catch (_) {}
+        try { chat = await StoreWindow.Chat.find(targetChatId); } catch (_) {}
       }
       if (!chat) return { chatFound: false, items: [] };
 
@@ -358,8 +379,7 @@ async function inspectCandidate(client, chatId) {
 }
 
 async function inspectContactLabels(client, clientId) {
-  const candidates = orderedCandidateIds(clientId);
-  for (const chatId of candidates) {
+  for (const chatId of orderedCandidateIds(clientId)) {
     const result = await inspectCandidate(client, chatId);
     if (result.chatFound) return { ...result, chatId };
   }
@@ -417,8 +437,7 @@ async function applyDefinitionWithCatalog(channel, clientId, definition, catalog
   const target = catalogByKey?.[normalized.key];
   if (!target) return { applied: false, reason: 'target_missing' };
   const targetId = listId(target);
-  const allDefinitions = requiredLabelDefinitions();
-  const sameRole = allDefinitions.filter((item) => item.role === normalized.role && item.key !== normalized.key);
+  const sameRole = requiredLabelDefinitions().filter((item) => item.key !== normalized.key);
 
   for (const chatId of orderedCandidateIds(clientId)) {
     const before = await inspectCandidate(channel.client, chatId);
@@ -426,15 +445,15 @@ async function applyDefinitionWithCatalog(channel, clientId, definition, catalog
     const attachedIds = new Set(before.items.map((item) => String(item.id)));
 
     try {
-      await channel.client.page.evaluate(async ({ chatId, targetId, removeIds }) => {
+      await channel.client.page.evaluate(async ({ chatId: targetChatId, targetId: id, removeIds }) => {
         const WPP = window.WPP || null;
         if (!WPP?.lists?.addChats || !WPP?.lists?.removeChats) {
           throw new Error('WPP.lists indisponível');
         }
         for (const removeId of removeIds) {
-          try { await WPP.lists.removeChats(String(removeId), [chatId]); } catch (_) {}
+          try { await WPP.lists.removeChats(String(removeId), [targetChatId]); } catch (_) {}
         }
-        await WPP.lists.addChats(String(targetId), [chatId]);
+        await WPP.lists.addChats(String(id), [targetChatId]);
       }, {
         chatId,
         targetId,
@@ -476,6 +495,85 @@ async function applyDefinitionWithCatalog(channel, clientId, definition, catalog
   return { applied: false, reason: 'chat_not_found', key: normalized.key };
 }
 
+async function markContactUnread(channel, clientId, { source = 'seller-attention', force = false } = {}) {
+  if (!env.markSellerClientUnread || !channel?.client?.page?.evaluate) {
+    return { marked: false, reason: 'disabled' };
+  }
+  const record = LabelStore.getContact(clientId);
+  const runtimeKey = record?.contactKey || Identity.getSessionKey(clientId);
+  if (!force && sellerAttentionMarkedThisRuntime.has(runtimeKey)) {
+    return { marked: true, alreadyMarkedThisRuntime: true };
+  }
+
+  for (const chatId of orderedCandidateIds(clientId)) {
+    try {
+      const result = await channel.client.page.evaluate(async ({ chatId: targetChatId }) => {
+        const WPP = window.WPP || null;
+        const StoreWindow = window.Store || null;
+        let chat = StoreWindow?.Chat?.get?.(targetChatId) || null;
+        if (!chat && typeof StoreWindow?.Chat?.find === 'function') {
+          try { chat = await StoreWindow.Chat.find(targetChatId); } catch (_) {}
+        }
+        if (!chat) return { marked: false, reason: 'chat_not_found' };
+        if (!WPP?.chat?.markIsUnread) return { marked: false, reason: 'mark_unread_unavailable' };
+        await WPP.chat.markIsUnread(targetChatId);
+        return { marked: true, chatId: targetChatId };
+      }, { chatId });
+
+      if (result?.marked) {
+        sellerAttentionMarkedThisRuntime.add(runtimeKey);
+        LabelStore.markUnreadResult(clientId, { success: true, source });
+        console.log(`[VENDEDOR] conversa marcada como não lida: ${result.chatId}`);
+        return result;
+      }
+    } catch (err) {
+      LabelStore.markUnreadResult(clientId, {
+        success: false,
+        source,
+        error: err?.message || err,
+      });
+    }
+  }
+
+  LabelStore.markUnreadResult(clientId, {
+    success: false,
+    source,
+    error: 'chat_not_found',
+  });
+  return { marked: false, reason: 'chat_not_found' };
+}
+
+async function assignSellerResponsibility(channel, clientId, sellerName, { source = 'seller-assignment' } = {}) {
+  const canonical = canonicalSellerName(sellerName);
+  if (!canonical) {
+    console.warn(`[VENDEDOR] vendedor inválido: ${sellerName}`);
+    return false;
+  }
+  LabelStore.registerContact({ clientId, source });
+  const stored = LabelStore.setSellerResponsibility(clientId, canonical, { source });
+  if (!stored) return false;
+  sellerAttentionMarkedThisRuntime.delete(stored.contactKey);
+  const unread = await markContactUnread(channel, clientId, { source, force: true });
+  return {
+    assigned: true,
+    seller: canonical,
+    unreadMarked: Boolean(unread?.marked),
+    chatId: unread?.chatId || null,
+  };
+}
+
+function clearSellerAttention(clientId, { source = 'seller-attended' } = {}) {
+  const record = LabelStore.clearAttention(clientId, { source });
+  if (record?.contactKey) sellerAttentionMarkedThisRuntime.delete(record.contactKey);
+  return record;
+}
+
+function clearSellerResponsibility(clientId, { source = 'seller-cleared' } = {}) {
+  const record = LabelStore.clearSellerResponsibility(clientId, { source });
+  if (record?.contactKey) sellerAttentionMarkedThisRuntime.delete(record.contactKey);
+  return record;
+}
+
 async function applyExpectedLabel(channel, clientId, definition, { source = 'flow' } = {}) {
   const normalized = normalizeDefinition(definition);
   if (!normalized) return false;
@@ -508,7 +606,6 @@ async function applyNamedLabel(channel, clientId, target) {
     ...target,
     key: `custom:${slug(target?.name)}`,
     kind: 'service',
-    role: 'operational',
   });
   return applyExpectedLabel(channel, clientId, definition, { source: 'applyNamedLabel' });
 }
@@ -528,36 +625,40 @@ async function reconcileTrackedContacts(channel, { contactKeys = null } = {}) {
   let reconciled = 0;
   let pending = 0;
   let failed = 0;
+  let sellerAttentionMarked = 0;
 
   for (const original of contacts) {
     const clientId = original.primaryChatId || original.aliases?.[0] || original.contactKey;
     await observeContactLabels(channel, clientId, { force: true, source: 'startup-mobile' });
     const record = LabelStore.getContact(original.contactKey) || original;
-    const expected = [record.expected?.operational, record.expected?.seller]
-      .map((item) => item?.key ? (definitionByKey(item.key) || normalizeDefinition(item)) : null)
-      .filter(Boolean);
-
-    if (!record.expected?.operational) pending += 1;
-    if (!expected.length) {
-      LabelStore.markReconciled(record.contactKey, { applied: false, pendingClassification: true });
-      continue;
-    }
+    const operational = record.expected?.operational?.key
+      ? (definitionByKey(record.expected.operational.key) || normalizeDefinition(record.expected.operational))
+      : null;
 
     let contactOk = true;
     const results = [];
-    for (const definition of expected) {
-      const result = await applyDefinitionWithCatalog(channel, clientId, definition, ensured.catalog);
-      results.push({ key: definition.key, applied: Boolean(result?.applied), verified: result?.verified ?? null });
+    if (operational) {
+      const result = await applyDefinitionWithCatalog(channel, clientId, operational, ensured.catalog);
+      results.push({ key: operational.key, applied: Boolean(result?.applied), verified: result?.verified ?? null });
       if (!result?.applied) contactOk = false;
+    } else {
+      pending += 1;
     }
 
-    if (contactOk) reconciled += 1;
-    else failed += 1;
+    if (record.expected?.seller?.name && record.attention?.needsAttention !== false) {
+      const unread = await markContactUnread(channel, clientId, { source: 'reconcile-seller-attention' });
+      if (unread?.marked && !unread.alreadyMarkedThisRuntime) sellerAttentionMarked += 1;
+    }
+
+    if (operational && contactOk) reconciled += 1;
+    if (operational && !contactOk) failed += 1;
     LabelStore.markReconciled(record.contactKey, {
-      applied: contactOk,
-      pendingClassification: !record.expected?.operational,
+      applied: operational ? contactOk : false,
+      pendingClassification: !operational,
       results,
-      error: contactOk ? null : 'one_or_more_labels_failed',
+      seller: record.expected?.seller?.name || null,
+      sellerAttention: Boolean(record.attention?.needsAttention),
+      error: operational && !contactOk ? 'operational_label_failed' : null,
     });
     if (env.labelReconcileDelayMs) await wait(env.labelReconcileDelayMs);
   }
@@ -569,6 +670,7 @@ async function reconcileTrackedContacts(channel, { contactKeys = null } = {}) {
     reconciled,
     pending,
     failed,
+    sellerAttentionMarked,
   };
 }
 
@@ -585,11 +687,16 @@ module.exports = {
   assignSupportLabel,
   applyNamedLabel,
   applyExpectedLabel,
+  assignSellerResponsibility,
+  clearSellerResponsibility,
+  clearSellerAttention,
+  markContactUnread,
   requiredLabelDefinitions,
   getServiceLabel,
   getSupportLabel,
   normalizeChatId: Identity.normalizeChatId,
   _test: {
+    canonicalSellerName,
     definitionByName,
     desiredHex,
     findByDefinition,
@@ -599,5 +706,8 @@ module.exports = {
     normalizeDefinition,
     normalizeName,
     orderedCandidateIds,
+    resetRuntimeAttentionMarks() {
+      sellerAttentionMarkedThisRuntime.clear();
+    },
   },
 };
