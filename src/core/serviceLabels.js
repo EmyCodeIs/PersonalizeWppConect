@@ -53,11 +53,6 @@ function listCount(item) {
   return Number.isFinite(value) ? value : 0;
 }
 
-function hasValidColor(item) {
-  return Boolean(item?.hexColor)
-    || Number.isFinite(Number(item?.colorIndex ?? item?.colorId ?? item?.color));
-}
-
 function getServiceLabel(service) {
   if (service === 'letreiro') {
     return { name: env.serviceLabelLetreiro, color: env.serviceLabelLetreiroColor };
@@ -86,39 +81,25 @@ function managedServiceLabelNames() {
     .filter(Boolean))];
 }
 
-async function getAllListsFromPage(client) {
+async function readBusinessLists(client) {
   if (!client?.page?.evaluate) return [];
+
   try {
     return await client.page.evaluate(async () => {
       const WPP = window.WPP || null;
       if (!WPP?.labels?.getAllLabels) return [];
       const value = await WPP.labels.getAllLabels();
-      const items = Array.isArray(value) ? value : Object.values(value || {});
-      return items.map((item) => ({
+      const list = Array.isArray(value) ? value : Object.values(value || {});
+      return list.map((item) => ({
         id: String(item?.id?._serialized || item?.id || item?.labelId || ''),
         name: String(item?.name || item?.label || ''),
-        color: item?.color ?? null,
-        colorIndex: item?.colorIndex ?? item?.colorId ?? null,
+        colorIndex: item?.colorIndex ?? item?.colorId ?? item?.color ?? null,
         hexColor: item?.hexColor || null,
         count: Number(item?.count || 0),
       }));
     });
   } catch (err) {
-    console.warn('[LISTAS] leitura pelo WA-JS falhou:', err?.message || err);
-    return [];
-  }
-}
-
-async function getAllLists(client) {
-  const pageLists = await getAllListsFromPage(client);
-  if (pageLists.length) return pageLists;
-
-  if (typeof client?.getAllLabels !== 'function') return [];
-  try {
-    const value = await client.getAllLabels();
-    return Array.isArray(value) ? value : Object.values(value || {});
-  } catch (err) {
-    console.warn('[LISTAS] não foi possível listar as listas do WhatsApp:', err?.message || err);
+    console.warn('[LISTAS] não foi possível ler as listas:', err?.message || err);
     return [];
   }
 }
@@ -148,39 +129,30 @@ function findCanonicalList(items, targetName) {
     const countDifference = listCount(b) - listCount(a);
     if (countDifference) return countDifference;
 
-    const colorDifference = Number(hasValidColor(b)) - Number(hasValidColor(a));
-    if (colorDifference) return colorDifference;
-
     return compareIds(a, b);
   })[0];
 
   if (matches.length > 1) {
     console.warn(
-      `[LISTAS] duplicatas encontradas para "${targetName}": `
-      + `${matches.map((item) => `${listId(item)}(conversas=${listCount(item)})`).join(', ')}. `
-      + `Reutilizando ${listId(canonical)} sem apagar nenhuma lista.`,
+      `[LISTAS] duplicatas de "${targetName}": ${matches.map((item) => listId(item)).join(', ')}. `
+      + `Reutilizando ${listId(canonical)} sem apagar nenhuma.`,
     );
   }
 
   return canonical;
 }
 
-async function resolveExistingList(
-  client,
-  target,
-  { refresh = false, attempts = 6, delayMs = 500 } = {},
-) {
+async function resolveExistingList(client, target, { refresh = false, attempts = 5, delayMs = 600 } = {}) {
   const key = normalizeName(target?.name);
   if (!key) return null;
 
   if (!refresh && resolvedLists.has(key)) return resolvedLists.get(key);
 
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
-    const items = await getAllLists(client);
+    const items = await readBusinessLists(client);
     const found = findCanonicalList(items, target.name);
     if (found) {
       resolvedLists.set(key, found);
-      console.log(`[LISTAS] existente localizada: ${listName(found)} | ID ${listId(found)}`);
       return found;
     }
     if (attempt < attempts) await wait(delayMs);
@@ -190,14 +162,53 @@ async function resolveExistingList(
   return null;
 }
 
-async function createListThroughWaJs(client, target) {
+function hexToRgb(hex) {
+  const clean = String(hex || '').replace('#', '');
+  if (!/^[0-9a-f]{6}$/i.test(clean)) return null;
+  return [
+    parseInt(clean.slice(0, 2), 16),
+    parseInt(clean.slice(2, 4), 16),
+    parseInt(clean.slice(4, 6), 16),
+  ];
+}
+
+function nearestPaletteIndex(palette, requestedHex) {
+  const wanted = hexToRgb(requestedHex);
+  if (!wanted || !Array.isArray(palette) || !palette.length) return null;
+
+  let bestIndex = null;
+  let bestDistance = Number.POSITIVE_INFINITY;
+
+  palette.forEach((entry, index) => {
+    const candidateHex = typeof entry === 'string'
+      ? entry
+      : entry?.hex || entry?.hexColor || entry?.color || entry?.value;
+    const candidate = hexToRgb(candidateHex);
+    if (!candidate) return;
+
+    const distance = ((candidate[0] - wanted[0]) ** 2)
+      + ((candidate[1] - wanted[1]) ** 2)
+      + ((candidate[2] - wanted[2]) ** 2);
+
+    if (distance < bestDistance) {
+      bestDistance = distance;
+      bestIndex = index;
+    }
+  });
+
+  return Number.isInteger(bestIndex) ? bestIndex : null;
+}
+
+async function createRealBusinessList(client, target) {
   if (!client?.page?.evaluate) return null;
 
   return client.page.evaluate(async ({ name, requestedHex }) => {
     const WPP = window.WPP || null;
-    if (!WPP?.lists?.create && !WPP?.labels?.addNewLabel) return null;
+    if (!WPP?.lists?.create || !WPP?.labels?.getAllLabels) {
+      return { ok: false, reason: 'lists_api_unavailable' };
+    }
 
-    const rgb = (hex) => {
+    const hexToRgbInner = (hex) => {
       const clean = String(hex || '').replace('#', '');
       if (!/^[0-9a-f]{6}$/i.test(clean)) return null;
       return [
@@ -207,53 +218,6 @@ async function createListThroughWaJs(client, target) {
       ];
     };
 
-    let colorIndex;
-    try {
-      const palette = WPP.labels?.getLabelColorPalette
-        ? await WPP.labels.getLabelColorPalette()
-        : [];
-      const wanted = rgb(requestedHex);
-      if (wanted && Array.isArray(palette) && palette.length) {
-        let bestDistance = Number.POSITIVE_INFINITY;
-        palette.forEach((candidateHex, index) => {
-          const candidate = rgb(candidateHex);
-          if (!candidate) return;
-          const distance = ((candidate[0] - wanted[0]) ** 2)
-            + ((candidate[1] - wanted[1]) ** 2)
-            + ((candidate[2] - wanted[2]) ** 2);
-          if (distance < bestDistance) {
-            bestDistance = distance;
-            colorIndex = index;
-          }
-        });
-      }
-    } catch (_) {}
-
-    let createdId = '';
-
-    if (WPP.lists?.create) {
-      createdId = String(await WPP.lists.create(
-        name,
-        [],
-        Number.isInteger(colorIndex) ? colorIndex : undefined,
-      ));
-    } else {
-      const created = await WPP.labels.addNewLabel(name, {
-        labelColor: Number.isInteger(colorIndex) ? colorIndex : undefined,
-      });
-      createdId = String(created?.id || created?.labelId || '');
-    }
-
-    await new Promise((resolve) => setTimeout(resolve, 500));
-
-    let items = [];
-    try {
-      if (WPP.labels?.getAllLabels) {
-        const value = await WPP.labels.getAllLabels();
-        items = Array.isArray(value) ? value : Object.values(value || {});
-      }
-    } catch (_) {}
-
     const normalize = (value) => String(value || '')
       .normalize('NFD')
       .replace(/[\u0300-\u036f]/g, '')
@@ -261,16 +225,88 @@ async function createListThroughWaJs(client, target) {
       .replace(/\s+/g, ' ')
       .trim();
 
-    const found = items.find((item) => String(item?.id || item?.labelId || '') === createdId)
-      || items.find((item) => normalize(item?.name || item?.label) === normalize(name));
+    const beforeValue = await WPP.labels.getAllLabels();
+    const before = Array.isArray(beforeValue) ? beforeValue : Object.values(beforeValue || {});
+    const existing = before.find((item) => normalize(item?.name || item?.label) === normalize(name));
+    if (existing?.id) {
+      return {
+        ok: true,
+        existing: true,
+        id: String(existing.id),
+        name: String(existing.name || name),
+        colorIndex: existing?.colorIndex ?? existing?.colorId ?? existing?.color ?? null,
+      };
+    }
+
+    let palette = [];
+    try {
+      palette = WPP.labels.getLabelColorPalette
+        ? await WPP.labels.getLabelColorPalette()
+        : [];
+    } catch (_) {}
+
+    const wanted = hexToRgbInner(requestedHex);
+    let colorIndex = null;
+    let bestDistance = Number.POSITIVE_INFINITY;
+
+    if (wanted && Array.isArray(palette)) {
+      palette.forEach((entry, index) => {
+        const candidateHex = typeof entry === 'string'
+          ? entry
+          : entry?.hex || entry?.hexColor || entry?.color || entry?.value;
+        const candidate = hexToRgbInner(candidateHex);
+        if (!candidate) return;
+        const distance = ((candidate[0] - wanted[0]) ** 2)
+          + ((candidate[1] - wanted[1]) ** 2)
+          + ((candidate[2] - wanted[2]) ** 2);
+        if (distance < bestDistance) {
+          bestDistance = distance;
+          colorIndex = index;
+        }
+      });
+    }
+
+    const attempts = [];
+    if (Number.isInteger(colorIndex)) attempts.push(colorIndex);
+    attempts.push(undefined);
+
+    let createdId = '';
+    let lastError = '';
+
+    for (const requestedIndex of attempts) {
+      try {
+        createdId = String(await WPP.lists.create(name, [], requestedIndex));
+        if (createdId) break;
+      } catch (err) {
+        lastError = String(err?.message || err?.text || err || '');
+      }
+    }
+
+    if (!createdId) {
+      return {
+        ok: false,
+        reason: 'create_failed',
+        error: lastError,
+        colorIndex,
+        palette,
+      };
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, 1400));
+
+    const afterValue = await WPP.labels.getAllLabels();
+    const after = Array.isArray(afterValue) ? afterValue : Object.values(afterValue || {});
+    const found = after.find((item) => String(item?.id || item?.labelId || '') === createdId)
+      || after.find((item) => normalize(item?.name || item?.label) === normalize(name));
 
     return {
+      ok: Boolean(found?.id || createdId),
       id: String(found?.id || found?.labelId || createdId),
       name: String(found?.name || found?.label || name),
-      color: found?.color ?? null,
-      colorIndex: found?.colorIndex ?? found?.colorId ?? colorIndex ?? null,
-      hexColor: found?.hexColor || null,
-      count: Number(found?.count || 0),
+      colorIndex: found?.colorIndex ?? found?.colorId ?? found?.color ?? colorIndex ?? null,
+      requestedColorIndex: colorIndex,
+      paletteColor: Number.isInteger(colorIndex) ? palette[colorIndex] : null,
+      paletteSize: Array.isArray(palette) ? palette.length : 0,
     };
   }, {
     name: String(target.name || '').trim(),
@@ -284,45 +320,57 @@ async function ensureServiceList(client, target) {
 
   const existing = await resolveExistingList(client, target, {
     refresh: true,
-    attempts: 7,
-    delayMs: 500,
+    attempts: 4,
+    delayMs: 600,
   });
-  if (existing) return existing;
+  if (existing) {
+    console.log(`[LISTAS] reutilizando: ${listName(existing)} | ID ${listId(existing)}`);
+    return existing;
+  }
 
   if (creationLocks.has(key)) return creationLocks.get(key);
 
   const task = (async () => {
-    const confirmed = await resolveExistingList(client, target, {
-      refresh: true,
-      attempts: 4,
-      delayMs: 600,
-    });
-    if (confirmed) return confirmed;
+    for (let attempt = 1; attempt <= 3; attempt += 1) {
+      const confirmed = await resolveExistingList(client, target, {
+        refresh: true,
+        attempts: 2,
+        delayMs: 500,
+      });
+      if (confirmed) return confirmed;
 
-    console.log(`[LISTAS] criando uma única vez: ${target.name} (${target.color})`);
+      console.log(`[LISTAS] criação ${attempt}/3: ${target.name} | cor=${target.color} | hex=${desiredHex(target.color)}`);
 
-    let created;
-    try {
-      created = await createListThroughWaJs(client, target);
-    } catch (err) {
-      console.warn(`[LISTAS] falha ao criar "${target.name}":`, err?.message || err);
-      return null;
+      let created = null;
+      try {
+        created = await createRealBusinessList(client, target);
+      } catch (err) {
+        console.warn(`[LISTAS] erro ao criar "${target.name}":`, err?.message || err);
+      }
+
+      if (created?.ok) {
+        console.log(
+          `[LISTAS] criada: ${created.name} | ID ${created.id} | `
+          + `índice solicitado=${String(created.requestedColorIndex)} | índice final=${String(created.colorIndex)}`,
+        );
+        await wait(1800);
+        const refreshed = await resolveExistingList(client, target, {
+          refresh: true,
+          attempts: 8,
+          delayMs: 700,
+        });
+        if (refreshed) return refreshed;
+      } else {
+        console.warn(
+          `[LISTAS] tentativa ${attempt} falhou para "${target.name}": `
+          + `${created?.reason || 'sem retorno'} ${created?.error || ''}`.trim(),
+        );
+      }
+
+      await wait(2200);
     }
 
-    if (!created?.id || !created?.name) {
-      console.warn(`[LISTAS] criação de "${target.name}" não retornou uma lista válida.`);
-      return null;
-    }
-
-    resolvedLists.set(key, created);
-    console.log(`[LISTAS] criada: ${created.name} | ID ${created.id}`);
-
-    const refreshed = await resolveExistingList(client, target, {
-      refresh: true,
-      attempts: 8,
-      delayMs: 600,
-    });
-    return refreshed || created;
+    return null;
   })().finally(() => {
     creationLocks.delete(key);
   });
@@ -337,18 +385,19 @@ async function initializeServiceLabels(channel) {
   if (initializationPromise) return initializationPromise;
 
   initializationPromise = (async () => {
-    console.log('[LISTAS] garantindo listas de atendimento no WhatsApp Business...');
-    await wait(1200);
+    console.log('[LISTAS] verificando e criando separadamente as listas de atendimento...');
+    await wait(1500);
 
     let ready = true;
     for (const target of serviceTargets()) {
       const item = await ensureServiceList(channel.client, target);
       if (!item) {
         ready = false;
-        console.warn(`[LISTAS] não foi possível preparar: ${target.name}`);
+        console.warn(`[LISTAS] AUSENTE após 3 tentativas: ${target.name}`);
       } else {
-        console.log(`[LISTAS] pronta: ${listName(item)} | ID ${listId(item)}`);
+        console.log(`[LISTAS] PRONTA: ${listName(item)} | ID ${listId(item)} | cor=${target.color}`);
       }
+      await wait(1600);
     }
 
     initializationFinished = true;
@@ -369,13 +418,11 @@ async function inspectChatLists(client, chatId) {
     return await client.page.evaluate(async ({ chatId }) => {
       const WPP = window.WPP || null;
       const Store = window.Store || null;
-
       let chat = null;
+
       try {
         chat = Store?.Chat?.get?.(chatId) || null;
-        if (!chat && typeof Store?.Chat?.find === 'function') {
-          chat = await Store.Chat.find(chatId);
-        }
+        if (!chat && typeof Store?.Chat?.find === 'function') chat = await Store.Chat.find(chatId);
       } catch (_) {}
 
       if (!chat) return { available: true, chatFound: false, items: [] };
@@ -446,54 +493,27 @@ function persistManualLists(clientId, items = []) {
   }
 }
 
-async function addChatToListThroughWaJs(client, chatId, targetId) {
-  if (!client?.page?.evaluate) return { supported: false, submitted: false };
+async function addChatToList(client, chatId, targetId) {
+  if (!client?.page?.evaluate) return { submitted: false, mode: 'unavailable' };
 
   try {
     return await client.page.evaluate(async ({ chatId, targetId }) => {
       const WPP = window.WPP || null;
-
       if (WPP?.lists?.addChats) {
         await WPP.lists.addChats(String(targetId), [chatId]);
-        return { supported: true, submitted: true, mode: 'wpp-lists' };
+        return { submitted: true, mode: 'wpp-lists' };
       }
-
       if (WPP?.labels?.addOrRemoveLabels) {
         await WPP.labels.addOrRemoveLabels(
           [chatId],
           [{ labelId: String(targetId), type: 'add' }],
         );
-        return { supported: true, submitted: true, mode: 'wpp-labels-fallback' };
+        return { submitted: true, mode: 'wpp-labels-fallback' };
       }
-
-      return { supported: false, submitted: false };
+      return { submitted: false, mode: 'unavailable' };
     }, { chatId, targetId: String(targetId) });
   } catch (err) {
-    return {
-      supported: true,
-      submitted: false,
-      error: String(err?.message || err),
-    };
-  }
-}
-
-async function addChatToListThroughWrapper(client, chatId, targetId) {
-  if (typeof client?.addOrRemoveLabels !== 'function') {
-    return { supported: false, submitted: false };
-  }
-
-  try {
-    await client.addOrRemoveLabels(
-      [chatId],
-      [{ labelId: String(targetId), type: 'add' }],
-    );
-    return { supported: true, submitted: true, mode: 'wrapper-fallback' };
-  } catch (err) {
-    return {
-      supported: true,
-      submitted: false,
-      error: String(err?.message || err),
-    };
+    return { submitted: false, mode: 'error', error: String(err?.message || err) };
   }
 }
 
@@ -510,52 +530,29 @@ async function applyListToCandidates(client, clientId, item) {
 
   for (const chatId of candidates) {
     const before = await inspectChatLists(client, chatId);
-
     if (before.chatFound === false && candidates.length > 1) continue;
 
     persistManualLists(clientId, before.items);
 
     if (before.items.some((entry) => String(entry.id) === targetId)) {
-      return {
-        applied: true,
-        verified: true,
-        alreadyAttached: true,
-        mode: 'existing',
-        chatId,
-      };
+      return { applied: true, verified: true, alreadyAttached: true, mode: 'existing', chatId };
     }
 
-    let operation = await addChatToListThroughWaJs(client, chatId, targetId);
+    const operation = await addChatToList(client, chatId, targetId);
     if (!operation.submitted) {
-      const fallback = await addChatToListThroughWrapper(client, chatId, targetId);
-      if (fallback.submitted) operation = fallback;
-    }
-
-    if (!operation.submitted) {
-      if (operation.error) {
-        console.warn(`[LISTAS] falha ao incluir ${chatId} em ${targetId}: ${operation.error}`);
-      }
+      if (operation.error) console.warn(`[LISTAS] falha ao incluir ${chatId}: ${operation.error}`);
       continue;
     }
 
-    await wait(900);
+    await wait(1000);
     const after = await inspectChatLists(client, chatId);
     persistManualLists(clientId, after.items.length ? after.items : before.items);
 
     if (after.items.some((entry) => String(entry.id) === targetId)) {
-      return {
-        applied: true,
-        verified: true,
-        mode: operation.mode,
-        chatId,
-      };
+      return { applied: true, verified: true, mode: operation.mode, chatId };
     }
 
-    if (after.available && after.chatFound) {
-      console.warn(`[LISTAS] inclusão não apareceu em ${chatId}; tentando outro identificador.`);
-      continue;
-    }
-
+    if (after.available && after.chatFound) continue;
     unverified.push({ chatId, mode: operation.mode });
   }
 
@@ -583,17 +580,7 @@ async function applyNamedLabel(channel, clientId, target) {
     return false;
   }
 
-  let result = await applyListToCandidates(client, clientId, item);
-
-  if (!result?.applied) {
-    resolvedLists.delete(normalizeName(target.name));
-    const refreshed = await resolveExistingList(client, target, { refresh: true });
-    if (refreshed) {
-      item = refreshed;
-      result = await applyListToCandidates(client, clientId, item);
-    }
-  }
-
+  const result = await applyListToCandidates(client, clientId, item);
   if (!result?.applied) {
     console.warn(`[LISTAS] não foi possível incluir o contato em "${target.name}".`);
     return false;
@@ -627,6 +614,7 @@ module.exports = {
     findCanonicalLabel: findCanonicalList,
     listId,
     listName,
+    nearestPaletteIndex,
     normalizeName,
     orderedCandidateIds,
   },
