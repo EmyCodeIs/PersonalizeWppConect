@@ -1,7 +1,7 @@
 {
   "name": "personalize-wppconnect-cliente-flow",
-  "version": "0.8.0",
-  "description": "Fluxo local da Personalize para WPPConnect com catálogo obrigatório de etiquetas, banco persistente por cliente e restauração automática após reconexão.",
+  "version": "0.8.1",
+  "description": "Fluxo local da Personalize para WPPConnect com etiquetas operacionais textuais, Orçamento letreiros roxo, vendedor persistido no banco e atenção por conversa não lida.",
   "main": "src/index.js",
   "type": "commonjs",
   "scripts": {
