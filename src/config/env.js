@@ -92,8 +92,9 @@ const env = {
   supportLabelName: process.env.SUPPORT_LABEL_NAME || 'Suporte',
   supportLabelColor: process.env.SUPPORT_LABEL_COLOR || 'red',
 
-  // Vendedores são responsabilidades salvas no banco, não etiquetas textuais.
-  sellerNames: list('SELLER_NAMES', ['Adriano', 'Aninha', 'Carlos']),
+  // A responsabilidade pode ser definida pelo painel ou por uma das etiquetas
+  // reconhecidas pela política estrita: Adriano/verde, Ana/azul e Dudu/amarela.
+  sellerNames: list('SELLER_NAMES', ['Adriano', 'Ana', 'Dudu']),
   markSellerClientUnread: bool('MARK_SELLER_CLIENT_UNREAD', true),
 
   serviceLabelReplaceGroup: list('SERVICE_LABEL_REPLACE_GROUP', [
