@@ -1,7 +1,7 @@
 {
   "name": "personalize-wppconnect-cliente-flow",
-  "version": "0.8.5",
-  "description": "Fluxo local da Personalize com etiqueta roxa canônica, silêncio de 72h, detecção manual e resetarsys que limpa etiquetas e notas.",
+  "version": "0.8.6",
+  "description": "Fluxo local da Personalize com etiqueta roxa canônica, silêncio de 72h, handoff manual, resetarsys verificado e notas no modelo do vendedor.",
   "main": "src/index.js",
   "type": "commonjs",
   "scripts": {
