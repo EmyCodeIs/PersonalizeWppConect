@@ -31,3 +31,6 @@ jobs:
 
       - name: Testar paridade com producao
         run: npm run test:production-flow
+
+      - name: Testar fechamento da etapa 1
+        run: npm run test:stage1-closure
