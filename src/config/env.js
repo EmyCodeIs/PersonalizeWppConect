@@ -41,6 +41,7 @@ const serviceLabelLetreiro = process.env.SERVICE_LABEL_LETREIRO || 'Orçamento l
 const serviceLabelPlotagem = process.env.SERVICE_LABEL_PLOTAGEM || 'Plotagens';
 const serviceLabelOutros = process.env.SERVICE_LABEL_OUTROS || 'Outros';
 const serviceLabelLetreiroColor = process.env.SERVICE_LABEL_LETREIRO_COLOR || 'purple';
+const flowSessionTtlHours = Math.max(1, num('FLOW_SESSION_TTL_HOURS', 24));
 
 const env = {
   sessionName: process.env.WPP_SESSION_NAME || 'personalize-wppconnect',
@@ -49,6 +50,10 @@ const env = {
   enableTestCommands: bool('ENABLE_TEST_COMMANDS', true),
   businessName: process.env.BUSINESS_NAME || 'Personalize',
   sellerName: process.env.SELLER_NAME || 'Vendedor Personalize',
+
+  // Memória curta do fluxo. Após o TTL, a conversa volta ao início.
+  flowSessionTtlHours,
+  completedSessionTtlHours: Math.max(1, num('COMPLETED_SESSION_TTL_HOURS', flowSessionTtlHours)),
 
   // Entrada do cliente. O buffer curto atende respostas simples; o longo é usado
   // em medidas, arte, endereço, Pantone e observações com várias mensagens.
