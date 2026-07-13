@@ -119,39 +119,94 @@ function mediaSummary(items = []) {
 }
 function formatMeasure(d) {
   const m = d.medida || {};
-  if (d.tamanhoModo === 'completo') return `${m.largura} x ${m.altura} cm`;
-  if (d.tamanhoModo === 'largura') return `${m.largura} cm de largura; altura proporcional à arte`;
-  if (d.tamanhoModo === 'altura') return `${m.altura} cm de altura; largura proporcional à arte`;
+  if (d.tamanhoModo === 'completo') return `${m.largura}cm × ${m.altura}cm`;
+  if (d.tamanhoModo === 'largura') return `${m.largura}cm de largura; altura proporcional à arte`;
+  if (d.tamanhoModo === 'altura') return `${m.altura}cm de altura; largura proporcional à arte`;
   return d.tamanhoDescricao || 'Não definida';
 }
-function buildBusinessNote(session, reason = 'atendimento_concluido') {
+function originLabel(value) {
+  const normalized = normalizeText(value);
+  if (normalized.includes('landing')) return 'LandingPage';
+  if (normalized.includes('whatsapp')) return 'WhatsApp';
+  return String(value || '').trim() || null;
+}
+function phoneForNote(session, d) {
+  if (d.telefone) return String(d.telefone).replace(/\D/g, '');
+  if (session?.contactIdentity?.phone) return String(session.contactIdentity.phone).replace(/\D/g, '');
+  const cUsId = String(session?.contactIdentity?.cUsId || session?.chatId || '');
+  return /@c\.us$/i.test(cUsId) ? cUsId.replace(/\D/g, '') : null;
+}
+function thicknessSentence(value) {
+  const text = String(value || '')
+    .replace(/^🔎\s*Observação:\s*/i, '')
+    .trim();
+  if (!text) return null;
+  return text.endsWith('.') ? text : `${text}.`;
+}
+function buildBusinessNote(session) {
   const d = session.dados || {};
   const q = d.demanda || {};
-  const hasArtFile = Boolean(d.arteMedias?.length);
-  return [
-    '🟢 Atendimento coletado pelo Bot WPPConnect', `Status: ${reason}`,
-    `Atualizado em: ${new Date().toLocaleString('pt-BR')}`,
-    d.origem && `Origem: ${d.origem}`, d.nome && `Nome: ${d.nome}`,
-    d.telefone && `Telefone: ${d.telefone}`, d.flow && `Serviço: ${d.flow}`,
-    q.descricao && `Demanda: ${q.descricao}`, q.medida && `Medida informada: ${q.medida}`,
-    q.local && `Local/aplicação: ${q.local}`, q.referencia && `Referência/detalhes: ${q.referencia}`,
-    q.prazo && `Prazo: ${q.prazo}`,
-    d.tipoAcrilico && `Tipo de acrílico: ${d.tipoAcrilico === 'pintado' ? 'Personalizado/Pantone' : 'Colorido'}`,
-    d.pantoneDescricao && `Pantone/cor personalizada: ${d.pantoneDescricao}`,
-    d.corBasicaQtd && `Quantidade de cores: ${d.corBasicaQtd}`,
-    d.coresSelecionadas?.length && `Cores: ${d.coresSelecionadas.join(', ')}`,
-    d.espessuraBaseDescricao && `Espessura base: ${d.espessuraBaseDescricao.replace(/^🔎\s*Observação:\s*/i, '')}`,
-    d.acrescimoAcrilico && d.acrescimoAcrilico !== '0mm' && `Acrílico cristal extra: +${d.acrescimoAcrilico}`,
-    d.acrescimoAcrilicoAAlinhar && 'Acréscimo de espessura: a definir',
-    d.tipoAcrilico === 'pintado' && d.espessura && `Espessura: ${d.espessura}`,
-    d.medida && `Medida do letreiro: ${formatMeasure(d)}`,
-    d.arteModo && `Arte: ${d.arteModo}`, d.arteTexto && `Descrição da arte: ${d.arteTexto}`,
-    hasArtFile && 'Arquivo de arte na conversa', d.cidade && `Cidade: ${d.cidade}`,
-    d.envio && `Forma de recebimento: ${d.envio}`, d.endereco && `Endereço: ${d.endereco}`,
-    d.observacaoPedido && `Observação do cliente: ${d.observacaoPedido}`,
-  ].filter(Boolean).join('\n');
+  const orderNumber = Number(d.pedidoNumero);
+  const phone = phoneForNote(session, d);
+  const hasArtFile = Boolean(d.arteMedias?.length || d.pantoneMedias?.length);
+  const lines = [
+    `📋 *Dados do pedido*${Number.isInteger(orderNumber) && orderNumber > 0 ? ` (#${orderNumber})` : ''}`,
+  ];
+
+  if (d.nome) lines.push(`👤 Cliente: ${d.nome}`);
+  if (phone) lines.push(`📱 Telefone: ${phone}`);
+  if (d.cidade) lines.push(`📍 Cidade: ${d.cidade}`);
+  if (d.origem) lines.push(`🌐 Origem: ${originLabel(d.origem)}`);
+  if (d.envio) lines.push(`🚚 Envio: *${d.envio}*`);
+  if (d.endereco) lines.push(`🏠 Endereço: ${d.endereco}`);
+
+  if (d.flow === 'letreiro') {
+    lines.push('', '*Letreiro*');
+    if (d.medida || d.tamanhoDescricao) lines.push(`• Medida: ${formatMeasure(d)}`);
+
+    if (d.coresSelecionadas?.length) {
+      lines.push(`• Cor: ${d.coresSelecionadas.join(', ')} (${d.tipoCor === 'prontas' ? 'prontas' : 'personalizadas'})`);
+    } else if (d.pantoneDescricao) {
+      lines.push(`• Cor: ${d.pantoneDescricao} (personalizada)`);
+    }
+
+    const baseThickness = d.espessuraBaseLabel
+      || (d.tipoAcrilico === 'pintado' ? d.espessura : null)
+      || d.espessura;
+    if (baseThickness) lines.push(`• Espessura base: ${baseThickness}`);
+
+    const baseDescription = thicknessSentence(d.espessuraBaseDescricao);
+    if (baseDescription) lines.push(`• ${baseDescription}`);
+    if (d.acrescimoAcrilico && d.acrescimoAcrilico !== '0mm') {
+      lines.push(`• Acréscimo em acrílico cristal: +${d.acrescimoAcrilico}`);
+    }
+    if (d.acrescimoAcrilicoAAlinhar || d.espessuraAAlinhar) {
+      lines.push('• Espessura adicional: a definir');
+    }
+    if (d.arteTexto) lines.push(`• Descrição da arte: ${d.arteTexto}`);
+    if (hasArtFile) lines.push('Arquivo de arte na conversa');
+  } else if (d.flow === 'plotagem') {
+    lines.push('', '*Plotagem*');
+    if (q.descricao) lines.push(`• Serviço: ${q.descricao}`);
+    if (q.medida) lines.push(`• Medida: ${q.medida}`);
+    if (q.local) lines.push(`• Local de aplicação: ${q.local}`);
+    if (q.prazo) lines.push(`• Prazo: ${q.prazo}`);
+  } else {
+    lines.push('', '*Outros serviços*');
+    if (q.descricao) lines.push(`• Solicitação: ${q.descricao}`);
+    if (q.referencia) lines.push(`• Referência/detalhes: ${q.referencia}`);
+    if (q.prazo) lines.push(`• Prazo: ${q.prazo}`);
+  }
+
+  if (d.observacaoPedido) {
+    lines.push('', '📝 *Observação do cliente:*', d.observacaoPedido);
+  }
+
+  return lines.join('\n').replace(/\n{3,}/g, '\n\n').trim();
 }
 async function finish(channel, clientId, session, reason) {
+  const orderNumber = Store.ensureOrderNumber(session);
+  session.dados.pedidoNumero = orderNumber;
   session.completed = true;
   session.etapa = 'concluido';
   session.dados.botDone = true;
@@ -168,10 +223,16 @@ async function finish(channel, clientId, session, reason) {
     updatedAt: session.dados.completedAt,
   };
   Store.saveSession(session);
-  Store.appendLead({ clientId: session.id, reason, etapa: session.etapa, dados: session.dados });
+  Store.appendLead({
+    clientId: session.id,
+    orderNumber,
+    reason,
+    etapa: session.etapa,
+    dados: session.dados,
+  });
   await replaceServiceLabel(channel, clientId, session.dados.flow || 'outros').catch(() => null);
   if (env.enableContactNotes && channel?.setContactNote) {
-    const ok = await channel.setContactNote(clientId, buildBusinessNote(session, reason)).catch(() => false);
+    const ok = await channel.setContactNote(clientId, buildBusinessNote(session)).catch(() => false);
     session.dados.noteSaved = ok !== false;
     session.dados.noteUpdatedAt = new Date().toISOString();
     Store.saveSession(session);
