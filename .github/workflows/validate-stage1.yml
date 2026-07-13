@@ -1,0 +1,34 @@
+name: Validar etapa 1
+
+on:
+  push:
+    branches:
+      - agent/persistent-contact-label-registry
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Baixar codigo
+        uses: actions/checkout@v4
+
+      - name: Configurar Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Instalar dependencias
+        run: npm install --no-audit --no-fund
+
+      - name: Verificar sintaxe
+        run: npm run check
+
+      - name: Testar migracao da etiqueta
+        run: npm run test:labels
+
+      - name: Testar paridade com producao
+        run: npm run test:production-flow
