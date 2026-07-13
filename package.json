@@ -1,15 +1,16 @@
 {
   "name": "personalize-wppconnect-cliente-flow",
-  "version": "0.8.1",
-  "description": "Fluxo local da Personalize para WPPConnect com etiquetas operacionais textuais, Orçamento letreiros roxo, vendedor persistido no banco e atenção por conversa não lida.",
+  "version": "0.8.2",
+  "description": "Fluxo local da Personalize para WPPConnect alinhado ao atendimento oficial: arte por texto, medida inteligente e etiqueta Orçamento letreiros roxa.",
   "main": "src/index.js",
   "type": "commonjs",
   "scripts": {
     "start": "node src/index.js",
     "dev": "node src/index.js",
     "test:flow": "node scripts/test-flow.js",
-    "check": "node --check src/index.js && node --check src/config/env.js && node --check src/core/bufferManager.js && node --check src/core/messageExperience.js && node --check src/core/menuCatalog.js && node --check src/core/messages.js && node --check src/core/parsers.js && node --check src/domain/acrilicoThickness.js && node --check src/services/contactIdentity.js && node --check src/services/contactLabelStore.js && node --check src/services/leadStore.js && node --check src/services/wppconnectClient.js && node --check src/core/allowedClient.js && node --check src/core/serviceLabels.js && node --check src/core/mostruario.js && node --check src/flow/customerFlow.js && node --check scripts/test-flow.js && node --check scripts/test-labels.js",
-    "test:labels": "node scripts/test-labels.js"
+    "test:labels": "node scripts/test-labels.js",
+    "test:production-flow": "node scripts/test-production-parity.js",
+    "check": "node --check src/index.js && node --check src/config/env.js && node --check src/core/bufferManager.js && node --check src/core/messageExperience.js && node --check src/core/menuCatalog.js && node --check src/core/messages.js && node --check src/core/parsers.js && node --check src/core/operationalLabelColorGuard.js && node --check src/domain/acrilicoThickness.js && node --check src/services/contactIdentity.js && node --check src/services/contactLabelStore.js && node --check src/services/leadStore.js && node --check src/services/wppconnectClient.js && node --check src/core/allowedClient.js && node --check src/core/serviceLabels.js && node --check src/core/mostruario.js && node --check src/flow/customerFlow.js && node --check scripts/test-flow.js && node --check scripts/test-labels.js && node --check scripts/test-production-parity.js"
   },
   "dependencies": {
     "@wppconnect-team/wppconnect": "^2.2.1",
