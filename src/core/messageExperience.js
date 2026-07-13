@@ -3,7 +3,11 @@
 const path = require('path');
 const { AsyncLocalStorage } = require('async_hooks');
 const { env } = require('../config/env');
+const { messages } = require('./messages');
 const { sendBemVindos } = require('./mostruario');
+const Store = require('../services/leadStore');
+const { completePreAttendance } = require('../services/preAttendanceCompletion');
+const { markContactUnread } = require('./serviceLabels');
 
 const responseContext = new AsyncLocalStorage();
 
@@ -24,6 +28,12 @@ function typingDuration(text, options = {}) {
   const max = Math.max(min, Number(options.maxMs ?? env.typingMaxMs));
   const estimated = Math.round((String(text || '').length / env.typingCharsPerSecond) * 1000);
   return Math.max(min, Math.min(max, estimated || min));
+}
+
+function isImmediateTestCommand(text) {
+  return /^\/(?:reset|reiniciar|resetarsys)$/i.test(
+    String(text || '').trim().split(/\s+/)[0] || '',
+  );
 }
 
 async function startTypingCompat(client, chatId) {
@@ -80,6 +90,51 @@ function isWelcomeText(text) {
   return /bem-vindo\(a\) ao canal de atendimento da personalize!/i.test(String(text || ''));
 }
 
+async function interceptPreAttendance(channel, clientId, text) {
+  const outgoing = String(text || '').trim();
+  if (!outgoing) return { handled: true, result: false, reason: 'empty_text' };
+
+  const stage = String(Store.getSession(clientId)?.etapa || '').trim();
+  if (stage === 'plotagem_medida' && outgoing === messages.askPlotagemMedida) {
+    const result = await completePreAttendance({
+      channel,
+      clientId,
+      service: 'plotagem',
+    });
+    return { handled: true, result, reason: 'plotagem_completed' };
+  }
+
+  if (stage === 'outros_referencia' && outgoing === messages.askOtherReferencia) {
+    const result = await completePreAttendance({
+      channel,
+      clientId,
+      service: 'outros',
+    });
+    return { handled: true, result, reason: 'outros_completed' };
+  }
+
+  return { handled: false, result: null, reason: null };
+}
+
+async function markCompletedConversationUnread(channel, clientId, text) {
+  if (String(text || '') !== messages.completedContactNote) return;
+  const session = Store.getSession(clientId);
+  if (session?.dados?.humanTakeover?.active) return;
+
+  const result = await markContactUnread(channel, clientId, {
+    source: 'pre-atendimento:letreiro-concluido',
+    force: true,
+  }).catch((err) => ({ marked: false, reason: err?.message || String(err) }));
+
+  if (session) {
+    session.dados = session.dados || {};
+    session.dados.awaitingSeller = true;
+    session.dados.unreadMarkedForSeller = Boolean(result?.marked);
+    session.dados.unreadMarkedAt = result?.marked ? new Date().toISOString() : null;
+    Store.saveSession(session);
+  }
+}
+
 async function sendTextDirect(channel, clientId, text) {
   const chatId = normalizeChatId(clientId);
   if (typeof channel?.client?.sendText === 'function') {
@@ -89,10 +144,14 @@ async function sendTextDirect(channel, clientId, text) {
 }
 
 async function sendTextWithLinkedWelcome(channel, clientId, text, options = {}) {
+  const intercepted = await interceptPreAttendance(channel, clientId, text);
+  if (intercepted.handled) return intercepted.result;
+
   const result = await sendTextDirect(channel, clientId, text);
   if (isWelcomeText(text) && !options.skipWelcomeMedia) {
     await sendBemVindos(channel, clientId);
   }
+  await markCompletedConversationUnread(channel, clientId, text);
   return result;
 }
 
@@ -117,6 +176,9 @@ function installMessageExperience(channel) {
       if (grouped.grouped || options.noTyping) {
         return sendTextWithLinkedWelcome(channel, clientId, text, options);
       }
+
+      const outgoing = String(text || '').trim();
+      if (!outgoing) return false;
 
       const chatId = normalizeChatId(clientId);
       const started = env.enableTyping ? await startTypingCompat(channel.client, chatId) : false;
@@ -155,18 +217,30 @@ function installMessageExperience(channel) {
     if (isGroupedResponse()) return action();
 
     const chatId = normalizeChatId(clientId);
-    const shouldType = env.enableTyping && options.noTyping !== true;
+    const command = isImmediateTestCommand(summaryText);
+    const shouldType = env.enableTyping && options.noTyping !== true && !command;
     const started = shouldType ? await startTypingCompat(channel.client, chatId) : false;
+    let stopped = false;
 
     try {
-      if (started) await wait(typingDuration(summaryText || 'Preparando resposta', options));
+      if (started) {
+        await wait(typingDuration(summaryText || 'Preparando resposta', {
+          ...options,
+          minMs: Math.max(1000, Number(options.minMs ?? env.typingMinMs)),
+        }));
+        // O indicador aparece uma única vez e termina antes do bloco de balões.
+        // Assim a sequência visual fica: Digitando… > mensagens agrupadas.
+        await stopTypingCompat(channel.client, chatId);
+        stopped = true;
+      }
+
       return await responseContext.run({
         grouped: true,
         clientId: chatId,
-        noTyping: options.noTyping === true,
+        noTyping: options.noTyping === true || command,
       }, action);
     } finally {
-      if (started) await stopTypingCompat(channel.client, chatId);
+      if (started && !stopped) await stopTypingCompat(channel.client, chatId);
     }
   };
 
@@ -181,4 +255,9 @@ module.exports = {
   typingDuration,
   isGroupedResponse,
   isWelcomeText,
+  isImmediateTestCommand,
+  _test: {
+    interceptPreAttendance,
+    markCompletedConversationUnread,
+  },
 };
