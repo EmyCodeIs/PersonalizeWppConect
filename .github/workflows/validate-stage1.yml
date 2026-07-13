@@ -43,3 +43,6 @@ jobs:
 
       - name: Testar falso handoff
         run: npm run test:false-handoff
+
+      - name: Testar reset durante handoff
+        run: npm run test:reset-handoff
