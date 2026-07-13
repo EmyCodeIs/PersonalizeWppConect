@@ -12,6 +12,7 @@ process.env.SESSIONS_STORE_PATH = SESSION_FILE;
 process.env.LEADS_STORE_PATH = LEAD_FILE;
 process.env.CONTACT_IDENTITIES_STORE_PATH = IDENTITY_FILE;
 process.env.CONTACT_LABEL_STORE_PATH = LABEL_FILE;
+process.env.ORDER_NUMBER_START = '70005';
 process.env.BOT_REENTRY_AFTER_HOURS = '72';
 process.env.DETECT_MANUAL_SELLER_MESSAGES = 'true';
 process.env.ENABLE_TEST_COMMANDS = 'true';
@@ -42,15 +43,16 @@ const {
   OutboundMessageTracker,
 } = require('../src/services/outboundMessageTracker');
 const { messages } = require('../src/core/messages');
+const { buildBusinessNote } = require('../src/flow/customerFlow');
 
 function testCleanMediaNotes() {
   const huge = 'A'.repeat(5000);
   const note = [
-    '🟢 Atendimento coletado pelo Bot WPPConnect',
-    'Nome: Emy',
-    `Descrição da arte: ${huge}`,
+    '📋 *Dados do pedido* (#70005)',
+    '👤 Cliente: Emy',
+    `• Descrição da arte: ${huge}`,
     'Arquivos/referências recebidos: image: codigo-enorme.jpeg',
-    'Cidade: Belo Horizonte/MG',
+    '📍 Cidade: Belo Horizonte/MG',
   ].join('\n');
 
   const sanitized = sanitizeBusinessNote(note);
@@ -72,6 +74,56 @@ function testCleanMediaNotes() {
     'Logo em anexo',
     'legenda real da imagem deve ser preservada',
   );
+}
+
+function testSellerStyleNote() {
+  const note = buildBusinessNote({
+    chatId: '553186915950@c.us',
+    contactIdentity: { phone: '553186915950', cUsId: '553186915950@c.us' },
+    dados: {
+      pedidoNumero: 70005,
+      nome: 'Ana',
+      telefone: '553186915950',
+      cidade: 'belo horizonte',
+      origem: 'landing/site',
+      envio: 'Correios',
+      endereco: 'Rua Américo diamantino 90\nSala 303\nBairro Cruzeiro (Não sei o cep)',
+      flow: 'letreiro',
+      tipoAcrilico: 'colorido',
+      tipoCor: 'prontas',
+      coresSelecionadas: ['Preto', 'Branco'],
+      medida: { largura: 30, altura: 30 },
+      tamanhoModo: 'completo',
+      espessuraBaseLabel: '3mm',
+      espessuraBaseDescricao: '🔎 Observação: as cores Preto e Branco possuem espessura padrão de 3mm.',
+      arteMedias: [{ type: 'image' }],
+      observacaoPedido: 'Gostaria que fosse uma placa branca de acrílico como a da foto de referência com os escritos em acrílico preto em alto relevo\n\nGostaria de saber tbm se vcs trabalham com o dourado fosco, sem ser o espelhado',
+    },
+  });
+
+  assert.strictEqual(note.startsWith('📋 *Dados do pedido* (#70005)'), true);
+  assert.strictEqual(note.includes('👤 Cliente: Ana'), true);
+  assert.strictEqual(note.includes('📱 Telefone: 553186915950'), true);
+  assert.strictEqual(note.includes('🌐 Origem: LandingPage'), true);
+  assert.strictEqual(note.includes('🚚 Envio: *Correios*'), true);
+  assert.strictEqual(note.includes('*Letreiro*'), true);
+  assert.strictEqual(note.includes('• Medida: 30cm × 30cm'), true);
+  assert.strictEqual(note.includes('• Cor: Preto, Branco (prontas)'), true);
+  assert.strictEqual(note.includes('• Espessura base: 3mm'), true);
+  assert.strictEqual(note.includes('• as cores Preto e Branco possuem espessura padrão de 3mm.'), true);
+  assert.strictEqual(note.includes('Arquivo de arte na conversa'), true);
+  assert.strictEqual(note.includes('📝 *Observação do cliente:*'), true);
+  assert.strictEqual(/Atendimento coletado|Status:|Atualizado em:/i.test(note), false);
+}
+
+function testSequentialOrderNumbers() {
+  const firstSession = Store.resetSession('5531991111111@c.us');
+  const firstNumber = Store.ensureOrderNumber(firstSession);
+  assert.strictEqual(firstNumber, 70005);
+  assert.strictEqual(Store.ensureOrderNumber(firstSession), 70005, 'a mesma sessão deve manter o número');
+
+  const secondSession = Store.resetSession('5531992222222@c.us');
+  assert.strictEqual(Store.ensureOrderNumber(secondSession), 70006);
 }
 
 function testObservationCopy() {
@@ -221,6 +273,156 @@ function testCompletionSilence() {
   assert.strictEqual(after.reset, true);
 }
 
+function createPageEvaluator(windowObject) {
+  return {
+    async evaluate(fn, args) {
+      const previousWindow = global.window;
+      global.window = windowObject;
+      try {
+        return await fn(args);
+      } finally {
+        global.window = previousWindow;
+      }
+    },
+  };
+}
+
+async function testRealLabelRemovalAPI() {
+  const clientId = '5531993333333@c.us';
+  const catalog = [
+    { id: '9', name: 'Orçamento letreiros' },
+    { id: '10', name: 'Plotagens' },
+    { id: '50', name: 'VIP' },
+  ];
+  const chat = {
+    id: { _serialized: clientId, toJid: () => clientId },
+    labels: ['9', '50'],
+  };
+  const windowObject = {
+    WPP: {
+      labels: {
+        async getAllLabels() { return catalog; },
+        async addOrRemoveLabels(chatId, options) {
+          assert.strictEqual(chatId, clientId);
+          for (const option of options) {
+            if (option.type === 'remove') {
+              chat.labels = chat.labels.filter((id) => String(id) !== String(option.labelId));
+            }
+          }
+          return true;
+        },
+      },
+    },
+    Store: {
+      Chat: {
+        get(id) { return id === clientId ? chat : null; },
+        async find(id) { return id === clientId ? chat : null; },
+      },
+      Label: {
+        getLabelsForModel(model) {
+          return model.labels.map((id) => catalog.find((item) => item.id === id) || { id });
+        },
+      },
+    },
+  };
+
+  const result = await SystemReset.removeManagedLabelsFromContact(
+    { client: { page: createPageEvaluator(windowObject) } },
+    { clientId, aliases: [clientId] },
+  );
+  assert.strictEqual(result.success, true);
+  assert.strictEqual(result.verified, true);
+  assert.strictEqual(result.removedIds.includes('9'), true);
+  assert.deepStrictEqual(chat.labels, ['50'], 'etiqueta manual deve ser preservada');
+}
+
+async function testRealNoteDeletionAPI() {
+  const clientId = '5531994444444@c.us';
+  let note = {
+    id: 'note-1',
+    type: 'unstructured',
+    chatJid: clientId,
+    content: 'Dados antigos',
+    createdAt: 100,
+    modifiedAt: 100,
+  };
+  const chat = { id: { _serialized: clientId, toJid: () => clientId } };
+  let deletionMutation = null;
+
+  const modules = {
+    WAWebNoteAction: {
+      async retrieveOnlyNoteForChatJid() { return note; },
+    },
+    WAWebNoteSync: {
+      collectionName: 'regular_low',
+      getAction() { return 'note_edit'; },
+      getVersion() { return 7; },
+      async resolveNoteId(_source, _target, id) { return id; },
+    },
+    WAWebSyncdGetChat: {
+      async getChatJidMutationIndexForChat(id) { return id; },
+    },
+    WAWebWidFactory: { createWid(id) { return id; } },
+    WAWebWidToJid: { widToChatJid(id) { return id; } },
+    WAWebSyncdActionUtils: {
+      buildPendingMutation(args) {
+        deletionMutation = args;
+        return args;
+      },
+    },
+    'WAWebProtobufsServerSync.pb': {
+      SyncdMutation$SyncdOperation: { SET: 1 },
+    },
+    WAWebSyncdCoreApi: {
+      async lockForSync(_collections, _mutations, callback) { await callback(); },
+    },
+    WAWebSchemaNote: {
+      getNoteTable() {
+        return {
+          async remove(id) {
+            if (String(note?.id) === String(id)) note = null;
+          },
+        };
+      },
+    },
+    WAWebNoteCollection: {
+      NoteCollection: { purgeNotesByChatJid() {} },
+    },
+  };
+
+  const windowObject = {
+    WPP: {
+      chat: {
+        async getNotes() { return note; },
+        async setNotes(_id, content) {
+          note = { ...(note || {}), id: 'note-fallback', chatJid: clientId, content };
+          return note;
+        },
+      },
+    },
+    Store: {
+      Chat: {
+        get(id) { return id === clientId ? chat : null; },
+        async find(id) { return id === clientId ? chat : null; },
+      },
+    },
+    require(name) {
+      if (!(name in modules)) throw new Error(`Módulo ausente: ${name}`);
+      return modules[name];
+    },
+  };
+
+  const result = await SystemReset.clearContactNote(
+    { client: { page: createPageEvaluator(windowObject) } },
+    clientId,
+    { clientId, aliases: [clientId] },
+  );
+  assert.strictEqual(result.success, true);
+  assert.strictEqual(result.mode, 'deleted');
+  assert.strictEqual(note, null);
+  assert.strictEqual(deletionMutation.value.noteEditAction.deleted, true);
+}
+
 async function testSystemResetCleansWhatsAppData() {
   const clientId = '5531999999933@c.us';
   const session = Store.resetSession(clientId);
@@ -248,7 +450,7 @@ async function testSystemResetCleansWhatsAppData() {
     },
     clearNote: async (_channel, targetClientId) => {
       notesClearedFor.push(targetClientId);
-      return { success: true };
+      return { success: true, mode: 'deleted' };
     },
   });
 
@@ -264,13 +466,17 @@ async function testSystemResetCleansWhatsAppData() {
 async function run() {
   try {
     testCleanMediaNotes();
+    testSellerStyleNote();
+    testSequentialOrderNumbers();
     testObservationCopy();
     testOutboundTracker();
     testOutgoingIdentity();
     testSellerTakeoverAndReentry();
     testCompletionSilence();
+    await testRealLabelRemovalAPI();
+    await testRealNoteDeletionAPI();
     await testSystemResetCleansWhatsAppData();
-    console.log('[TESTE FECHAMENTO ETAPA 1] silêncio 72h, handoff, nota limpa e resetarsys: OK');
+    console.log('[TESTE FECHAMENTO ETAPA 1] reset real, nota de vendedor, silêncio 72h e handoff: OK');
   } finally {
     for (const file of TEST_FILES) {
       try { fs.unlinkSync(file); } catch (_) {}
