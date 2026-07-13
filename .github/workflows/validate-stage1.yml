@@ -40,3 +40,6 @@ jobs:
 
       - name: Testar ajustes pre-producao
         run: npm run test:preprod-adjustments
+
+      - name: Testar falso handoff
+        run: npm run test:false-handoff
