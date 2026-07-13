@@ -6,6 +6,7 @@ const {
   isHighConfidenceManualMessage,
   matchSellerLabel,
   nearestPaletteIndex,
+  patchWppConnect,
 } = require('../src/services/strictHandoffPolicy');
 
 function testOnlyHumanTextCanTriggerManualHandoff() {
@@ -91,10 +92,23 @@ function testSellerLabelsRequireExactNameAndColor() {
   ], palette), null, 'etiqueta que não pertence aos três vendedores deve ser ignorada');
 }
 
+function testRealWppConnectExportCanBePatched() {
+  const wppconnect = require('@wppconnect-team/wppconnect');
+  assert.strictEqual(typeof wppconnect.create, 'function');
+  const originalCreate = wppconnect.create;
+  patchWppConnect(wppconnect);
+  assert.notStrictEqual(
+    wppconnect.create,
+    originalCreate,
+    'o bootstrap precisa conseguir instalar a política antes da conexão real',
+  );
+}
+
 function run() {
   testOnlyHumanTextCanTriggerManualHandoff();
   testBotActivityGuard();
   testSellerLabelsRequireExactNameAndColor();
+  testRealWppConnectExportCanBePatched();
   console.log('[TESTE HANDOFF ESTRITO] somente texto humano ou etiqueta correta de vendedor assume: OK');
 }
 
