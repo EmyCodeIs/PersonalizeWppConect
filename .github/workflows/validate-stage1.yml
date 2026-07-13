@@ -34,3 +34,6 @@ jobs:
 
       - name: Testar fechamento da etapa 1
         run: npm run test:stage1-closure
+
+      - name: Testar reset do contador de pedidos
+        run: npm run test:reset-counter
