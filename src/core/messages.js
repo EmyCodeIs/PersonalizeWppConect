@@ -38,7 +38,7 @@ const messages = {
   pickupAddress: 'Combinado! Você poderá retirar na empresa.\n\n📍 Nós estamos localizados na Rua Selênio 226, Bairro Prado.',
   installationNote: 'Para instalação, a equipe precisa analisar o endereço e os detalhes informados antes da confirmação final.',
   askObservation: '📝\nGostaria de anexar alguma informação sobre o letreiro? Pode ser quantidade, detalhe de logo, observação de instalação, acabamento ou qualquer ponto importante.',
-  askObservationText: 'Perfeito! Me envie a observação em uma ou mais mensagens. Quando você parar por alguns segundos, vou juntar tudo e finalizar o cadastro.',
+  askObservationText: 'Claro! Me conte o que gostaria de acrescentar ao pedido.',
   fallback: 'Não consegui entender direitinho. Vou reenviar a etapa atual para você escolher novamente.',
 };
 
