@@ -4,9 +4,23 @@ const crypto = require('crypto');
 
 const DEFAULT_TTL_MS = 45000;
 const INTERACTIVE_FALLBACK_MS = 5000;
+const MEDIA_FALLBACK_MS = 3000;
+
+function serializedId(value) {
+  if (!value) return '';
+  if (typeof value === 'string' || typeof value === 'number') return String(value).trim();
+  return String(
+    value?._serialized
+    || value?.serialized
+    || value?.remote
+    || value?.remoteJid
+    || value?.id
+    || '',
+  ).trim();
+}
 
 function normalizeChatId(value) {
-  const raw = String(value || '').trim();
+  const raw = serializedId(value);
   if (!raw) return '';
   if (/@(c\.us|g\.us|lid)$/i.test(raw)) return raw;
   const digits = raw.replace(/\D/g, '');
@@ -23,28 +37,41 @@ function normalizeText(value) {
 function messageId(value) {
   return String(
     value?.id?._serialized
-    || value?.id
+    || value?.id?.id
+    || (typeof value?.id === 'string' ? value.id : '')
     || value?.messageId
     || value?.key?.id
+    || value?.msg?.id?._serialized
     || '',
   ).trim();
 }
 
+function outgoingChatIds(message = {}) {
+  const candidates = [
+    message?.to,
+    message?.chatId,
+    message?.id?.remote,
+    message?.id?.remote?._serialized,
+    message?.key?.remoteJid,
+    message?.recipient?.id,
+    message?.recipient?.id?._serialized,
+    message?.from,
+  ];
+
+  return [...new Set(candidates.map(normalizeChatId).filter(Boolean))];
+}
+
 function outgoingChatId(message = {}) {
-  return normalizeChatId(
-    message?.to
-    || message?.chatId
-    || message?.recipient?.id
-    || message?.from,
-  );
+  return outgoingChatIds(message)[0] || '';
 }
 
 function messageKind(message = {}) {
   const type = String(message?.type || message?.mimetype || message?.mediaType || '').toLowerCase();
-  if (/image/.test(type)) return 'image';
+  if (/image|sticker/.test(type)) return 'image';
   if (/document|pdf|application/.test(type)) return 'document';
-  if (/list|interactive/.test(type)) return 'list';
+  if (/list|interactive|template|button/.test(type)) return 'list';
   if (/video/.test(type)) return 'video';
+  if (/audio|ptt/.test(type)) return 'audio';
   return 'text';
 }
 
@@ -81,16 +108,26 @@ class OutboundMessageTracker {
 
   begin({ chatId, kind = 'text', texts = [] } = {}) {
     this.cleanup();
+    const createdAt = Date.now();
     const token = {
       id: tokenId(),
       chatId: normalizeChatId(chatId),
-      kind: String(kind || 'text'),
+      kind: String(kind || 'text').toLowerCase(),
       texts: [...new Set((texts || []).map(normalizeText).filter(Boolean))],
-      createdAt: Date.now(),
-      expiresAt: Date.now() + this.ttlMs,
+      createdAt,
+      expiresAt: createdAt + this.ttlMs,
     };
     this.pending.set(token.id, token);
     return token;
+  }
+
+  rememberMessageId(id, tokenIdValue = null) {
+    const normalized = String(id || '').trim();
+    if (!normalized) return;
+    this.byMessageId.set(normalized, {
+      tokenId: tokenIdValue || null,
+      expiresAt: Date.now() + this.ttlMs,
+    });
   }
 
   bindResult(token, result) {
@@ -100,12 +137,7 @@ class OutboundMessageTracker {
       messageId(result?.message),
       messageId(result?.msg),
     ].filter(Boolean);
-    for (const id of ids) {
-      this.byMessageId.set(id, {
-        tokenId: token.id,
-        expiresAt: Date.now() + this.ttlMs,
-      });
-    }
+    for (const id of ids) this.rememberMessageId(id, token.id);
   }
 
   cancel(token) {
@@ -116,25 +148,28 @@ class OutboundMessageTracker {
     const now = Date.now();
     this.cleanup(now);
     const id = messageId(message);
+
+    // O mesmo envio pode aparecer mais de uma vez no onAnyMessage.
+    // Mantemos o ID reconhecido até o TTL expirar para que eventos duplicados
+    // do próprio bot nunca sejam classificados como atendimento humano.
     if (id && this.byMessageId.has(id)) {
       const record = this.byMessageId.get(id);
-      this.byMessageId.delete(id);
       if (record?.tokenId) this.pending.delete(record.tokenId);
       return true;
     }
 
-    const chatId = outgoingChatId(message);
+    const chatIds = outgoingChatIds(message);
     const kind = messageKind(message);
     const texts = messageTexts(message);
 
     const candidates = [...this.pending.values()]
-      .filter((token) => token.chatId && token.chatId === chatId)
+      .filter((token) => token.chatId && chatIds.includes(token.chatId))
       .sort((a, b) => a.createdAt - b.createdAt);
 
     for (const token of candidates) {
+      const ageMs = now - token.createdAt;
       const kindCompatible = token.kind === kind
-        || (token.kind === 'document' && kind === 'text')
-        || (token.kind === 'list' && kind === 'text');
+        || (['image', 'document', 'video', 'audio', 'list'].includes(token.kind) && kind === 'text');
       if (!kindCompatible) continue;
 
       const exactTextMatch = token.texts.length > 0
@@ -143,12 +178,21 @@ class OutboundMessageTracker {
           || actual.includes(expected)
           || expected.includes(actual)
         )));
-      const emptyMediaMatch = token.texts.length === 0 && kind !== 'text';
-      const recentInteractiveMatch = token.kind !== 'text'
-        && (now - token.createdAt) <= INTERACTIVE_FALLBACK_MS;
+
+      // Imagens sem legenda podem ser serializadas como evento de texto vazio.
+      // A janela é curta e só vale enquanto existe um envio programático pendente.
+      const emptyMediaMatch = ['image', 'document', 'video', 'audio'].includes(token.kind)
+        && texts.length === 0
+        && ageMs <= MEDIA_FALLBACK_MS;
+
+      // Listas podem voltar pelo WhatsApp como `chat` com conteúdo interno
+      // diferente do payload enviado. O registro foi criado antes do envio.
+      const recentInteractiveMatch = token.kind === 'list'
+        && ageMs <= INTERACTIVE_FALLBACK_MS;
 
       if (!exactTextMatch && !emptyMediaMatch && !recentInteractiveMatch) continue;
 
+      if (id) this.rememberMessageId(id, token.id);
       this.pending.delete(token.id);
       return true;
     }
@@ -163,10 +207,12 @@ module.exports = {
   normalizeText,
   messageId,
   outgoingChatId,
+  outgoingChatIds,
   messageKind,
   messageTexts,
   _test: {
     DEFAULT_TTL_MS,
     INTERACTIVE_FALLBACK_MS,
+    MEDIA_FALLBACK_MS,
   },
 };
