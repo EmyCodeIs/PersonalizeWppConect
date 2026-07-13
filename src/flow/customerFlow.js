@@ -162,6 +162,7 @@ async function finish(channel, clientId, session, reason) {
   session.dados.botDone = true;
   session.dados.completedAt = new Date().toISOString();
   Store.saveSession(session);
+  Store.rememberCustomerProfile(clientId, { name: session.dados?.nome });
   Store.appendLead({ clientId: session.id, reason, etapa: session.etapa, dados: session.dados });
   await replaceServiceLabel(channel, clientId, session.dados.flow || 'outros').catch(() => null);
   if (env.enableContactNotes && channel?.setContactNote) {
@@ -233,7 +234,7 @@ async function processCustomerMessage({ clientId, text, channel, messages: inbou
 
   if (env.enableTestCommands && /^\/resetarsys$/i.test(first(input))) {
     const r = Store.resetSystem();
-    await channel.sendText(clientId, `Sistema resetado para teste.\n\nSessões apagadas: ${r.previousSessionCount}\nLeads apagados: ${r.previousLeadCount}\n\nMe envie uma nova mensagem para começar como primeiro contato.`);
+    await channel.sendText(clientId, `Sistema resetado para teste.\n\nSessões apagadas: ${r.previousSessionCount}\nPerfis apagados: ${r.previousProfileCount}\nLeads apagados: ${r.previousLeadCount}\n\nMe envie uma nova mensagem para começar como primeiro contato.`);
     return Store.resetSession(clientId);
   }
   if (env.enableTestCommands && /^\/(reset|reiniciar)$/i.test(first(input))) {
@@ -256,7 +257,8 @@ async function processCustomerMessage({ clientId, text, channel, messages: inbou
     d.initial = initial; d.origem = initial.isLanding ? 'landing/site' : 'whatsapp';
     if (initial.name && !d.nome) d.nome = initial.name;
     if (initial.phone && !d.telefone) d.telefone = initial.phone;
-    await channel.sendText(clientId, messages.welcome(d.nome));
+    const visit = Store.beginCustomerConversation(clientId, { name: d.nome });
+    await channel.sendText(clientId, messages.welcome(d.nome, { isReturning: visit.isReturning }));
     s.etapa = 'escolher_servico'; Store.saveSession(s); await sendMenu(channel, clientId, 'servicos'); return s;
   }
 
