@@ -3,6 +3,7 @@
 const fs = require('fs');
 const path = require('path');
 const Identity = require('./contactIdentity');
+const { env } = require('../config/env');
 
 const DATA_DIR = path.join(process.cwd(), 'data');
 const SESSIONS_PATH = path.join(DATA_DIR, 'sessions.json');
@@ -34,12 +35,31 @@ function nowIso() {
   return new Date().toISOString();
 }
 
+function toFiniteTimestamp(value) {
+  const parsed = new Date(value).getTime();
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function addHoursIso(baseIso, hours) {
+  const baseTimestamp = toFiniteTimestamp(baseIso) || Date.now();
+  const safeHours = Math.max(1, Number(hours || 0));
+  return new Date(baseTimestamp + (safeHours * 60 * 60 * 1000)).toISOString();
+}
+
+function computeExpiresAt(lastInteractionAt, completed = false) {
+  const ttlHours = completed
+    ? env.completedSessionTtlHours
+    : env.flowSessionTtlHours;
+  return addHoursIso(lastInteractionAt || nowIso(), ttlHours);
+}
+
 function normalizeClientId(clientId) {
   return Identity.getSessionKey(clientId);
 }
 
 function createSession(id, chatId) {
   const identity = Identity.resolveContact(chatId || id);
+  const createdAt = nowIso();
   return {
     id,
     clientId: id,
@@ -47,9 +67,12 @@ function createSession(id, chatId) {
     contactIdentity: identity || null,
     etapa: 'inicio',
     dados: {},
-    createdAt: nowIso(),
-    updatedAt: nowIso(),
+    createdAt,
+    updatedAt: createdAt,
+    lastInteractionAt: createdAt,
+    expiresAt: computeExpiresAt(createdAt, false),
     completed: false,
+    completedAt: null,
   };
 }
 
@@ -63,14 +86,62 @@ function migrateSession(session, id, chatId) {
   next.etapa = next.etapa || next.step || 'inicio';
   next.dados = next.dados || next.data || {};
   next.createdAt = next.createdAt || nowIso();
-  next.updatedAt = next.updatedAt || nowIso();
+  next.updatedAt = next.updatedAt || next.lastInteractionAt || next.createdAt || nowIso();
+  next.lastInteractionAt = next.lastInteractionAt || next.updatedAt || next.createdAt || nowIso();
+  next.completed = Boolean(next.completed || next.dados?.botDone || next.etapa === 'concluido');
+  next.completedAt = next.completed
+    ? (next.completedAt || next.dados?.completedAt || next.updatedAt || next.lastInteractionAt)
+    : null;
+  next.expiresAt = next.expiresAt || computeExpiresAt(next.lastInteractionAt, next.completed);
   return next;
+}
+
+function isSessionExpired(session, currentTime = Date.now()) {
+  const expiresAt = toFiniteTimestamp(session?.expiresAt);
+  if (!expiresAt) return false;
+  return expiresAt <= currentTime;
+}
+
+function persistState() {
+  state.lastSavedAt = nowIso();
+  writeJson(SESSIONS_PATH, state);
+}
+
+function purgeExpiredSessions({ write = true } = {}) {
+  const currentTime = Date.now();
+  let changed = false;
+
+  for (const [id, session] of Object.entries(state.sessions || {})) {
+    const migrated = migrateSession(session, id, session?.chatId || session?.clientId || id);
+    if (isSessionExpired(migrated, currentTime)) {
+      delete state.sessions[id];
+      changed = true;
+      continue;
+    }
+
+    if (state.sessions[id] !== migrated) {
+      state.sessions[id] = migrated;
+      changed = true;
+    }
+  }
+
+  if (changed && write) persistState();
+  return changed;
 }
 
 function getSession(clientId) {
   const id = normalizeClientId(clientId);
   if (!id) return null;
-  state.sessions[id] = migrateSession(state.sessions[id], id, clientId);
+
+  const previous = state.sessions[id];
+  const migrated = migrateSession(previous, id, clientId);
+  if (previous && isSessionExpired(migrated)) {
+    state.sessions[id] = createSession(id, clientId);
+    persistState();
+    return state.sessions[id];
+  }
+
+  state.sessions[id] = migrated;
   return state.sessions[id];
 }
 
@@ -79,10 +150,16 @@ function saveSession(session) {
   const sourceId = session.chatId || session.clientId || session.id;
   const id = normalizeClientId(sourceId);
   const next = migrateSession(session, id, sourceId);
-  next.updatedAt = nowIso();
+  const updatedAt = nowIso();
+  next.updatedAt = updatedAt;
+  next.lastInteractionAt = updatedAt;
+  next.completed = Boolean(next.completed || next.dados?.botDone || next.etapa === 'concluido');
+  next.completedAt = next.completed
+    ? (next.completedAt || next.dados?.completedAt || updatedAt)
+    : null;
+  next.expiresAt = computeExpiresAt(updatedAt, next.completed);
   state.sessions[id] = next;
-  state.lastSavedAt = nowIso();
-  writeJson(SESSIONS_PATH, state);
+  persistState();
   return next;
 }
 
@@ -90,7 +167,7 @@ function resetSession(clientId) {
   const id = normalizeClientId(clientId);
   if (!id) return null;
   state.sessions[id] = createSession(id, clientId);
-  writeJson(SESSIONS_PATH, state);
+  persistState();
   return state.sessions[id];
 }
 
@@ -106,7 +183,10 @@ function appendLead(payload = {}) {
 }
 
 function listSessions() {
-  return Object.values(state.sessions || {});
+  purgeExpiredSessions();
+  return Object.entries(state.sessions || {}).map(([id, session]) => (
+    migrateSession(session, id, session?.chatId || session?.clientId || id)
+  ));
 }
 
 function resetSystem() {
@@ -121,8 +201,7 @@ function resetSystem() {
   } catch (_) {}
 
   state.sessions = {};
-  state.lastSavedAt = nowIso();
-  writeJson(SESSIONS_PATH, state);
+  persistState();
 
   ensureDataDir();
   fs.writeFileSync(LEADS_PATH, '', 'utf8');
@@ -136,6 +215,8 @@ function resetSystem() {
   };
 }
 
+purgeExpiredSessions({ write: false });
+
 module.exports = {
   getSession,
   saveSession,
@@ -144,4 +225,6 @@ module.exports = {
   appendLead,
   listSessions,
   normalizeClientId,
+  isSessionExpired,
+  purgeExpiredSessions,
 };
