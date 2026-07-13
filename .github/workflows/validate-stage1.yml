@@ -37,3 +37,6 @@ jobs:
 
       - name: Testar reset do contador de pedidos
         run: npm run test:reset-counter
+
+      - name: Testar ajustes pre-producao
+        run: npm run test:preprod-adjustments
