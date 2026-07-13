@@ -8,6 +8,7 @@ const { env } = require('../config/env');
 const DATA_DIR = path.join(process.cwd(), 'data');
 const SESSIONS_PATH = path.join(DATA_DIR, 'sessions.json');
 const LEADS_PATH = path.join(DATA_DIR, 'leads.jsonl');
+const PROFILES_PATH = path.join(DATA_DIR, 'profiles.json');
 
 function ensureDataDir() {
   fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -31,6 +32,9 @@ function writeJson(filePath, data) {
 const state = readJson(SESSIONS_PATH, { sessions: {}, lastSavedAt: null });
 if (!state.sessions || typeof state.sessions !== 'object') state.sessions = {};
 
+const profileState = readJson(PROFILES_PATH, { profiles: {}, lastSavedAt: null });
+if (!profileState.profiles || typeof profileState.profiles !== 'object') profileState.profiles = {};
+
 function nowIso() {
   return new Date().toISOString();
 }
@@ -51,6 +55,10 @@ function computeExpiresAt(lastInteractionAt, completed = false) {
     ? env.completedSessionTtlHours
     : env.flowSessionTtlHours;
   return addHoursIso(lastInteractionAt || nowIso(), ttlHours);
+}
+
+function sanitizeProfileName(value) {
+  return String(value || '').replace(/\s+/g, ' ').trim().slice(0, 120) || null;
 }
 
 function normalizeClientId(clientId) {
@@ -96,6 +104,31 @@ function migrateSession(session, id, chatId) {
   return next;
 }
 
+function createCustomerProfile(id, payload = {}) {
+  const createdAt = nowIso();
+  return {
+    clientId: id,
+    firstSeenAt: createdAt,
+    lastSeenAt: createdAt,
+    visitCount: 0,
+    knownName: sanitizeProfileName(payload.name),
+    createdAt,
+    updatedAt: createdAt,
+  };
+}
+
+function migrateCustomerProfile(profile, id) {
+  const next = profile && typeof profile === 'object' ? profile : createCustomerProfile(id);
+  next.clientId = id;
+  next.firstSeenAt = next.firstSeenAt || next.createdAt || nowIso();
+  next.lastSeenAt = next.lastSeenAt || next.updatedAt || next.firstSeenAt || nowIso();
+  next.visitCount = Math.max(0, Number(next.visitCount || 0));
+  next.knownName = sanitizeProfileName(next.knownName || next.name);
+  next.createdAt = next.createdAt || next.firstSeenAt;
+  next.updatedAt = next.updatedAt || next.lastSeenAt;
+  return next;
+}
+
 function isSessionExpired(session, currentTime = Date.now()) {
   const expiresAt = toFiniteTimestamp(session?.expiresAt);
   if (!expiresAt) return false;
@@ -105,6 +138,11 @@ function isSessionExpired(session, currentTime = Date.now()) {
 function persistState() {
   state.lastSavedAt = nowIso();
   writeJson(SESSIONS_PATH, state);
+}
+
+function persistProfiles() {
+  profileState.lastSavedAt = nowIso();
+  writeJson(PROFILES_PATH, profileState);
 }
 
 function purgeExpiredSessions({ write = true } = {}) {
@@ -171,6 +209,61 @@ function resetSession(clientId) {
   return state.sessions[id];
 }
 
+function getCustomerProfile(clientId) {
+  const id = normalizeClientId(clientId);
+  if (!id) return null;
+  const existing = profileState.profiles[id];
+  if (!existing) return null;
+  const migrated = migrateCustomerProfile(existing, id);
+  profileState.profiles[id] = migrated;
+  return migrated;
+}
+
+function rememberCustomerProfile(clientId, payload = {}) {
+  const id = normalizeClientId(clientId);
+  if (!id) return null;
+
+  const existing = profileState.profiles[id];
+  const next = migrateCustomerProfile(existing, id);
+  const timestamp = payload.seenAt || nowIso();
+  next.lastSeenAt = timestamp;
+  next.updatedAt = timestamp;
+  if (!next.firstSeenAt) next.firstSeenAt = timestamp;
+  const nextName = sanitizeProfileName(payload.name);
+  if (nextName) next.knownName = nextName;
+  if (!existing && next.visitCount < 1) next.visitCount = 1;
+  profileState.profiles[id] = next;
+  persistProfiles();
+  return next;
+}
+
+function beginCustomerConversation(clientId, payload = {}) {
+  const id = normalizeClientId(clientId);
+  if (!id) return { profile: null, isReturning: false };
+
+  const existing = getCustomerProfile(id);
+  const next = migrateCustomerProfile(existing, id);
+  const timestamp = payload.seenAt || nowIso();
+  next.lastSeenAt = timestamp;
+  next.updatedAt = timestamp;
+  next.visitCount = Math.max(0, Number(next.visitCount || 0)) + 1;
+  const nextName = sanitizeProfileName(payload.name);
+  if (nextName) next.knownName = nextName;
+  profileState.profiles[id] = next;
+  persistProfiles();
+
+  return {
+    profile: next,
+    isReturning: Boolean(existing && Number(existing.visitCount || 0) >= 1),
+  };
+}
+
+function listCustomerProfiles() {
+  return Object.entries(profileState.profiles || {}).map(([id, profile]) => (
+    migrateCustomerProfile(profile, id)
+  ));
+}
+
 function appendLead(payload = {}) {
   ensureDataDir();
   const lead = {
@@ -191,6 +284,7 @@ function listSessions() {
 
 function resetSystem() {
   const previousSessionCount = Object.keys(state.sessions || {}).length;
+  const previousProfileCount = Object.keys(profileState.profiles || {}).length;
   let previousLeadCount = 0;
 
   try {
@@ -203,6 +297,9 @@ function resetSystem() {
   state.sessions = {};
   persistState();
 
+  profileState.profiles = {};
+  persistProfiles();
+
   ensureDataDir();
   fs.writeFileSync(LEADS_PATH, '', 'utf8');
   const previousIdentityCount = Identity.resetIdentities();
@@ -210,6 +307,7 @@ function resetSystem() {
   return {
     resetAt: state.lastSavedAt,
     previousSessionCount,
+    previousProfileCount,
     previousLeadCount,
     previousIdentityCount,
   };
@@ -227,4 +325,8 @@ module.exports = {
   normalizeClientId,
   isSessionExpired,
   purgeExpiredSessions,
+  getCustomerProfile,
+  rememberCustomerProfile,
+  beginCustomerConversation,
+  listCustomerProfiles,
 };
