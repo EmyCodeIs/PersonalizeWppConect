@@ -9,15 +9,20 @@ function welcome(name) {
 const messages = {
   welcome,
   askService: '🔸\nQual dos nossos serviços deseja?',
-  plotagem: 'Perfeito! Vou coletar algumas informações rápidas para registrar sua solicitação completa.',
-  otherService: 'Perfeito! Vou coletar algumas informações rápidas para registrar sua solicitação completa.',
-  askPlotagemDescricao: 'Me conta rapidinho: qual tipo de plotagem você precisa?\n\nExemplos: vitrine, parede, veículo, placa, adesivo, envelopamento etc.',
+
+  // Plotagem e Outros são pré-atendimentos curtos. A primeira mensagem abaixo
+  // é a única enviada ao selecionar a opção; depois da descrição do cliente,
+  // o bot registra a demanda e deixa a conversa não lida para o vendedor.
+  plotagem: 'Nos explique sua demanda para plotagens. Caso tenha fotos ou vídeos de referência, encaminhe por aqui para agilizar o atendimento.',
+  otherService: 'Nos explique qual produto ou serviço você precisa. Caso tenha fotos ou vídeos de referência, encaminhe por aqui para agilizar o atendimento.',
+  askPlotagemDescricao: 'Nos explique sua demanda para plotagens. Caso tenha fotos ou vídeos de referência, encaminhe por aqui para agilizar o atendimento.',
   askPlotagemMedida: 'Você já tem a medida aproximada?\n\nPode mandar em cm ou metro. Exemplo: 120x80 cm, 2x1m, ou “ainda não tenho medida”.',
   askPlotagemLocal: 'Onde será aplicada a plotagem?\n\nExemplos: vidro, parede, ACM, carro, porta, fachada, balcão etc.',
   askPlotagemPrazo: 'Tem algum prazo ou data que precisa ficar pronto?',
-  askOtherDescricao: 'Me conta qual serviço ou produto você precisa.',
+  askOtherDescricao: 'Nos explique qual produto ou serviço você precisa. Caso tenha fotos ou vídeos de referência, encaminhe por aqui para agilizar o atendimento.',
   askOtherReferencia: 'Você tem alguma medida, foto, referência ou detalhe importante? Pode mandar por texto mesmo.',
   askOtherPrazo: 'Tem algum prazo ou urgência para esse pedido?',
+
   completedContactNote: 'Pronto! Registrei todas as informações deste atendimento na sua ficha de contato. 😊',
   mostruario: 'Confira nosso mostruário de *Letreiros e Cores* e veja alguns modelos para te inspirar!\n\nIrei dar início ao seu orçamento logo abaixo:',
   mostruarioLink: '🔗 Ver Mostruário',
