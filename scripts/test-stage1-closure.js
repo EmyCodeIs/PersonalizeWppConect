@@ -7,9 +7,11 @@ const assert = require('assert');
 const SESSION_FILE = path.join('data', 'sessions.stage1-closure.test.json');
 const LEAD_FILE = path.join('data', 'leads.stage1-closure.test.jsonl');
 const IDENTITY_FILE = path.join('data', 'identities.stage1-closure.test.json');
+const LABEL_FILE = path.join('data', 'contact-labels.stage1-closure.test.json');
 process.env.SESSIONS_STORE_PATH = SESSION_FILE;
 process.env.LEADS_STORE_PATH = LEAD_FILE;
 process.env.CONTACT_IDENTITIES_STORE_PATH = IDENTITY_FILE;
+process.env.CONTACT_LABEL_STORE_PATH = LABEL_FILE;
 process.env.BOT_REENTRY_AFTER_HOURS = '72';
 process.env.DETECT_MANUAL_SELLER_MESSAGES = 'true';
 process.env.ENABLE_TEST_COMMANDS = 'true';
@@ -20,6 +22,8 @@ const TEST_FILES = [
   LEAD_FILE,
   IDENTITY_FILE,
   `${IDENTITY_FILE}.tmp`,
+  LABEL_FILE,
+  `${LABEL_FILE}.tmp`,
 ];
 for (const file of TEST_FILES) {
   try { fs.unlinkSync(file); } catch (_) {}
@@ -27,7 +31,9 @@ for (const file of TEST_FILES) {
 
 const Identity = require('../src/services/contactIdentity');
 const Store = require('../src/services/leadStore');
+const ContactLabels = require('../src/services/contactLabelStore');
 const ConversationControl = require('../src/services/conversationControl');
+const SystemReset = require('../src/services/systemReset');
 const {
   sanitizeBusinessNote,
   getMessageText,
@@ -215,7 +221,47 @@ function testCompletionSilence() {
   assert.strictEqual(after.reset, true);
 }
 
-function run() {
+async function testSystemResetCleansWhatsAppData() {
+  const clientId = '5531999999933@c.us';
+  const session = Store.resetSession(clientId);
+  session.etapa = 'concluido';
+  session.dados.nome = 'Cliente Reset';
+  Store.saveSession(session);
+
+  ContactLabels.registerContact({ clientId, source: 'test-reset' });
+  ContactLabels.setExpectedLabel(clientId, {
+    key: 'service:letreiro',
+    name: 'Orçamento letreiros',
+    color: 'purple',
+    kind: 'service',
+    role: 'operational',
+    service: 'letreiro',
+  }, { source: 'test-reset' });
+
+  const removedFor = [];
+  const notesClearedFor = [];
+  const result = await SystemReset.resetSystemWithWhatsAppCleanup({
+    channel: {},
+    removeLabels: async (_channel, target) => {
+      removedFor.push(target.clientId);
+      return { success: true, removedIds: ['9'], chatId: target.clientId, verified: true };
+    },
+    clearNote: async (_channel, targetClientId) => {
+      notesClearedFor.push(targetClientId);
+      return { success: true };
+    },
+  });
+
+  assert.strictEqual(result.cleanupFailures, 0);
+  assert.strictEqual(result.labelsRemoved >= 1, true);
+  assert.strictEqual(result.notesCleared >= 1, true);
+  assert.strictEqual(removedFor.includes(clientId), true);
+  assert.strictEqual(notesClearedFor.includes(clientId), true);
+  assert.strictEqual(ContactLabels.stats().total, 0, 'banco de contatos precisa ser limpo');
+  assert.strictEqual(Store.listSessions().length, 0, 'sessões precisam ser apagadas');
+}
+
+async function run() {
   try {
     testCleanMediaNotes();
     testObservationCopy();
@@ -223,7 +269,8 @@ function run() {
     testOutgoingIdentity();
     testSellerTakeoverAndReentry();
     testCompletionSilence();
-    console.log('[TESTE FECHAMENTO ETAPA 1] silêncio 72h, handoff e nota limpa: OK');
+    await testSystemResetCleansWhatsAppData();
+    console.log('[TESTE FECHAMENTO ETAPA 1] silêncio 72h, handoff, nota limpa e resetarsys: OK');
   } finally {
     for (const file of TEST_FILES) {
       try { fs.unlinkSync(file); } catch (_) {}
@@ -231,9 +278,7 @@ function run() {
   }
 }
 
-try {
-  run();
-} catch (err) {
+run().catch((err) => {
   console.error(err);
   process.exitCode = 1;
-}
+});
