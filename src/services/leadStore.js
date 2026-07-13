@@ -11,6 +11,10 @@ const SESSIONS_PATH = process.env.SESSIONS_STORE_PATH
 const LEADS_PATH = process.env.LEADS_STORE_PATH
   ? path.resolve(process.cwd(), process.env.LEADS_STORE_PATH)
   : path.join(DATA_DIR, 'leads.jsonl');
+const DEFAULT_ORDER_NUMBER = (() => {
+  const value = Number(process.env.ORDER_NUMBER_START || 70001);
+  return Number.isInteger(value) && value > 0 ? value : 70001;
+})();
 
 function ensureParentDir(filePath) {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
@@ -31,8 +35,17 @@ function writeJson(filePath, data) {
   fs.renameSync(`${filePath}.tmp`, filePath);
 }
 
-const state = readJson(SESSIONS_PATH, { sessions: {}, lastSavedAt: null });
+const state = readJson(SESSIONS_PATH, {
+  sessions: {},
+  lastSavedAt: null,
+  nextOrderNumber: DEFAULT_ORDER_NUMBER,
+});
 if (!state.sessions || typeof state.sessions !== 'object') state.sessions = {};
+if (!Number.isInteger(Number(state.nextOrderNumber)) || Number(state.nextOrderNumber) <= 0) {
+  state.nextOrderNumber = DEFAULT_ORDER_NUMBER;
+} else {
+  state.nextOrderNumber = Number(state.nextOrderNumber);
+}
 
 function nowIso() {
   return new Date().toISOString();
@@ -91,6 +104,27 @@ function saveSession(session) {
   return next;
 }
 
+function ensureOrderNumber(session) {
+  if (!session?.clientId && !session?.id && !session?.chatId) return null;
+  const sourceId = session.chatId || session.clientId || session.id;
+  const id = normalizeClientId(sourceId);
+  const next = migrateSession(session, id, sourceId);
+  const current = Number(next.dados?.pedidoNumero);
+  if (Number.isInteger(current) && current > 0) {
+    state.sessions[id] = next;
+    return current;
+  }
+
+  const orderNumber = Number(state.nextOrderNumber);
+  next.dados.pedidoNumero = orderNumber;
+  state.nextOrderNumber = orderNumber + 1;
+  next.updatedAt = nowIso();
+  state.sessions[id] = next;
+  state.lastSavedAt = nowIso();
+  writeJson(SESSIONS_PATH, state);
+  return orderNumber;
+}
+
 function resetSession(clientId) {
   const id = normalizeClientId(clientId);
   if (!id) return null;
@@ -127,6 +161,7 @@ function resetSystem() {
 
   state.sessions = {};
   state.lastSavedAt = nowIso();
+  // O contador é preservado para não reutilizar números de pedido.
   writeJson(SESSIONS_PATH, state);
 
   ensureParentDir(LEADS_PATH);
@@ -144,6 +179,7 @@ function resetSystem() {
 module.exports = {
   getSession,
   saveSession,
+  ensureOrderNumber,
   resetSession,
   resetSystem,
   appendLead,
@@ -152,5 +188,6 @@ module.exports = {
   _test: {
     SESSIONS_PATH,
     LEADS_PATH,
+    DEFAULT_ORDER_NUMBER,
   },
 };
