@@ -150,6 +150,7 @@ function listSessions() {
 
 function resetSystem() {
   const previousSessionCount = Object.keys(state.sessions || {}).length;
+  const previousNextOrderNumber = Number(state.nextOrderNumber || DEFAULT_ORDER_NUMBER);
   let previousLeadCount = 0;
 
   try {
@@ -160,8 +161,8 @@ function resetSystem() {
   } catch (_) {}
 
   state.sessions = {};
+  state.nextOrderNumber = DEFAULT_ORDER_NUMBER;
   state.lastSavedAt = nowIso();
-  // O contador é preservado para não reutilizar números de pedido.
   writeJson(SESSIONS_PATH, state);
 
   ensureParentDir(LEADS_PATH);
@@ -173,6 +174,8 @@ function resetSystem() {
     previousSessionCount,
     previousLeadCount,
     previousIdentityCount,
+    previousNextOrderNumber,
+    nextOrderNumber: state.nextOrderNumber,
   };
 }
 
