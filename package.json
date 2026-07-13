@@ -1,7 +1,7 @@
 {
   "name": "personalize-wppconnect-cliente-flow",
-  "version": "0.8.2",
-  "description": "Fluxo local da Personalize para WPPConnect alinhado ao atendimento oficial: arte por texto, medida inteligente e etiqueta Orçamento letreiros roxa.",
+  "version": "0.8.3",
+  "description": "Fluxo local da Personalize para WPPConnect com etiqueta Orçamento letreiros roxa canônica, migração segura de duplicatas e paridade com o fluxo oficial.",
   "main": "src/index.js",
   "type": "commonjs",
   "scripts": {
