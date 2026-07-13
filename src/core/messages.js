@@ -15,11 +15,18 @@ const messages = {
   // o bot registra a demanda e deixa a conversa não lida para o vendedor.
   plotagem: 'Nos explique sua demanda para plotagens. Caso tenha fotos ou vídeos de referência, encaminhe por aqui para agilizar o atendimento.',
   otherService: 'Nos explique qual produto ou serviço você precisa. Caso tenha fotos ou vídeos de referência, encaminhe por aqui para agilizar o atendimento.',
-  askPlotagemDescricao: 'Nos explique sua demanda para plotagens. Caso tenha fotos ou vídeos de referência, encaminhe por aqui para agilizar o atendimento.',
+
+  // Mantidos vazios por compatibilidade com o fluxo anterior, que ainda chama
+  // um segundo envio depois da mensagem principal. A camada de experiência
+  // ignora textos vazios e evita que o cliente receba um balão duplicado.
+  askPlotagemDescricao: '',
+  askOtherDescricao: '',
+
+  // Estes textos não são mais enviados: quando o fluxo antigo tenta avançar
+  // para essas etapas, a camada de pré-atendimento finaliza silenciosamente.
   askPlotagemMedida: 'Você já tem a medida aproximada?\n\nPode mandar em cm ou metro. Exemplo: 120x80 cm, 2x1m, ou “ainda não tenho medida”.',
   askPlotagemLocal: 'Onde será aplicada a plotagem?\n\nExemplos: vidro, parede, ACM, carro, porta, fachada, balcão etc.',
   askPlotagemPrazo: 'Tem algum prazo ou data que precisa ficar pronto?',
-  askOtherDescricao: 'Nos explique qual produto ou serviço você precisa. Caso tenha fotos ou vídeos de referência, encaminhe por aqui para agilizar o atendimento.',
   askOtherReferencia: 'Você tem alguma medida, foto, referência ou detalhe importante? Pode mandar por texto mesmo.',
   askOtherPrazo: 'Tem algum prazo ou urgência para esse pedido?',
 
