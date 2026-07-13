@@ -26,9 +26,9 @@ const menus = {
     fallbackText: messages.askService,
     interactiveOnly: true,
     rows: [
-      { id: 'serv_letreiro', title: 'Letreiro de acrílico', description: 'Orçamento de letreiro e cores' },
-      { id: 'serv_plotagem', title: 'Plotagem', description: 'Coletar dados da solicitação' },
-      { id: 'serv_outros', title: 'Outros', description: 'Coletar dados da solicitação' },
+      { id: 'serv_letreiro', title: 'Letreiro de acrílico', description: 'Orçamento completo de letreiro' },
+      { id: 'serv_plotagem', title: 'Plotagem', description: 'Descreva a aplicação e envie referências' },
+      { id: 'serv_outros', title: 'Outros', description: 'Descreva o produto ou serviço desejado' },
     ],
   },
   tipoAcrilico: {

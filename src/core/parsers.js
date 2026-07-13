@@ -54,7 +54,9 @@ function normalizeNumberToken(token) {
   return Number.isFinite(n) ? n : null;
 }
 
-// Port direto da regra de medida inteligente do projeto Personalize em produção.
+// Coleta inteligente baseada no fluxo oficial da Personalize.
+// Além das formas já aceitas em produção, corrige a ambiguidade de frases como
+// "100 de largura e 20 de altura" e normaliza metros/milímetros para cm.
 function parseMedidasFromText(input, parcial = {}) {
   const raw = String(input || '').trim();
   const lowered = raw
@@ -77,93 +79,155 @@ function parseMedidasFromText(input, parcial = {}) {
   }
 
   const descricaoTriggers = /\b(a4|folha|porta|parede|proporcional|aproximad|mais\s*ou\s*menos|grande|pequeno|tamanho)\b/.test(lowered);
-
-  const removeOne = (arr, val) => {
-    const idx = arr.indexOf(val);
-    if (idx >= 0) arr.splice(idx, 1);
-  };
-
-  const extractNums = (str) => {
-    const nums = [];
-    const re = /\d+(?:[.,]\d+)?/g;
-    let m;
-    while ((m = re.exec(str))) {
-      const token = m[0];
-      const start = m.index;
-      const end = start + token.length;
-      const prev = str[start - 1] || '';
-      const next = str[end] || '';
-      if (/[a-z]/i.test(prev) || /[a-z]/i.test(next)) continue;
-      const n = normalizeNumberToken(token);
-      if (n !== null) nums.push(n);
-    }
-    return nums;
-  };
-
   const clampOk = (n) => Number.isFinite(n) && n > 0 && n <= 10000;
+  const labelKind = (value) => /altura/.test(value) ? 'altura' : 'largura';
+  const unitPattern = '(?:mm|milimetros?|cm|centimetros?|m|metros?)';
 
-  const mx = lowered.match(/(\d+(?:[.,]\d+)?)\s*(?:x|×|por|\*|-|\/)\s*(\d+(?:[.,]\d+)?)/);
-  if (mx?.[1] && mx?.[2]) {
-    const l = normalizeNumberToken(mx[1]);
-    const a = normalizeNumberToken(mx[2]);
-    if (clampOk(l)) out.largura = l;
-    if (clampOk(a)) out.altura = a;
-    if (out.largura !== null && out.altura !== null) {
+  const valueInCm = (token, unit = '') => {
+    const value = normalizeNumberToken(token);
+    if (!Number.isFinite(value)) return null;
+    const normalizedUnit = String(unit || '').trim().toLowerCase();
+    if (/^(?:m|metros?)$/.test(normalizedUnit)) return value * 100;
+    if (/^(?:mm|milimetros?)$/.test(normalizedUnit)) return value / 10;
+    return value;
+  };
+
+  const assign = (kind, token, unit = '') => {
+    const value = valueInCm(token, unit);
+    if (!clampOk(value)) return false;
+    out[kind] = value;
+    return true;
+  };
+
+  // Faixas são preservadas como referência, em vez de transformar
+  // "80-120 por 20-30" acidentalmente em 80 x 120.
+  const rangePattern = new RegExp(`\\d+(?:[.,]\\d+)?\\s*(?:-|a|ate)\\s*\\d+(?:[.,]\\d+)?\\s*${unitPattern}?`, 'i');
+  if (rangePattern.test(lowered)) {
+    out.modo = 'descricao';
+    out.descricao = raw;
+    out.largura = null;
+    out.altura = null;
+    return out;
+  }
+
+  // Forma direta: 100x20, 1m x 20cm, 100 por 20.
+  const pair = new RegExp(
+    `(\\d+(?:[.,]\\d+)?)\\s*(${unitPattern})?\\s*(?:x|×|por|\\*)\\s*`
+      + `(\\d+(?:[.,]\\d+)?)\\s*(${unitPattern})?`,
+    'i',
+  ).exec(lowered);
+  if (pair) {
+    assign('largura', pair[1], pair[2]);
+    assign('altura', pair[3], pair[4]);
+    if (clampOk(out.largura) && clampOk(out.altura)) {
       out.modo = 'completo';
       return out;
     }
   }
 
-  const usados = [];
-  const mh1 = lowered.match(/altura\D{0,12}(\d+(?:[.,]\d+)?)/);
-  const mh2 = lowered.match(/(\d+(?:[.,]\d+)?)(?:\s*(?:cm|mm|m))?\s*(?:de\s*)?altura/);
-  const mh = mh1?.[1] || mh2?.[1];
-  if (mh) {
-    const a = normalizeNumberToken(mh);
-    if (clampOk(a)) {
-      out.altura = a;
-      usados.push(a);
-    }
+  const captures = [];
+  const label = '(altura|largura|comprimento|cumprimento)';
+
+  // "largura 100", "altura: 20cm". O separador é restrito para não
+  // capturar o número pertencente ao outro rótulo da frase.
+  const labelBefore = new RegExp(
+    `\\b${label}\\b\\s*(?:(?:de|com)\\s*)?(?:[:=]\\s*)?`
+      + `(\\d+(?:[.,]\\d+)?)\\s*(${unitPattern})?`,
+    'gi',
+  );
+  let match;
+  while ((match = labelBefore.exec(lowered))) {
+    captures.push({
+      index: match.index,
+      kind: labelKind(match[1]),
+      token: match[2],
+      unit: match[3],
+      source: 'label-before',
+    });
   }
 
-  const mw1 = lowered.match(/(largura|comprimento|cumprimento)\D{0,12}(\d+(?:[.,]\d+)?)/);
-  const mw2 = lowered.match(/(\d+(?:[.,]\d+)?)(?:\s*(?:cm|mm|m))?\s*(?:de\s*)?(largura|comprimento|cumprimento)/);
-  const mw = mw1?.[2] || mw2?.[1];
-  if (mw) {
-    const l = normalizeNumberToken(mw);
-    if (clampOk(l)) {
-      out.largura = l;
-      usados.push(l);
-    }
+  // "100 de largura", "20cm de altura".
+  const numberBefore = new RegExp(
+    `(\\d+(?:[.,]\\d+)?)\\s*(${unitPattern})?\\s*(?:de\\s*)?\\b${label}\\b`,
+    'gi',
+  );
+  while ((match = numberBefore.exec(lowered))) {
+    captures.push({
+      index: match.index,
+      kind: labelKind(match[3]),
+      token: match[1],
+      unit: match[2],
+      source: 'number-before',
+    });
   }
 
-  const nums = extractNums(lowered);
-  const restantes = [...nums];
-  for (const u of usados) removeOne(restantes, u);
+  captures.sort((a, b) => a.index - b.index);
+  const labelBeforeKinds = new Set(
+    captures.filter((item) => item.source === 'label-before').map((item) => item.kind),
+  );
+  const numberBeforeKinds = new Set(
+    captures.filter((item) => item.source === 'number-before').map((item) => item.kind),
+  );
+  const preferredSource = labelBeforeKinds.size === 2
+    ? 'label-before'
+    : numberBeforeKinds.size === 2
+      ? 'number-before'
+      : null;
+  for (const kind of ['largura', 'altura']) {
+    const candidates = captures.filter((item) => item.kind === kind);
+    const chosen = preferredSource
+      ? (candidates.find((item) => item.source === preferredSource) || candidates[0])
+      : (candidates.find((item) => item.source === 'number-before') || candidates[0]);
+    if (chosen) assign(chosen.kind, chosen.token, chosen.unit);
+  }
 
-  if (out.largura === null && restantes.length) {
-    const n = restantes.shift();
-    if (clampOk(n)) out.largura = n;
+  // Quando faltam rótulos, usa os números restantes na ordem natural.
+  // Ignora A4, 24h e outros números grudados em letras não reconhecidas.
+  const generic = new RegExp(`\\d+(?:[.,]\\d+)?(?:\\s*${unitPattern})?`, 'gi');
+  const numbers = [];
+  while ((match = generic.exec(lowered))) {
+    const tokenText = match[0];
+    const start = match.index;
+    const endIndex = start + tokenText.length;
+    const prev = lowered[start - 1] || '';
+    const next = lowered[endIndex] || '';
+    if (/[a-z]/i.test(prev) || /[a-z]/i.test(next)) continue;
+
+    const parsed = /^(\d+(?:[.,]\d+)?)\s*(.*)$/.exec(tokenText.trim());
+    if (!parsed) continue;
+    const value = valueInCm(parsed[1], parsed[2]);
+    if (!clampOk(value)) continue;
+    if (!numbers.some((entry) => entry.index === start)) numbers.push({ index: start, value });
   }
-  if (out.altura === null && restantes.length) {
-    const n = restantes.shift();
-    if (clampOk(n)) out.altura = n;
+
+  // Remove os números já associados explicitamente aos rótulos.
+  const usedValues = captures
+    .map((item) => valueInCm(item.token, item.unit))
+    .filter(clampOk);
+  const remaining = numbers.map((item) => item.value);
+  for (const used of usedValues) {
+    const index = remaining.indexOf(used);
+    if (index >= 0) remaining.splice(index, 1);
   }
+
+  if (!clampOk(out.largura) && remaining.length) out.largura = remaining.shift();
+  if (!clampOk(out.altura) && remaining.length) out.altura = remaining.shift();
 
   if (clampOk(out.largura) && clampOk(out.altura)) {
     out.modo = 'completo';
     return out;
   }
-  if (clampOk(out.largura) && !clampOk(out.altura)) {
+  if (clampOk(out.largura)) {
     out.altura = null;
     out.modo = 'largura';
     return out;
   }
-  if (!clampOk(out.largura) && clampOk(out.altura)) {
+  if (clampOk(out.altura)) {
     out.largura = null;
     out.modo = 'altura';
     return out;
   }
+
   if (descricaoTriggers || raw.length >= 6) {
     out.modo = 'descricao';
     out.descricao = raw;

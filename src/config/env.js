@@ -37,7 +37,7 @@ function mapList(name) {
     }, {});
 }
 
-const serviceLabelLetreiro = process.env.SERVICE_LABEL_LETREIRO || 'Orçamento letreiro';
+const serviceLabelLetreiro = process.env.SERVICE_LABEL_LETREIRO || 'Orçamento letreiros';
 const serviceLabelPlotagem = process.env.SERVICE_LABEL_PLOTAGEM || 'Plotagens';
 const serviceLabelOutros = process.env.SERVICE_LABEL_OUTROS || 'Outros';
 const serviceLabelLetreiroColor = process.env.SERVICE_LABEL_LETREIRO_COLOR || 'purple';
@@ -50,8 +50,6 @@ const env = {
   businessName: process.env.BUSINESS_NAME || 'Personalize',
   sellerName: process.env.SELLER_NAME || 'Vendedor Personalize',
 
-  // Entrada do cliente. O buffer curto atende respostas simples; o longo é usado
-  // em medidas, arte, endereço, Pantone e observações com várias mensagens.
   bufferMs: Math.max(800, num('BUFFER_MS', 4500)),
   multiMessageBufferMs: Math.max(2500, num('MULTI_MESSAGE_BUFFER_MS', 8000)),
   measureBufferMs: Math.max(2500, num('MEASURE_BUFFER_MS', 8000)),
@@ -62,8 +60,6 @@ const env = {
   cityBufferMs: Math.max(800, num('CITY_BUFFER_MS', 2500)),
   interactiveBufferMs: Math.max(100, num('INTERACTIVE_BUFFER_MS', 350)),
 
-  // Mantidos para respostas avulsas. Dentro de um grupo de resposta o sistema
-  // ignora esses delays e envia os balões em sequência, sem pausas artificiais.
   minReplyDelayMs: Math.max(0, num('MIN_REPLY_DELAY_MS', 1800)),
   maxReplyDelayMs: Math.max(0, num('MAX_REPLY_DELAY_MS', 4200)),
   enableTyping: bool('ENABLE_TYPING', true),
@@ -76,15 +72,52 @@ const env = {
   enableContactLabels: bool('ENABLE_CONTACT_LABELS', true),
   detectManualContactLabels: bool('DETECT_MANUAL_CONTACT_LABELS', true),
   storeManualContactLabels: bool('STORE_MANUAL_CONTACT_LABELS', true),
+
+  // Depois da conclusão ou de uma mensagem manual do vendedor, o bot fica em silêncio.
+  // O primeiro contato recebido após essa janela cria um novo atendimento.
+  botReentryAfterHours: Math.max(1, num('BOT_REENTRY_AFTER_HOURS', 72)),
+  detectManualSellerMessages: bool('DETECT_MANUAL_SELLER_MESSAGES', true),
+  botOutboundTrackerTtlMs: Math.max(5000, num('BOT_OUTBOUND_TRACKER_TTL_MS', 45000)),
+
   awaitingQuoteLabelName: process.env.AWAITING_QUOTE_LABEL_NAME || serviceLabelLetreiro,
   awaitingQuoteLabelColor: process.env.AWAITING_QUOTE_LABEL_COLOR || serviceLabelLetreiroColor,
   serviceLabelLetreiro,
   serviceLabelPlotagem,
   serviceLabelOutros,
   serviceLabelLetreiroColor,
+  serviceLabelLetreiroColorHex: process.env.SERVICE_LABEL_LETREIRO_COLOR_HEX || '#7f66ff',
+  serviceLabelLetreiroColorIndex: Math.max(0, num('SERVICE_LABEL_LETREIRO_COLOR_INDEX', 5)),
   serviceLabelPlotagemColor: process.env.SERVICE_LABEL_PLOTAGEM_COLOR || 'gray',
   serviceLabelOutrosColor: process.env.SERVICE_LABEL_OUTROS_COLOR || 'red',
-  serviceLabelReplaceGroup: list('SERVICE_LABEL_REPLACE_GROUP', [serviceLabelLetreiro, serviceLabelPlotagem, serviceLabelOutros]),
+  supportLabelName: process.env.SUPPORT_LABEL_NAME || 'Suporte',
+  supportLabelColor: process.env.SUPPORT_LABEL_COLOR || 'red',
+
+  // A responsabilidade pode ser definida pelo painel ou por uma das etiquetas
+  // reconhecidas pela política estrita: Adriano/verde, Ana/azul e Dudu/amarela.
+  sellerNames: list('SELLER_NAMES', ['Adriano', 'Ana', 'Dudu']),
+  markSellerClientUnread: bool('MARK_SELLER_CLIENT_UNREAD', true),
+
+  serviceLabelReplaceGroup: list('SERVICE_LABEL_REPLACE_GROUP', [
+    serviceLabelLetreiro,
+    serviceLabelPlotagem,
+    serviceLabelOutros,
+    process.env.SUPPORT_LABEL_NAME || 'Suporte',
+  ]),
+
+  // Cria a versão correta ao lado de uma duplicada com cor errada; nunca apaga antes da migração.
+  recreateMismatchedOperationalLabels: bool('RECREATE_MISMATCHED_OPERATIONAL_LABELS', true),
+
+  // Só remove uma duplicada global depois de confirmar a etiqueta canônica nos contatos rastreados
+  // e de o próprio WhatsApp informar que a duplicada não possui mais vínculos.
+  cleanupDuplicateOperationalLabels: bool('CLEANUP_DUPLICATE_OPERATIONAL_LABELS', true),
+
+  labelObservationMinIntervalMs: Math.max(0, num('LABEL_OBSERVATION_MIN_INTERVAL_MS', 30000)),
+  labelReconcileDelayMs: Math.max(0, num('LABEL_RECONCILE_DELAY_MS', 120)),
+  labelReconcileIntervalMs: (() => {
+    const value = num('LABEL_RECONCILE_INTERVAL_MS', 300000);
+    return value <= 0 ? 0 : Math.max(60000, value);
+  })(),
+
   enableUnreadBootstrap: bool('ENABLE_UNREAD_BOOTSTRAP', true),
   unreadBootstrapDelayMs: Math.max(1000, num('UNREAD_BOOTSTRAP_DELAY_MS', 6000)),
   unreadBootstrapMaxChats: Math.max(1, num('UNREAD_BOOTSTRAP_MAX_CHATS', 30)),

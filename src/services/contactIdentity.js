@@ -5,10 +5,12 @@ const path = require('path');
 const { env } = require('../config/env');
 
 const DATA_DIR = path.join(process.cwd(), 'data');
-const IDENTITIES_PATH = path.join(DATA_DIR, 'contact-identities.json');
+const IDENTITIES_PATH = process.env.CONTACT_IDENTITIES_STORE_PATH
+  ? path.resolve(process.cwd(), process.env.CONTACT_IDENTITIES_STORE_PATH)
+  : path.join(DATA_DIR, 'contact-identities.json');
 
-function ensureDataDir() {
-  fs.mkdirSync(DATA_DIR, { recursive: true });
+function ensureParentDir() {
+  fs.mkdirSync(path.dirname(IDENTITIES_PATH), { recursive: true });
 }
 
 function readState() {
@@ -28,7 +30,7 @@ function readState() {
 const state = readState();
 
 function saveState() {
-  ensureDataDir();
+  ensureParentDir();
   state.updatedAt = new Date().toISOString();
   const temp = `${IDENTITIES_PATH}.tmp`;
   fs.writeFileSync(temp, JSON.stringify(state, null, 2), 'utf8');
@@ -55,24 +57,36 @@ function normalizePhone(value) {
 }
 
 function collectRawAliases({ chatId, raw, phone } = {}) {
+  const outgoing = Boolean(raw?.fromMe || raw?.isSentByMe);
   const sender = raw?.sender || raw?.contact || raw?.chat || {};
-  const values = [
-    chatId,
-    raw?.from,
-    raw?.chatId,
-    raw?.author,
-    raw?.to,
-    raw?.id?.remote,
-    raw?.key?.remoteJid,
-    raw?.key?.participant,
-    sender?.id,
-    sender?.id?._serialized,
-    sender?.number,
-    sender?.phone,
-    sender?.userid,
-  ];
 
-  const normalizedPhone = normalizePhone(phone || sender?.number || sender?.phone || sender?.userid);
+  // Em mensagem enviada pela própria conta, `raw.from` e `sender` representam
+  // o número da empresa. Eles nunca podem virar aliases do cliente destinatário.
+  const values = outgoing
+    ? [
+      chatId,
+      raw?.to,
+      raw?.chatId,
+      raw?.id?.remote,
+      raw?.key?.remoteJid,
+    ]
+    : [
+      chatId,
+      raw?.from,
+      raw?.chatId,
+      raw?.author,
+      raw?.to,
+      raw?.id?.remote,
+      raw?.key?.remoteJid,
+      raw?.key?.participant,
+      sender?.id,
+      sender?.id?._serialized,
+      sender?.number,
+      sender?.phone,
+      sender?.userid,
+    ];
+
+  const normalizedPhone = normalizePhone(phone || (!outgoing && (sender?.number || sender?.phone || sender?.userid)));
   if (normalizedPhone) values.push(normalizedPhone, `${normalizedPhone}@c.us`);
 
   return [...new Set(values.map(normalizeChatId).filter(Boolean))];
@@ -126,8 +140,6 @@ function registerContact({ chatId, raw, phone } = {}) {
   state.contacts[contactKey] = existing;
   for (const alias of mergedAliases) state.aliases[alias] = contactKey;
 
-  // Compatibilidade temporária: o mapa manual apenas enriquece a identidade;
-  // nunca é necessário para conversar ou manter a sessão.
   const lidMap = env.lidNumberMap || {};
   if (existing.lid && lidMap[existing.lid]) {
     const mappedPhone = normalizePhone(lidMap[existing.lid]);
@@ -190,4 +202,8 @@ module.exports = {
   getSessionKey,
   getLabelCandidateIds,
   resetIdentities,
+  _test: {
+    IDENTITIES_PATH,
+    collectRawAliases,
+  },
 };

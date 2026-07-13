@@ -9,6 +9,7 @@ const {
   sendMostruarioLetreiro, sendTabelaCores, sendTabelaEspessura, sendTabelaProfundidade,
 } = require('../core/mostruario');
 const { replaceServiceLabel } = require('../core/serviceLabels');
+const { ensureLetreiroPurpleLabel } = require('../core/operationalLabelColorGuard');
 const { detectInitialContext } = require('../core/intent');
 const { parseMedidasFromText, normalizeText, extractName, extractPhone } = require('../core/parsers');
 const {
@@ -16,6 +17,7 @@ const {
   buildBaseThicknessSnapshot, buildExtraThicknessMessage,
 } = require('../domain/acrilicoThickness');
 const Store = require('../services/leadStore');
+const { resetSystemWithWhatsAppCleanup } = require('../services/systemReset');
 const { env } = require('../config/env');
 
 const SOLID = new Map([
@@ -82,13 +84,6 @@ function depthOf(v) {
   if (x === 'esp3_align' || /ainda nao sei|definir depois/.test(x)) return ['align', null];
   return null;
 }
-function artOf(v) {
-  const x = norm(v);
-  if (x === 'art_arquivo' || /tenho arquivo|pdf|ai|eps|svg/.test(x)) return 'arquivo';
-  if (x === 'art_imagem' || /enviar imagem|imagem de referencia/.test(x)) return 'imagem';
-  if (x === 'art_ideia' || /descrever ideia|descrever/.test(x)) return 'descrever';
-  return null;
-}
 function deliveryOf(v) {
   const x = norm(v);
   if (x === 'envio_correios' || /correio|transportadora/.test(x)) return 'Correios';
@@ -115,7 +110,7 @@ function mediaSummary(items = []) {
     const raw = item?.raw || item || {};
     const type = String(raw.type || raw.mimetype || raw.mediaType || '').toLowerCase();
     const filename = raw.filename || raw.fileName || raw.document?.filename || null;
-    const caption = raw.caption || raw.body || null;
+    const caption = raw.caption || null;
     if (/image/.test(type)) out.push({ type: 'image', filename, caption });
     else if (/document|pdf|application/.test(type) || filename) out.push({ type: 'document', filename: filename || 'arquivo', caption });
     else if (/video/.test(type)) out.push({ type: 'video', filename, caption });
@@ -124,48 +119,120 @@ function mediaSummary(items = []) {
 }
 function formatMeasure(d) {
   const m = d.medida || {};
-  if (d.tamanhoModo === 'completo') return `${m.largura} x ${m.altura} cm`;
-  if (d.tamanhoModo === 'largura') return `${m.largura} cm de largura; altura proporcional à arte`;
-  if (d.tamanhoModo === 'altura') return `${m.altura} cm de altura; largura proporcional à arte`;
+  if (d.tamanhoModo === 'completo') return `${m.largura}cm × ${m.altura}cm`;
+  if (d.tamanhoModo === 'largura') return `${m.largura}cm de largura; altura proporcional à arte`;
+  if (d.tamanhoModo === 'altura') return `${m.altura}cm de altura; largura proporcional à arte`;
   return d.tamanhoDescricao || 'Não definida';
 }
-function buildBusinessNote(session, reason = 'atendimento_concluido') {
+function originLabel(value) {
+  const normalized = normalizeText(value);
+  if (normalized.includes('landing')) return 'LandingPage';
+  if (normalized.includes('whatsapp')) return 'WhatsApp';
+  return String(value || '').trim() || null;
+}
+function phoneForNote(session, d) {
+  if (d.telefone) return String(d.telefone).replace(/\D/g, '');
+  if (session?.contactIdentity?.phone) return String(session.contactIdentity.phone).replace(/\D/g, '');
+  const cUsId = String(session?.contactIdentity?.cUsId || session?.chatId || '');
+  return /@c\.us$/i.test(cUsId) ? cUsId.replace(/\D/g, '') : null;
+}
+function thicknessSentence(value) {
+  const text = String(value || '')
+    .replace(/^🔎\s*Observação:\s*/i, '')
+    .trim();
+  if (!text) return null;
+  return text.endsWith('.') ? text : `${text}.`;
+}
+function buildBusinessNote(session) {
   const d = session.dados || {};
   const q = d.demanda || {};
-  const media = d.arteMedias?.length ? d.arteMedias.map((m) => `${m.type}${m.filename ? `: ${m.filename}` : ''}`).join(', ') : null;
-  return [
-    '🟢 Atendimento coletado pelo Bot WPPConnect', `Status: ${reason}`,
-    `Atualizado em: ${new Date().toLocaleString('pt-BR')}`,
-    d.origem && `Origem: ${d.origem}`, d.nome && `Nome: ${d.nome}`,
-    d.telefone && `Telefone: ${d.telefone}`, d.flow && `Serviço: ${d.flow}`,
-    q.descricao && `Demanda: ${q.descricao}`, q.medida && `Medida informada: ${q.medida}`,
-    q.local && `Local/aplicação: ${q.local}`, q.referencia && `Referência/detalhes: ${q.referencia}`,
-    q.prazo && `Prazo: ${q.prazo}`,
-    d.tipoAcrilico && `Tipo de acrílico: ${d.tipoAcrilico === 'pintado' ? 'Personalizado/Pantone' : 'Colorido'}`,
-    d.pantoneDescricao && `Pantone/cor personalizada: ${d.pantoneDescricao}`,
-    d.corBasicaQtd && `Quantidade de cores: ${d.corBasicaQtd}`,
-    d.coresSelecionadas?.length && `Cores: ${d.coresSelecionadas.join(', ')}`,
-    d.espessuraBaseDescricao && `Espessura base: ${d.espessuraBaseDescricao.replace(/^🔎\s*Observação:\s*/i, '')}`,
-    d.acrescimoAcrilico && d.acrescimoAcrilico !== '0mm' && `Acrílico cristal extra: +${d.acrescimoAcrilico}`,
-    d.acrescimoAcrilicoAAlinhar && 'Acréscimo de espessura: a definir',
-    d.tipoAcrilico === 'pintado' && d.espessura && `Espessura: ${d.espessura}`,
-    d.medida && `Medida do letreiro: ${formatMeasure(d)}`,
-    d.arteModo && `Arte: ${d.arteModo}`, d.arteTexto && `Descrição da arte: ${d.arteTexto}`,
-    media && `Arquivos/referências recebidos: ${media}`, d.cidade && `Cidade: ${d.cidade}`,
-    d.envio && `Forma de recebimento: ${d.envio}`, d.endereco && `Endereço: ${d.endereco}`,
-    d.observacaoPedido && `Observação do cliente: ${d.observacaoPedido}`,
-  ].filter(Boolean).join('\n');
+  const orderNumber = Number(d.pedidoNumero);
+  const phone = phoneForNote(session, d);
+  const hasArtFile = Boolean(d.arteMedias?.length || d.pantoneMedias?.length);
+  const lines = [
+    `📋 *Dados do pedido*${Number.isInteger(orderNumber) && orderNumber > 0 ? ` (#${orderNumber})` : ''}`,
+  ];
+
+  if (d.nome) lines.push(`👤 Cliente: ${d.nome}`);
+  if (phone) lines.push(`📱 Telefone: ${phone}`);
+  if (d.cidade) lines.push(`📍 Cidade: ${d.cidade}`);
+  if (d.origem) lines.push(`🌐 Origem: ${originLabel(d.origem)}`);
+  if (d.envio) lines.push(`🚚 Envio: *${d.envio}*`);
+  if (d.endereco) lines.push(`🏠 Endereço: ${d.endereco}`);
+
+  if (d.flow === 'letreiro') {
+    lines.push('', '*Letreiro*');
+    if (d.medida || d.tamanhoDescricao) lines.push(`• Medida: ${formatMeasure(d)}`);
+
+    if (d.coresSelecionadas?.length) {
+      lines.push(`• Cor: ${d.coresSelecionadas.join(', ')} (${d.tipoCor === 'prontas' ? 'prontas' : 'personalizadas'})`);
+    } else if (d.pantoneDescricao) {
+      lines.push(`• Cor: ${d.pantoneDescricao} (personalizada)`);
+    }
+
+    const baseThickness = d.espessuraBaseLabel
+      || (d.tipoAcrilico === 'pintado' ? d.espessura : null)
+      || d.espessura;
+    if (baseThickness) lines.push(`• Espessura base: ${baseThickness}`);
+
+    const baseDescription = thicknessSentence(d.espessuraBaseDescricao);
+    if (baseDescription) lines.push(`• ${baseDescription}`);
+    if (d.acrescimoAcrilico && d.acrescimoAcrilico !== '0mm') {
+      lines.push(`• Acréscimo em acrílico cristal: +${d.acrescimoAcrilico}`);
+    }
+    if (d.acrescimoAcrilicoAAlinhar || d.espessuraAAlinhar) {
+      lines.push('• Espessura adicional: a definir');
+    }
+    if (d.arteTexto) lines.push(`• Descrição da arte: ${d.arteTexto}`);
+    if (hasArtFile) lines.push('Arquivo de arte na conversa');
+  } else if (d.flow === 'plotagem') {
+    lines.push('', '*Plotagem*');
+    if (q.descricao) lines.push(`• Serviço: ${q.descricao}`);
+    if (q.medida) lines.push(`• Medida: ${q.medida}`);
+    if (q.local) lines.push(`• Local de aplicação: ${q.local}`);
+    if (q.prazo) lines.push(`• Prazo: ${q.prazo}`);
+  } else {
+    lines.push('', '*Outros serviços*');
+    if (q.descricao) lines.push(`• Solicitação: ${q.descricao}`);
+    if (q.referencia) lines.push(`• Referência/detalhes: ${q.referencia}`);
+    if (q.prazo) lines.push(`• Prazo: ${q.prazo}`);
+  }
+
+  if (d.observacaoPedido) {
+    lines.push('', '📝 *Observação do cliente:*', d.observacaoPedido);
+  }
+
+  return lines.join('\n').replace(/\n{3,}/g, '\n\n').trim();
 }
 async function finish(channel, clientId, session, reason) {
+  const orderNumber = Store.ensureOrderNumber(session);
+  session.dados.pedidoNumero = orderNumber;
   session.completed = true;
   session.etapa = 'concluido';
   session.dados.botDone = true;
   session.dados.completedAt = new Date().toISOString();
+  session.dados.botControl = {
+    state: 'silent',
+    reason: 'completed',
+    startedAt: session.dados.completedAt,
+    silenceUntil: new Date(
+      new Date(session.dados.completedAt).getTime() + (env.botReentryAfterHours * 60 * 60 * 1000),
+    ).toISOString(),
+    lastClientMessageAt: null,
+    lastSellerMessageAt: null,
+    updatedAt: session.dados.completedAt,
+  };
   Store.saveSession(session);
-  Store.appendLead({ clientId: session.id, reason, etapa: session.etapa, dados: session.dados });
+  Store.appendLead({
+    clientId: session.id,
+    orderNumber,
+    reason,
+    etapa: session.etapa,
+    dados: session.dados,
+  });
   await replaceServiceLabel(channel, clientId, session.dados.flow || 'outros').catch(() => null);
   if (env.enableContactNotes && channel?.setContactNote) {
-    const ok = await channel.setContactNote(clientId, buildBusinessNote(session, reason)).catch(() => false);
+    const ok = await channel.setContactNote(clientId, buildBusinessNote(session)).catch(() => false);
     session.dados.noteSaved = ok !== false;
     session.dados.noteUpdatedAt = new Date().toISOString();
     Store.saveSession(session);
@@ -175,8 +242,14 @@ async function finish(channel, clientId, session, reason) {
 }
 
 async function startMeasure(channel, id, s) {
-  s.dados.medida = null; s.dados.tamanhoModo = null; s.dados.tamanhoDescricao = null;
-  s.etapa = 'tamanho'; Store.saveSession(s); await channel.sendText(id, messages.askMeasure);
+  s.dados.medida = null;
+  s.dados.tamanhoModo = null;
+  s.dados.tamanhoDescricao = null;
+  s.dados.tamanhoBuffer = [];
+  s.dados.tamanhoParcial = { largura: null, altura: null };
+  s.etapa = 'tamanho';
+  Store.saveSession(s);
+  await channel.sendText(id, messages.askMeasure);
 }
 async function toThickness(channel, id, s) {
   if (s.dados.tipoAcrilico === 'colorido') {
@@ -188,7 +261,17 @@ async function toThickness(channel, id, s) {
     await sendTabelaEspessura(channel, id); await sendMenu(channel, id, 'espessuraPersonalizada');
   }
 }
-async function startArt(channel, id, s) { s.etapa = 'arte_menu'; Store.saveSession(s); await sendMenu(channel, id, 'arte'); }
+async function startArt(channel, id, s) {
+  s.etapa = 'arte_coleta';
+  s.dados.arteModo = 'livre';
+  s.dados.arteTexto = null;
+  s.dados.arteMedias = [];
+  s.dados.arte = null;
+  Store.saveSession(s);
+  await channel.sendText(id, messages.askArtQuestion);
+  await channel.sendText(id, messages.askArtExplanation);
+  await channel.sendText(id, messages.askArtFree);
+}
 async function startCity(channel, id, s) { s.etapa = 'cidade'; Store.saveSession(s); await channel.sendText(id, messages.askCity); }
 async function startDelivery(channel, id, s) {
   s.etapa = 'envio'; Store.saveSession(s);
@@ -232,8 +315,18 @@ async function processCustomerMessage({ clientId, text, channel, messages: inbou
   if (!s || !input) return s;
 
   if (env.enableTestCommands && /^\/resetarsys$/i.test(first(input))) {
-    const r = Store.resetSystem();
-    await channel.sendText(clientId, `Sistema resetado para teste.\n\nSessões apagadas: ${r.previousSessionCount}\nLeads apagados: ${r.previousLeadCount}\n\nMe envie uma nova mensagem para começar como primeiro contato.`);
+    const r = await resetSystemWithWhatsAppCleanup({ channel });
+    await channel.sendText(
+      clientId,
+      `Sistema resetado para teste.\n\n`
+      + `Sessões apagadas: ${r.previousSessionCount}\n`
+      + `Leads apagados: ${r.previousLeadCount}\n`
+      + `Contatos limpos: ${r.contactsCleaned}/${r.trackedContacts}\n`
+      + `Etiquetas removidas: ${r.labelsRemoved}\n`
+      + `Notas limpas: ${r.notesCleared}\n`
+      + `Falhas de limpeza: ${r.cleanupFailures}\n\n`
+      + 'Me envie uma nova mensagem para começar como primeiro contato.',
+    );
     return Store.resetSession(clientId);
   }
   if (env.enableTestCommands && /^\/(reset|reiniciar)$/i.test(first(input))) {
@@ -246,10 +339,7 @@ async function processCustomerMessage({ clientId, text, channel, messages: inbou
   const foundName = extractName(input), foundPhone = extractPhone(input);
   if (foundName && !d.nome) d.nome = foundName;
   if (foundPhone && !d.telefone) d.telefone = foundPhone;
-  if (d.botDone || s.completed) {
-    await channel.sendText(clientId, 'Seu atendimento já foi registrado na sua ficha de contato. Para começar novamente, use */reset* durante os testes.');
-    return s;
-  }
+  if (d.botDone || s.completed) return s;
 
   if (s.etapa === 'inicio') {
     const initial = detectInitialContext(input);
@@ -264,6 +354,11 @@ async function processCustomerMessage({ clientId, text, channel, messages: inbou
     const service = serviceOf(input);
     if (!service) { await sendMenu(channel, clientId, 'servicos'); return s; }
     d.flow = service; d.demanda = {};
+    if (service === 'letreiro') {
+      await ensureLetreiroPurpleLabel(channel).catch((err) => {
+        console.warn('[ETIQUETAS] não foi possível garantir a cor roxa:', err?.message || err);
+      });
+    }
     await replaceServiceLabel(channel, clientId, service).catch(() => null);
     if (service === 'letreiro') {
       s.etapa = 'tipo_acrilico'; Store.saveSession(s);
@@ -326,15 +421,41 @@ async function processCustomerMessage({ clientId, text, channel, messages: inbou
   }
 
   if (s.etapa === 'tamanho') {
-    const p = parseMedidasFromText(input, { largura: null, altura: null });
-    if (p.modo === 'pedir_descricao') { await channel.sendText(clientId, messages.askMeasureDescription); return s; }
-    if (p.modo === 'invalido') { await channel.sendText(clientId, messages.invalidMeasure); return s; }
-    d.medida = { largura: p.largura ?? null, altura: p.altura ?? null }; d.tamanhoModo = p.modo; d.tamanhoDescricao = p.descricao || null; Store.saveSession(s);
-    if (p.modo === 'descricao') await channel.sendText(clientId, 'Beleza! Vou registrar essa descrição como referência de proporção para a arte.');
-    else if (p.modo === 'altura') await channel.sendText(clientId, `Entendi ${p.altura} cm de altura. A outra medida será ajustada proporcionalmente à arte.`);
-    else if (p.modo === 'largura') await channel.sendText(clientId, `Entendi ${p.largura} cm de largura. A outra medida será ajustada proporcionalmente à arte.`);
-    else await channel.sendText(clientId, `Medida anotada: ${p.largura} x ${p.altura} cm.`);
-    await toThickness(channel, clientId, s); return s;
+    d.tamanhoBuffer = Array.isArray(d.tamanhoBuffer) ? d.tamanhoBuffer : [];
+    d.tamanhoBuffer.push(input);
+    const combinado = d.tamanhoBuffer.join(' ').replace(/\s{2,}/g, ' ').trim();
+    d.tamanhoBuffer = [];
+
+    const p = parseMedidasFromText(combinado, { largura: null, altura: null });
+    d.tamanhoParcial = { largura: p.largura ?? null, altura: p.altura ?? null };
+
+    if (p.modo === 'pedir_descricao') {
+      Store.saveSession(s);
+      await channel.sendText(clientId, messages.askMeasureDescription);
+      return s;
+    }
+    if (p.modo === 'invalido') {
+      Store.saveSession(s);
+      await channel.sendText(clientId, messages.invalidMeasure);
+      return s;
+    }
+
+    d.medida = { largura: p.largura ?? null, altura: p.altura ?? null };
+    d.tamanhoModo = p.modo;
+    d.tamanhoDescricao = p.descricao || null;
+    Store.saveSession(s);
+
+    if (p.modo === 'descricao') {
+      await channel.sendText(clientId, 'Beleza! Nossa equipe vai analisar a proporção da arte usando essa medida como referência.');
+    } else if (p.modo === 'altura') {
+      await channel.sendText(clientId, `Entendi ${p.altura} cm de altura. A outra medida nossa equipe ajusta pela arte`);
+    } else if (p.modo === 'largura') {
+      await channel.sendText(clientId, `Entendi ${p.largura} cm de largura. A outra medida nossa equipe ajusta pela arte`);
+    } else {
+      await channel.sendText(clientId, `Medida anotada: ${p.largura} x ${p.altura} cm.`);
+    }
+    await toThickness(channel, clientId, s);
+    return s;
   }
   if (s.etapa === 'espessura_extra_3mm') {
     if (isBack(input, 'esp3_back')) { d.acrescimoAcrilico = null; await startMeasure(channel, clientId, s); return s; }
@@ -357,19 +478,32 @@ async function processCustomerMessage({ clientId, text, channel, messages: inbou
 
   if (s.etapa === 'arte_menu') {
     if (isBack(input, 'art_voltar')) { await toThickness(channel, clientId, s); return s; }
-    const mode = artOf(input);
-    if (!mode) { await sendMenu(channel, clientId, 'arte'); return s; }
-    d.arteModo = mode; d.arteTexto = null; d.arteMedias = []; s.etapa = 'arte_coleta'; Store.saveSession(s);
-    await channel.sendText(clientId, mode === 'arquivo' ? messages.askArtFile : mode === 'imagem' ? messages.askArtImage : messages.askArtDescription);
-    await channel.sendText(clientId, messages.askArtFree); return s;
+    await startArt(channel, clientId, s);
+    return s;
   }
   if (s.etapa === 'arte_coleta') {
     const medias = mediaSummary(inbound);
     const description = input.split(/\r?\n/).map((x) => x.trim()).filter(Boolean)
       .filter((x) => !/^\[(imagem|arquivo|documento|video) enviado/i.test(x)).join(' | ').trim();
-    if (!description && !medias.length) { await channel.sendText(clientId, messages.askArtFree); return s; }
-    d.arteTexto = description || null; d.arteMedias = medias; d.arte = { modo: d.arteModo, texto: d.arteTexto, medias }; Store.saveSession(s);
-    await channel.sendText(clientId, 'Arte e referências anotadas!'); await startCity(channel, clientId, s); return s;
+    if (!description && !medias.length) {
+      await channel.sendText(clientId, messages.askArtFree);
+      return s;
+    }
+
+    const hasDocument = medias.some((item) => item.type === 'document');
+    const hasImage = medias.some((item) => item.type === 'image');
+    d.arteModo = hasDocument
+      ? (description || hasImage ? 'livre' : 'arquivo')
+      : hasImage
+        ? (description ? 'livre' : 'imagem')
+        : 'descrever';
+    d.arteTexto = description || null;
+    d.arteMedias = medias;
+    d.arte = { modo: d.arteModo, texto: d.arteTexto, medias };
+    Store.saveSession(s);
+
+    await startCity(channel, clientId, s);
+    return s;
   }
   if (s.etapa === 'cidade') { d.cidade = input.replace(/\s{2,}/g, ' ').replace(/\s*\/\s*/g, '/').trim(); Store.saveSession(s); await startDelivery(channel, clientId, s); return s; }
   if (s.etapa === 'envio') {

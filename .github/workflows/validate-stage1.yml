@@ -1,0 +1,51 @@
+name: Validar etapa 1
+
+on:
+  push:
+    branches:
+      - agent/persistent-contact-label-registry
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Baixar codigo
+        uses: actions/checkout@v4
+
+      - name: Configurar Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Instalar dependencias
+        run: npm install --no-audit --no-fund
+
+      - name: Verificar sintaxe
+        run: npm run check
+
+      - name: Testar migracao da etiqueta
+        run: npm run test:labels
+
+      - name: Testar paridade com producao
+        run: npm run test:production-flow
+
+      - name: Testar fechamento da etapa 1
+        run: npm run test:stage1-closure
+
+      - name: Testar reset do contador de pedidos
+        run: npm run test:reset-counter
+
+      - name: Testar ajustes pre-producao
+        run: npm run test:preprod-adjustments
+
+      - name: Testar falso handoff
+        run: npm run test:false-handoff
+
+      - name: Testar reset durante handoff
+        run: npm run test:reset-handoff
+
+      - name: Testar handoff estrito
+        run: npm run test:strict-handoff
