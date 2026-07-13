@@ -6,16 +6,26 @@ const assert = require('assert');
 
 const SESSION_FILE = path.join('data', 'sessions.stage1-closure.test.json');
 const LEAD_FILE = path.join('data', 'leads.stage1-closure.test.jsonl');
+const IDENTITY_FILE = path.join('data', 'identities.stage1-closure.test.json');
 process.env.SESSIONS_STORE_PATH = SESSION_FILE;
 process.env.LEADS_STORE_PATH = LEAD_FILE;
+process.env.CONTACT_IDENTITIES_STORE_PATH = IDENTITY_FILE;
 process.env.BOT_REENTRY_AFTER_HOURS = '72';
 process.env.DETECT_MANUAL_SELLER_MESSAGES = 'true';
 process.env.ENABLE_TEST_COMMANDS = 'true';
 
-for (const file of [SESSION_FILE, `${SESSION_FILE}.tmp`, LEAD_FILE]) {
+const TEST_FILES = [
+  SESSION_FILE,
+  `${SESSION_FILE}.tmp`,
+  LEAD_FILE,
+  IDENTITY_FILE,
+  `${IDENTITY_FILE}.tmp`,
+];
+for (const file of TEST_FILES) {
   try { fs.unlinkSync(file); } catch (_) {}
 }
 
+const Identity = require('../src/services/contactIdentity');
 const Store = require('../src/services/leadStore');
 const ConversationControl = require('../src/services/conversationControl');
 const {
@@ -95,6 +105,45 @@ function testOutboundTracker() {
     false,
     'mensagem manual diferente não pode ser confundida com o bot',
   );
+
+  tracker.begin({
+    chatId: '5531999999999@c.us',
+    kind: 'list',
+    texts: ['Selecione uma opção'],
+  });
+  assert.strictEqual(
+    tracker.consume({
+      fromMe: true,
+      to: '5531999999999@c.us',
+      type: 'chat',
+      body: 'Conteúdo serializado diferente da lista',
+    }),
+    true,
+    'lista enviada pelo bot não pode acionar handoff por diferença de serialização',
+  );
+}
+
+function testOutgoingIdentity() {
+  const customer = '5531997777777@c.us';
+  const ownNumber = '5531990000000@c.us';
+  const identity = Identity.registerContact({
+    chatId: customer,
+    raw: {
+      fromMe: true,
+      from: ownNumber,
+      to: customer,
+      chatId: customer,
+      id: { remote: customer },
+    },
+  });
+
+  assert.strictEqual(identity.primaryChatId, customer);
+  assert.strictEqual(identity.aliases.includes(customer), true);
+  assert.strictEqual(
+    identity.aliases.includes(ownNumber),
+    false,
+    'o número da própria empresa não pode virar alias do cliente',
+  );
 }
 
 function testSellerTakeoverAndReentry() {
@@ -171,11 +220,12 @@ function run() {
     testCleanMediaNotes();
     testObservationCopy();
     testOutboundTracker();
+    testOutgoingIdentity();
     testSellerTakeoverAndReentry();
     testCompletionSilence();
     console.log('[TESTE FECHAMENTO ETAPA 1] silêncio 72h, handoff e nota limpa: OK');
   } finally {
-    for (const file of [SESSION_FILE, `${SESSION_FILE}.tmp`, LEAD_FILE]) {
+    for (const file of TEST_FILES) {
       try { fs.unlinkSync(file); } catch (_) {}
     }
   }
