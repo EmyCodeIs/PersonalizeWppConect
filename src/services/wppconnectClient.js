@@ -3,6 +3,11 @@
 const path = require('path');
 const { env } = require('../config/env');
 const { applyNamedLabel } = require('../core/serviceLabels');
+const {
+  OutboundMessageTracker,
+  outgoingChatId,
+  messageId,
+} = require('./outboundMessageTracker');
 
 function wait(ms) {
   return new Promise((resolve) => setTimeout(resolve, Math.max(0, Number(ms || 0))));
@@ -40,18 +45,38 @@ function getInteractiveId(message = {}) {
   return '';
 }
 
+function isMediaMessage(message = {}) {
+  const type = String(message?.type || message?.mimetype || message?.mediaType || '').toLowerCase();
+  return /image|video|audio|document|pdf|application|sticker/.test(type)
+    || Boolean(message?.filename || message?.fileName || message?.document?.filename);
+}
+
+function safeCaption(value) {
+  const text = String(value || '').trim();
+  if (!text || text.length > 2000) return '';
+  if (/^data:[^;]+;base64,/i.test(text)) return '';
+  if (text.length > 500 && /^[a-z0-9+/=\s]+$/i.test(text)) return '';
+  return text;
+}
+
 function getMessageText(message) {
   const interactiveId = getInteractiveId(message);
   if (interactiveId) return interactiveId;
-  return String(message?.body || message?.caption || message?.text || message?.content || '').trim();
+
+  // Em mensagens de mídia, `body` pode conter uma carga codificada enorme.
+  // Apenas a legenda escrita pelo cliente deve entrar no fluxo.
+  if (isMediaMessage(message)) return safeCaption(message?.caption);
+
+  return String(message?.body || message?.text || message?.content || '').trim();
 }
 
 function getMediaMarker(message = {}) {
   const type = String(message?.type || message?.mimetype || message?.mediaType || '').toLowerCase();
   const filename = message?.filename || message?.fileName || message?.document?.filename || '';
-  if (/image/.test(type)) return '[imagem enviada]';
+  if (/image|sticker/.test(type)) return '[imagem enviada]';
   if (/document|pdf|application/.test(type) || filename) return `[arquivo enviado${filename ? `: ${filename}` : ''}]`;
   if (/video/.test(type)) return '[vídeo enviado]';
+  if (/audio|ptt/.test(type)) return '[áudio enviado]';
   return '';
 }
 
@@ -65,6 +90,56 @@ function normalizeUnreadMessage(message, fallbackChatId = '') {
   if (!from || !text || message?.fromMe) return null;
   if (message?.isGroupMsg || /@g\.us$/i.test(from)) return null;
   return { from, text, raw: message };
+}
+
+function looksEncoded(value) {
+  const text = String(value || '').trim();
+  if (!text) return false;
+  if (/^data:[^;]+;base64,/i.test(text)) return true;
+  if (text.length > 1000) return true;
+  return text.length > 500 && /^[a-z0-9+/=\s]+$/i.test(text);
+}
+
+function sanitizeBusinessNote(note) {
+  const lines = String(note || '').split(/\r?\n/);
+  const output = [];
+  let needsArtMarker = false;
+
+  for (const line of lines) {
+    const trimmed = String(line || '').trim();
+    if (!trimmed) {
+      output.push('');
+      continue;
+    }
+
+    if (/^Arquivos\/referências recebidos:/i.test(trimmed)) {
+      needsArtMarker = true;
+      continue;
+    }
+
+    if (/^(Descrição da arte|Pantone\/cor personalizada):/i.test(trimmed)) {
+      const value = trimmed.replace(/^[^:]+:\s*/, '');
+      if (looksEncoded(value)) {
+        needsArtMarker = true;
+        continue;
+      }
+    }
+
+    if (looksEncoded(trimmed)) {
+      needsArtMarker = true;
+      continue;
+    }
+
+    output.push(trimmed);
+  }
+
+  if (needsArtMarker && !output.some((line) => line === 'Arquivo de arte na conversa')) {
+    const cityIndex = output.findIndex((line) => /^Cidade:/i.test(line));
+    if (cityIndex >= 0) output.splice(cityIndex, 0, 'Arquivo de arte na conversa');
+    else output.push('Arquivo de arte na conversa');
+  }
+
+  return output.join('\n').replace(/\n{3,}/g, '\n\n').trim();
 }
 
 function createMockChannel() {
@@ -101,7 +176,7 @@ function createMockChannel() {
       return true;
     },
     async setContactNote(clientId, note) {
-      console.log(`\n[NOTA ${clientId}]\n${note}\n`);
+      console.log(`\n[NOTA ${clientId}]\n${sanitizeBusinessNote(note)}\n`);
       return true;
     },
     async applyContactLabel(clientId, label) {
@@ -185,7 +260,66 @@ async function collectUnreadMessages(client) {
   });
 }
 
-async function createWppChannel({ onMessage, onQr } = {}) {
+function botSendDescriptor(method, args = []) {
+  const chatId = normalizeChatId(args[0]);
+  if (method === 'sendText') return { chatId, kind: 'text', texts: [args[1]] };
+  if (method === 'sendImage') return { chatId, kind: 'image', texts: [args[3]] };
+  if (method === 'sendFile') return { chatId, kind: 'document', texts: [args[3], args[2]] };
+  if (method === 'sendListMessage') {
+    const payload = args[1] || {};
+    return {
+      chatId,
+      kind: 'list',
+      texts: [payload.description, payload.title, payload.buttonText],
+    };
+  }
+  if (method === 'sendList') {
+    return { chatId, kind: 'list', texts: [args[1], args[2], args[4]] };
+  }
+  return { chatId, kind: 'text', texts: [] };
+}
+
+function installProgrammaticSendTracking(client, {
+  tracker,
+  shouldSendBotMessage,
+} = {}) {
+  for (const method of ['sendText', 'sendImage', 'sendFile', 'sendListMessage', 'sendList']) {
+    if (typeof client?.[method] !== 'function') continue;
+    const marker = `__personalizeTracked_${method}`;
+    if (client[marker]) continue;
+
+    const original = client[method].bind(client);
+    client[method] = async (...args) => {
+      const descriptor = botSendDescriptor(method, args);
+      if (
+        descriptor.chatId
+        && typeof shouldSendBotMessage === 'function'
+        && shouldSendBotMessage(descriptor.chatId) === false
+      ) {
+        console.log(`[HANDOFF] envio do bot bloqueado em ${descriptor.chatId}; atendimento humano ativo.`);
+        return false;
+      }
+
+      const token = tracker?.begin(descriptor);
+      try {
+        const result = await original(...args);
+        tracker?.bindResult(token, result);
+        return result;
+      } catch (err) {
+        tracker?.cancel(token);
+        throw err;
+      }
+    };
+    client[marker] = true;
+  }
+}
+
+async function createWppChannel({
+  onMessage,
+  onManualOutgoing,
+  onQr,
+  shouldSendBotMessage,
+} = {}) {
   const wppconnect = require('@wppconnect-team/wppconnect');
   console.log(`[WPPConnect] Chrome visível: ${env.wppHeadless ? 'não (headless)' : 'sim'}`);
 
@@ -203,8 +337,15 @@ async function createWppChannel({ onMessage, onQr } = {}) {
     folderNameToken: 'tokens',
   });
 
+  const outboundTracker = new OutboundMessageTracker({ ttlMs: env.botOutboundTrackerTtlMs });
+  installProgrammaticSendTracking(client, {
+    tracker: outboundTracker,
+    shouldSendBotMessage,
+  });
+
   const channel = {
     client,
+    outboundTracker,
     async sendText(clientId, text, options = {}) {
       const chatId = normalizeChatId(clientId);
       if (!options.noDelay) await wait(randomDelay());
@@ -228,13 +369,14 @@ async function createWppChannel({ onMessage, onQr } = {}) {
     },
     async setContactNote(clientId, note) {
       const chatId = normalizeChatId(clientId);
+      const cleanNote = sanitizeBusinessNote(note);
       try {
         if (!client?.page?.evaluate) return false;
-        return await client.page.evaluate(async ({ chatId, note }) => {
-          if (window.WPP?.chat?.setNotes) return window.WPP.chat.setNotes(chatId, note);
-          if (window.WPP?.contact?.setNotes) return window.WPP.contact.setNotes(chatId, note);
+        return await client.page.evaluate(async ({ chatId, note: text }) => {
+          if (window.WPP?.chat?.setNotes) return window.WPP.chat.setNotes(chatId, text);
+          if (window.WPP?.contact?.setNotes) return window.WPP.contact.setNotes(chatId, text);
           return false;
-        }, { chatId, note });
+        }, { chatId, note: cleanNote });
       } catch (err) {
         console.warn('[WPPConnect] não foi possível salvar nota:', err?.message || err);
         return false;
@@ -271,6 +413,28 @@ async function createWppChannel({ onMessage, onQr } = {}) {
     await onMessage?.({ from, text, raw: message, channel });
   });
 
+  if (env.detectManualSellerMessages && typeof client.onAnyMessage === 'function') {
+    client.onAnyMessage(async (message) => {
+      const fromMe = Boolean(message?.fromMe || message?.isSentByMe);
+      if (!fromMe || message?.isGroupMsg || message?.isStatusV3) return;
+      if (outboundTracker.consume(message)) return;
+
+      const to = outgoingChatId(message);
+      if (!to || /@g\.us$/i.test(to)) return;
+      const text = getMessageText(message) || getMediaMarker(message) || '[mensagem enviada pelo vendedor]';
+      console.log(`[HANDOFF] mensagem manual detectada para ${to}`);
+      await onManualOutgoing?.({
+        to,
+        text,
+        raw: message,
+        messageId: messageId(message),
+        channel,
+      });
+    });
+  } else if (env.detectManualSellerMessages) {
+    console.warn('[HANDOFF] client.onAnyMessage indisponível; mensagens manuais não serão detectadas.');
+  }
+
   return channel;
 }
 
@@ -281,4 +445,8 @@ module.exports = {
   collectUnreadMessages,
   getInteractiveId,
   getMessageText,
+  getMediaMarker,
+  isMediaMessage,
+  sanitizeBusinessNote,
+  installProgrammaticSendTracking,
 };
