@@ -3,6 +3,7 @@
 const crypto = require('crypto');
 
 const DEFAULT_TTL_MS = 45000;
+const INTERACTIVE_FALLBACK_MS = 5000;
 
 function normalizeChatId(value) {
   const raw = String(value || '').trim();
@@ -73,8 +74,8 @@ class OutboundMessageTracker {
     for (const [id, token] of this.pending.entries()) {
       if (token.expiresAt <= now) this.pending.delete(id);
     }
-    for (const [id, expiresAt] of this.byMessageId.entries()) {
-      if (expiresAt <= now) this.byMessageId.delete(id);
+    for (const [id, record] of this.byMessageId.entries()) {
+      if (Number(record?.expiresAt || 0) <= now) this.byMessageId.delete(id);
     }
   }
 
@@ -99,7 +100,12 @@ class OutboundMessageTracker {
       messageId(result?.message),
       messageId(result?.msg),
     ].filter(Boolean);
-    for (const id of ids) this.byMessageId.set(id, Date.now() + this.ttlMs);
+    for (const id of ids) {
+      this.byMessageId.set(id, {
+        tokenId: token.id,
+        expiresAt: Date.now() + this.ttlMs,
+      });
+    }
   }
 
   cancel(token) {
@@ -107,10 +113,13 @@ class OutboundMessageTracker {
   }
 
   consume(message = {}) {
-    this.cleanup();
+    const now = Date.now();
+    this.cleanup(now);
     const id = messageId(message);
     if (id && this.byMessageId.has(id)) {
+      const record = this.byMessageId.get(id);
       this.byMessageId.delete(id);
+      if (record?.tokenId) this.pending.delete(record.tokenId);
       return true;
     }
 
@@ -128,14 +137,17 @@ class OutboundMessageTracker {
         || (token.kind === 'list' && kind === 'text');
       if (!kindCompatible) continue;
 
-      const textMatch = token.texts.length === 0
-        ? kind !== 'text'
-        : token.texts.some((expected) => texts.some((actual) => (
+      const exactTextMatch = token.texts.length > 0
+        && token.texts.some((expected) => texts.some((actual) => (
           actual === expected
           || actual.includes(expected)
           || expected.includes(actual)
         )));
-      if (!textMatch) continue;
+      const emptyMediaMatch = token.texts.length === 0 && kind !== 'text';
+      const recentInteractiveMatch = token.kind !== 'text'
+        && (now - token.createdAt) <= INTERACTIVE_FALLBACK_MS;
+
+      if (!exactTextMatch && !emptyMediaMatch && !recentInteractiveMatch) continue;
 
       this.pending.delete(token.id);
       return true;
@@ -153,4 +165,8 @@ module.exports = {
   outgoingChatId,
   messageKind,
   messageTexts,
+  _test: {
+    DEFAULT_TTL_MS,
+    INTERACTIVE_FALLBACK_MS,
+  },
 };
