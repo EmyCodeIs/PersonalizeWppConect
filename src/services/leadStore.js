@@ -5,11 +5,15 @@ const path = require('path');
 const Identity = require('./contactIdentity');
 
 const DATA_DIR = path.join(process.cwd(), 'data');
-const SESSIONS_PATH = path.join(DATA_DIR, 'sessions.json');
-const LEADS_PATH = path.join(DATA_DIR, 'leads.jsonl');
+const SESSIONS_PATH = process.env.SESSIONS_STORE_PATH
+  ? path.resolve(process.cwd(), process.env.SESSIONS_STORE_PATH)
+  : path.join(DATA_DIR, 'sessions.json');
+const LEADS_PATH = process.env.LEADS_STORE_PATH
+  ? path.resolve(process.cwd(), process.env.LEADS_STORE_PATH)
+  : path.join(DATA_DIR, 'leads.jsonl');
 
-function ensureDataDir() {
-  fs.mkdirSync(DATA_DIR, { recursive: true });
+function ensureParentDir(filePath) {
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
 }
 
 function readJson(filePath, fallback) {
@@ -22,7 +26,7 @@ function readJson(filePath, fallback) {
 }
 
 function writeJson(filePath, data) {
-  ensureDataDir();
+  ensureParentDir(filePath);
   fs.writeFileSync(`${filePath}.tmp`, JSON.stringify(data, null, 2), 'utf8');
   fs.renameSync(`${filePath}.tmp`, filePath);
 }
@@ -64,6 +68,7 @@ function migrateSession(session, id, chatId) {
   next.dados = next.dados || next.data || {};
   next.createdAt = next.createdAt || nowIso();
   next.updatedAt = next.updatedAt || nowIso();
+  if (typeof next.completed !== 'boolean') next.completed = Boolean(next.dados?.botDone);
   return next;
 }
 
@@ -95,7 +100,7 @@ function resetSession(clientId) {
 }
 
 function appendLead(payload = {}) {
-  ensureDataDir();
+  ensureParentDir(LEADS_PATH);
   const lead = {
     id: `lead_${Date.now()}_${Math.random().toString(16).slice(2)}`,
     createdAt: nowIso(),
@@ -124,7 +129,7 @@ function resetSystem() {
   state.lastSavedAt = nowIso();
   writeJson(SESSIONS_PATH, state);
 
-  ensureDataDir();
+  ensureParentDir(LEADS_PATH);
   fs.writeFileSync(LEADS_PATH, '', 'utf8');
   const previousIdentityCount = Identity.resetIdentities();
 
@@ -144,4 +149,8 @@ module.exports = {
   appendLead,
   listSessions,
   normalizeClientId,
+  _test: {
+    SESSIONS_PATH,
+    LEADS_PATH,
+  },
 };
