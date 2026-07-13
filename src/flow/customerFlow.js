@@ -17,6 +17,7 @@ const {
   buildBaseThicknessSnapshot, buildExtraThicknessMessage,
 } = require('../domain/acrilicoThickness');
 const Store = require('../services/leadStore');
+const { resetSystemWithWhatsAppCleanup } = require('../services/systemReset');
 const { env } = require('../config/env');
 
 const SOLID = new Map([
@@ -83,13 +84,6 @@ function depthOf(v) {
   if (x === 'esp3_align' || /ainda nao sei|definir depois/.test(x)) return ['align', null];
   return null;
 }
-function artOf(v) {
-  const x = norm(v);
-  if (x === 'art_arquivo' || /tenho arquivo|pdf|ai|eps|svg/.test(x)) return 'arquivo';
-  if (x === 'art_imagem' || /enviar imagem|imagem de referencia/.test(x)) return 'imagem';
-  if (x === 'art_ideia' || /descrever ideia|descrever/.test(x)) return 'descrever';
-  return null;
-}
 function deliveryOf(v) {
   const x = norm(v);
   if (x === 'envio_correios' || /correio|transportadora/.test(x)) return 'Correios';
@@ -116,7 +110,7 @@ function mediaSummary(items = []) {
     const raw = item?.raw || item || {};
     const type = String(raw.type || raw.mimetype || raw.mediaType || '').toLowerCase();
     const filename = raw.filename || raw.fileName || raw.document?.filename || null;
-    const caption = raw.caption || raw.body || null;
+    const caption = raw.caption || null;
     if (/image/.test(type)) out.push({ type: 'image', filename, caption });
     else if (/document|pdf|application/.test(type) || filename) out.push({ type: 'document', filename: filename || 'arquivo', caption });
     else if (/video/.test(type)) out.push({ type: 'video', filename, caption });
@@ -133,7 +127,7 @@ function formatMeasure(d) {
 function buildBusinessNote(session, reason = 'atendimento_concluido') {
   const d = session.dados || {};
   const q = d.demanda || {};
-  const media = d.arteMedias?.length ? d.arteMedias.map((m) => `${m.type}${m.filename ? `: ${m.filename}` : ''}`).join(', ') : null;
+  const hasArtFile = Boolean(d.arteMedias?.length);
   return [
     '🟢 Atendimento coletado pelo Bot WPPConnect', `Status: ${reason}`,
     `Atualizado em: ${new Date().toLocaleString('pt-BR')}`,
@@ -152,7 +146,7 @@ function buildBusinessNote(session, reason = 'atendimento_concluido') {
     d.tipoAcrilico === 'pintado' && d.espessura && `Espessura: ${d.espessura}`,
     d.medida && `Medida do letreiro: ${formatMeasure(d)}`,
     d.arteModo && `Arte: ${d.arteModo}`, d.arteTexto && `Descrição da arte: ${d.arteTexto}`,
-    media && `Arquivos/referências recebidos: ${media}`, d.cidade && `Cidade: ${d.cidade}`,
+    hasArtFile && 'Arquivo de arte na conversa', d.cidade && `Cidade: ${d.cidade}`,
     d.envio && `Forma de recebimento: ${d.envio}`, d.endereco && `Endereço: ${d.endereco}`,
     d.observacaoPedido && `Observação do cliente: ${d.observacaoPedido}`,
   ].filter(Boolean).join('\n');
@@ -162,6 +156,17 @@ async function finish(channel, clientId, session, reason) {
   session.etapa = 'concluido';
   session.dados.botDone = true;
   session.dados.completedAt = new Date().toISOString();
+  session.dados.botControl = {
+    state: 'silent',
+    reason: 'completed',
+    startedAt: session.dados.completedAt,
+    silenceUntil: new Date(
+      new Date(session.dados.completedAt).getTime() + (env.botReentryAfterHours * 60 * 60 * 1000),
+    ).toISOString(),
+    lastClientMessageAt: null,
+    lastSellerMessageAt: null,
+    updatedAt: session.dados.completedAt,
+  };
   Store.saveSession(session);
   Store.appendLead({ clientId: session.id, reason, etapa: session.etapa, dados: session.dados });
   await replaceServiceLabel(channel, clientId, session.dados.flow || 'outros').catch(() => null);
@@ -249,8 +254,18 @@ async function processCustomerMessage({ clientId, text, channel, messages: inbou
   if (!s || !input) return s;
 
   if (env.enableTestCommands && /^\/resetarsys$/i.test(first(input))) {
-    const r = Store.resetSystem();
-    await channel.sendText(clientId, `Sistema resetado para teste.\n\nSessões apagadas: ${r.previousSessionCount}\nLeads apagados: ${r.previousLeadCount}\n\nMe envie uma nova mensagem para começar como primeiro contato.`);
+    const r = await resetSystemWithWhatsAppCleanup({ channel });
+    await channel.sendText(
+      clientId,
+      `Sistema resetado para teste.\n\n`
+      + `Sessões apagadas: ${r.previousSessionCount}\n`
+      + `Leads apagados: ${r.previousLeadCount}\n`
+      + `Contatos limpos: ${r.contactsCleaned}/${r.trackedContacts}\n`
+      + `Etiquetas removidas: ${r.labelsRemoved}\n`
+      + `Notas limpas: ${r.notesCleared}\n`
+      + `Falhas de limpeza: ${r.cleanupFailures}\n\n`
+      + 'Me envie uma nova mensagem para começar como primeiro contato.',
+    );
     return Store.resetSession(clientId);
   }
   if (env.enableTestCommands && /^\/(reset|reiniciar)$/i.test(first(input))) {
@@ -263,10 +278,7 @@ async function processCustomerMessage({ clientId, text, channel, messages: inbou
   const foundName = extractName(input), foundPhone = extractPhone(input);
   if (foundName && !d.nome) d.nome = foundName;
   if (foundPhone && !d.telefone) d.telefone = foundPhone;
-  if (d.botDone || s.completed) {
-    await channel.sendText(clientId, 'Seu atendimento já foi registrado na sua ficha de contato. Para começar novamente, use */reset* durante os testes.');
-    return s;
-  }
+  if (d.botDone || s.completed) return s;
 
   if (s.etapa === 'inicio') {
     const initial = detectInitialContext(input);
@@ -348,8 +360,6 @@ async function processCustomerMessage({ clientId, text, channel, messages: inbou
   }
 
   if (s.etapa === 'tamanho') {
-    // O BufferManager já aguardou os mesmos 8 segundos usados na produção e
-    // entregou aqui todas as partes da resposta combinadas.
     d.tamanhoBuffer = Array.isArray(d.tamanhoBuffer) ? d.tamanhoBuffer : [];
     d.tamanhoBuffer.push(input);
     const combinado = d.tamanhoBuffer.join(' ').replace(/\s{2,}/g, ' ').trim();
@@ -405,8 +415,6 @@ async function processCustomerMessage({ clientId, text, channel, messages: inbou
     await startArt(channel, clientId, s); return s;
   }
 
-  // Compatibilidade com sessões antigas que ficaram paradas no menu.
-  // O fluxo oficial atual abre diretamente a coleta livre, sem lista.
   if (s.etapa === 'arte_menu') {
     if (isBack(input, 'art_voltar')) { await toThickness(channel, clientId, s); return s; }
     await startArt(channel, clientId, s);
@@ -433,8 +441,6 @@ async function processCustomerMessage({ clientId, text, channel, messages: inbou
     d.arte = { modo: d.arteModo, texto: d.arteTexto, medias };
     Store.saveSession(s);
 
-    // Igual ao oficial: não cria um balão extra de confirmação; a cidade já
-    // conduz o cliente à próxima etapa e evita ruído na conversa.
     await startCity(channel, clientId, s);
     return s;
   }
