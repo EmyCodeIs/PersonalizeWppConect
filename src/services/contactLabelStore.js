@@ -339,6 +339,27 @@ function listContacts() {
   return Object.values(state.contacts || {}).map(clone);
 }
 
+function resetContacts({ preserveCatalog = true, keepContactKeys = [] } = {}) {
+  const previousContactCount = Object.keys(state.contacts || {}).length;
+  const keep = new Set((keepContactKeys || []).map(String).filter(Boolean));
+  const nextContacts = {};
+  for (const [key, record] of Object.entries(state.contacts || {})) {
+    if (keep.has(key)) nextContacts[key] = record;
+  }
+
+  state.contacts = nextContacts;
+  if (!preserveCatalog) state.catalog = {};
+  state.trackingStartedAt = Object.keys(nextContacts).length ? state.trackingStartedAt : null;
+  saveState();
+
+  return {
+    previousContactCount,
+    removedContactCount: previousContactCount - Object.keys(nextContacts).length,
+    remainingContactCount: Object.keys(nextContacts).length,
+    catalogPreserved: preserveCatalog,
+  };
+}
+
 function stats() {
   const contacts = Object.values(state.contacts || {});
   return {
@@ -364,6 +385,7 @@ module.exports = {
   saveCatalog,
   markReconciled,
   listContacts,
+  resetContacts,
   stats,
   _test: {
     STORE_PATH,
