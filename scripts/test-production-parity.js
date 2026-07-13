@@ -1,11 +1,22 @@
 'use strict';
 
+const fs = require('fs');
+const path = require('path');
+
+const TEST_LABEL_STORE = path.join('data', 'contact-labels.production-flow.test.json');
+process.env.CONTACT_LABEL_STORE_PATH = TEST_LABEL_STORE;
 process.env.MOCK_MODE = 'true';
 process.env.MIN_REPLY_DELAY_MS = '0';
 process.env.MAX_REPLY_DELAY_MS = '0';
 process.env.SERVICE_LABEL_LETREIRO = 'Orçamento letreiros';
 process.env.SERVICE_LABEL_LETREIRO_COLOR = 'purple';
+process.env.SERVICE_LABEL_LETREIRO_COLOR_HEX = '#7f66ff';
 process.env.SERVICE_LABEL_LETREIRO_COLOR_INDEX = '5';
+process.env.RECREATE_MISMATCHED_OPERATIONAL_LABELS = 'true';
+process.env.CLEANUP_DUPLICATE_OPERATIONAL_LABELS = 'true';
+
+try { fs.unlinkSync(TEST_LABEL_STORE); } catch (_) {}
+try { fs.unlinkSync(`${TEST_LABEL_STORE}.tmp`); } catch (_) {}
 
 const assert = require('assert');
 const { messages } = require('../src/core/messages');
@@ -139,7 +150,7 @@ async function testMeasureFlowState() {
 }
 
 async function testPurpleFallbackIndex() {
-  const catalog = [{ id: '4', name: 'Orçamento letreiros', colorIndex: 1 }];
+  const catalog = [{ id: '4', name: 'Orçamento letreiros', colorIndex: 1, count: 1 }];
   const operations = [];
   let nextId = 20;
   const browserWindow = {
@@ -149,15 +160,10 @@ async function testPurpleFallbackIndex() {
         async getLabelColorPalette() { return []; },
       },
       lists: {
-        async remove(id) {
-          operations.push({ type: 'remove', id: String(id) });
-          const index = catalog.findIndex((item) => String(item.id) === String(id));
-          if (index >= 0) catalog.splice(index, 1);
-        },
         async create(name, chatIds, colorIndex) {
           const id = String(nextId++);
           operations.push({ type: 'create', id, name, chatIds, colorIndex });
-          catalog.push({ id, name, colorIndex });
+          catalog.push({ id, name, colorIndex, count: 0 });
           return id;
         },
       },
@@ -179,20 +185,30 @@ async function testPurpleFallbackIndex() {
   const result = await ensureLetreiroPurpleLabel(channel);
   assert.strictEqual(result.ready, true);
   assert.strictEqual(result.colorIndex, 5);
-  assert.strictEqual(operations.some((item) => item.type === 'remove' && item.id === '4'), true);
+  assert.deepStrictEqual(result.duplicateIds, ['4']);
   assert.strictEqual(
     operations.some((item) => item.type === 'create' && item.colorIndex === 5),
     true,
-    'sem paleta, o sistema precisa usar o índice roxo explícito e nunca undefined',
+    'sem paleta, o sistema precisa criar a canônica com o índice roxo explícito',
+  );
+  assert.strictEqual(
+    catalog.some((item) => String(item.id) === '4'),
+    true,
+    'a verde não pode ser apagada antes da migração de um contato',
   );
 }
 
 async function run() {
-  await testMeasureParser();
-  await testTextOnlyArtFlow();
-  await testMeasureFlowState();
-  await testPurpleFallbackIndex();
-  console.log('[TESTE PRODUÇÃO] arte por texto, medida inteligente e etiqueta roxa: OK');
+  try {
+    await testMeasureParser();
+    await testTextOnlyArtFlow();
+    await testMeasureFlowState();
+    await testPurpleFallbackIndex();
+    console.log('[TESTE PRODUÇÃO] arte, medida e criação segura da canônica roxa: OK');
+  } finally {
+    try { fs.unlinkSync(TEST_LABEL_STORE); } catch (_) {}
+    try { fs.unlinkSync(`${TEST_LABEL_STORE}.tmp`); } catch (_) {}
+  }
 }
 
 run().catch((err) => {
