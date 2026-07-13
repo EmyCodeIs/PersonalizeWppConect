@@ -46,3 +46,6 @@ jobs:
 
       - name: Testar reset durante handoff
         run: npm run test:reset-handoff
+
+      - name: Testar handoff estrito
+        run: npm run test:strict-handoff
