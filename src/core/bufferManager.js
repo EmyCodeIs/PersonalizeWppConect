@@ -6,6 +6,22 @@ function normalizeBufferId(clientId) {
   return raw;
 }
 
+function commandText(message = {}) {
+  return String(
+    message?.interactiveId
+    || message?.text
+    || message?.body
+    || message?.caption
+    || '',
+  ).trim();
+}
+
+function isImmediateCommand(message = {}) {
+  return /^\/(?:reset|reiniciar|resetarsys)$/i.test(
+    commandText(message).split(/\s+/)[0] || '',
+  );
+}
+
 class BufferManager {
   constructor({ delayMs, onFlush }) {
     this.delayMs = Math.max(500, Number(delayMs || 4500));
@@ -15,7 +31,20 @@ class BufferManager {
 
   push(clientId, message, options = {}) {
     const id = normalizeBufferId(clientId);
-    if (!id) return;
+    if (!id) return false;
+
+    if (isImmediateCommand(message)) {
+      const pending = this.map.get(id);
+      if (pending?.timer) clearTimeout(pending.timer);
+      this.map.delete(id);
+
+      Promise.resolve()
+        .then(() => this.onFlush(id, [{ ...message, chatId: id }]))
+        .catch((err) => {
+          console.error('[BUFFER] immediate command error:', err?.message || err);
+        });
+      return true;
+    }
 
     const item = this.map.get(id) || { messages: [], timer: null };
     item.messages.push({ ...message, chatId: id });
@@ -38,6 +67,7 @@ class BufferManager {
     if (typeof item.timer.unref === 'function') item.timer.unref();
     item.delayMs = effectiveDelay;
     this.map.set(id, item);
+    return true;
   }
 
   async flush(clientId) {
@@ -76,4 +106,9 @@ function mergeMessages(messages = []) {
     .join('\n');
 }
 
-module.exports = { BufferManager, mergeMessages, normalizeBufferId };
+module.exports = {
+  BufferManager,
+  mergeMessages,
+  normalizeBufferId,
+  isImmediateCommand,
+};
