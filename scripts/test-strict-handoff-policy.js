@@ -6,8 +6,8 @@ const {
   isHighConfidenceManualMessage,
   matchSellerLabel,
   nearestPaletteIndex,
-  patchWppConnect,
 } = require('../src/services/strictHandoffPolicy');
+const { createPatchedWppConnect } = require('../src/services/wppconnectModulePatch');
 
 function testOnlyHumanTextCanTriggerManualHandoff() {
   assert.strictEqual(isHighConfidenceManualMessage({
@@ -92,23 +92,26 @@ function testSellerLabelsRequireExactNameAndColor() {
   ], palette), null, 'etiqueta que não pertence aos três vendedores deve ser ignorada');
 }
 
-function testRealWppConnectExportCanBePatched() {
+function testRealWppConnectExportCanBeWrapped() {
   const wppconnect = require('@wppconnect-team/wppconnect');
   assert.strictEqual(typeof wppconnect.create, 'function');
-  const originalCreate = wppconnect.create;
-  patchWppConnect(wppconnect);
+
+  const patched = createPatchedWppConnect(wppconnect);
+  assert.notStrictEqual(patched, wppconnect);
   assert.notStrictEqual(
+    patched.create,
     wppconnect.create,
-    originalCreate,
-    'o bootstrap precisa conseguir instalar a política antes da conexão real',
+    'o bootstrap precisa fornecer um create protegido sem mutar o módulo original',
   );
+  assert.strictEqual(wppconnect.__personalizeStrictHandoffPatched, undefined);
+  assert.strictEqual(patched.__personalizeStrictHandoffPatched, true);
 }
 
 function run() {
   testOnlyHumanTextCanTriggerManualHandoff();
   testBotActivityGuard();
   testSellerLabelsRequireExactNameAndColor();
-  testRealWppConnectExportCanBePatched();
+  testRealWppConnectExportCanBeWrapped();
   console.log('[TESTE HANDOFF ESTRITO] somente texto humano ou etiqueta correta de vendedor assume: OK');
 }
 
