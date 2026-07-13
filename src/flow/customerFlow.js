@@ -9,6 +9,7 @@ const {
   sendMostruarioLetreiro, sendTabelaCores, sendTabelaEspessura, sendTabelaProfundidade,
 } = require('../core/mostruario');
 const { replaceServiceLabel } = require('../core/serviceLabels');
+const { ensureLetreiroPurpleLabel } = require('../core/operationalLabelColorGuard');
 const { detectInitialContext } = require('../core/intent');
 const { parseMedidasFromText, normalizeText, extractName, extractPhone } = require('../core/parsers');
 const {
@@ -175,8 +176,14 @@ async function finish(channel, clientId, session, reason) {
 }
 
 async function startMeasure(channel, id, s) {
-  s.dados.medida = null; s.dados.tamanhoModo = null; s.dados.tamanhoDescricao = null;
-  s.etapa = 'tamanho'; Store.saveSession(s); await channel.sendText(id, messages.askMeasure);
+  s.dados.medida = null;
+  s.dados.tamanhoModo = null;
+  s.dados.tamanhoDescricao = null;
+  s.dados.tamanhoBuffer = [];
+  s.dados.tamanhoParcial = { largura: null, altura: null };
+  s.etapa = 'tamanho';
+  Store.saveSession(s);
+  await channel.sendText(id, messages.askMeasure);
 }
 async function toThickness(channel, id, s) {
   if (s.dados.tipoAcrilico === 'colorido') {
@@ -188,7 +195,17 @@ async function toThickness(channel, id, s) {
     await sendTabelaEspessura(channel, id); await sendMenu(channel, id, 'espessuraPersonalizada');
   }
 }
-async function startArt(channel, id, s) { s.etapa = 'arte_menu'; Store.saveSession(s); await sendMenu(channel, id, 'arte'); }
+async function startArt(channel, id, s) {
+  s.etapa = 'arte_coleta';
+  s.dados.arteModo = 'livre';
+  s.dados.arteTexto = null;
+  s.dados.arteMedias = [];
+  s.dados.arte = null;
+  Store.saveSession(s);
+  await channel.sendText(id, messages.askArtQuestion);
+  await channel.sendText(id, messages.askArtExplanation);
+  await channel.sendText(id, messages.askArtFree);
+}
 async function startCity(channel, id, s) { s.etapa = 'cidade'; Store.saveSession(s); await channel.sendText(id, messages.askCity); }
 async function startDelivery(channel, id, s) {
   s.etapa = 'envio'; Store.saveSession(s);
@@ -264,6 +281,11 @@ async function processCustomerMessage({ clientId, text, channel, messages: inbou
     const service = serviceOf(input);
     if (!service) { await sendMenu(channel, clientId, 'servicos'); return s; }
     d.flow = service; d.demanda = {};
+    if (service === 'letreiro') {
+      await ensureLetreiroPurpleLabel(channel).catch((err) => {
+        console.warn('[ETIQUETAS] não foi possível garantir a cor roxa:', err?.message || err);
+      });
+    }
     await replaceServiceLabel(channel, clientId, service).catch(() => null);
     if (service === 'letreiro') {
       s.etapa = 'tipo_acrilico'; Store.saveSession(s);
@@ -326,15 +348,43 @@ async function processCustomerMessage({ clientId, text, channel, messages: inbou
   }
 
   if (s.etapa === 'tamanho') {
-    const p = parseMedidasFromText(input, { largura: null, altura: null });
-    if (p.modo === 'pedir_descricao') { await channel.sendText(clientId, messages.askMeasureDescription); return s; }
-    if (p.modo === 'invalido') { await channel.sendText(clientId, messages.invalidMeasure); return s; }
-    d.medida = { largura: p.largura ?? null, altura: p.altura ?? null }; d.tamanhoModo = p.modo; d.tamanhoDescricao = p.descricao || null; Store.saveSession(s);
-    if (p.modo === 'descricao') await channel.sendText(clientId, 'Beleza! Vou registrar essa descrição como referência de proporção para a arte.');
-    else if (p.modo === 'altura') await channel.sendText(clientId, `Entendi ${p.altura} cm de altura. A outra medida será ajustada proporcionalmente à arte.`);
-    else if (p.modo === 'largura') await channel.sendText(clientId, `Entendi ${p.largura} cm de largura. A outra medida será ajustada proporcionalmente à arte.`);
-    else await channel.sendText(clientId, `Medida anotada: ${p.largura} x ${p.altura} cm.`);
-    await toThickness(channel, clientId, s); return s;
+    // O BufferManager já aguardou os mesmos 8 segundos usados na produção e
+    // entregou aqui todas as partes da resposta combinadas.
+    d.tamanhoBuffer = Array.isArray(d.tamanhoBuffer) ? d.tamanhoBuffer : [];
+    d.tamanhoBuffer.push(input);
+    const combinado = d.tamanhoBuffer.join(' ').replace(/\s{2,}/g, ' ').trim();
+    d.tamanhoBuffer = [];
+
+    const p = parseMedidasFromText(combinado, { largura: null, altura: null });
+    d.tamanhoParcial = { largura: p.largura ?? null, altura: p.altura ?? null };
+
+    if (p.modo === 'pedir_descricao') {
+      Store.saveSession(s);
+      await channel.sendText(clientId, messages.askMeasureDescription);
+      return s;
+    }
+    if (p.modo === 'invalido') {
+      Store.saveSession(s);
+      await channel.sendText(clientId, messages.invalidMeasure);
+      return s;
+    }
+
+    d.medida = { largura: p.largura ?? null, altura: p.altura ?? null };
+    d.tamanhoModo = p.modo;
+    d.tamanhoDescricao = p.descricao || null;
+    Store.saveSession(s);
+
+    if (p.modo === 'descricao') {
+      await channel.sendText(clientId, 'Beleza! Nossa equipe vai analisar a proporção da arte usando essa medida como referência.');
+    } else if (p.modo === 'altura') {
+      await channel.sendText(clientId, `Entendi ${p.altura} cm de altura. A outra medida nossa equipe ajusta pela arte`);
+    } else if (p.modo === 'largura') {
+      await channel.sendText(clientId, `Entendi ${p.largura} cm de largura. A outra medida nossa equipe ajusta pela arte`);
+    } else {
+      await channel.sendText(clientId, `Medida anotada: ${p.largura} x ${p.altura} cm.`);
+    }
+    await toThickness(channel, clientId, s);
+    return s;
   }
   if (s.etapa === 'espessura_extra_3mm') {
     if (isBack(input, 'esp3_back')) { d.acrescimoAcrilico = null; await startMeasure(channel, clientId, s); return s; }
@@ -355,21 +405,38 @@ async function processCustomerMessage({ clientId, text, channel, messages: inbou
     await startArt(channel, clientId, s); return s;
   }
 
+  // Compatibilidade com sessões antigas que ficaram paradas no menu.
+  // O fluxo oficial atual abre diretamente a coleta livre, sem lista.
   if (s.etapa === 'arte_menu') {
     if (isBack(input, 'art_voltar')) { await toThickness(channel, clientId, s); return s; }
-    const mode = artOf(input);
-    if (!mode) { await sendMenu(channel, clientId, 'arte'); return s; }
-    d.arteModo = mode; d.arteTexto = null; d.arteMedias = []; s.etapa = 'arte_coleta'; Store.saveSession(s);
-    await channel.sendText(clientId, mode === 'arquivo' ? messages.askArtFile : mode === 'imagem' ? messages.askArtImage : messages.askArtDescription);
-    await channel.sendText(clientId, messages.askArtFree); return s;
+    await startArt(channel, clientId, s);
+    return s;
   }
   if (s.etapa === 'arte_coleta') {
     const medias = mediaSummary(inbound);
     const description = input.split(/\r?\n/).map((x) => x.trim()).filter(Boolean)
       .filter((x) => !/^\[(imagem|arquivo|documento|video) enviado/i.test(x)).join(' | ').trim();
-    if (!description && !medias.length) { await channel.sendText(clientId, messages.askArtFree); return s; }
-    d.arteTexto = description || null; d.arteMedias = medias; d.arte = { modo: d.arteModo, texto: d.arteTexto, medias }; Store.saveSession(s);
-    await channel.sendText(clientId, 'Arte e referências anotadas!'); await startCity(channel, clientId, s); return s;
+    if (!description && !medias.length) {
+      await channel.sendText(clientId, messages.askArtFree);
+      return s;
+    }
+
+    const hasDocument = medias.some((item) => item.type === 'document');
+    const hasImage = medias.some((item) => item.type === 'image');
+    d.arteModo = hasDocument
+      ? (description || hasImage ? 'livre' : 'arquivo')
+      : hasImage
+        ? (description ? 'livre' : 'imagem')
+        : 'descrever';
+    d.arteTexto = description || null;
+    d.arteMedias = medias;
+    d.arte = { modo: d.arteModo, texto: d.arteTexto, medias };
+    Store.saveSession(s);
+
+    // Igual ao oficial: não cria um balão extra de confirmação; a cidade já
+    // conduz o cliente à próxima etapa e evita ruído na conversa.
+    await startCity(channel, clientId, s);
+    return s;
   }
   if (s.etapa === 'cidade') { d.cidade = input.replace(/\s{2,}/g, ' ').replace(/\s*\/\s*/g, '/').trim(); Store.saveSession(s); await startDelivery(channel, clientId, s); return s; }
   if (s.etapa === 'envio') {
