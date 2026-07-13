@@ -18,9 +18,10 @@ const {
 const Store = require('./services/leadStore');
 const Identity = require('./services/contactIdentity');
 const ContactLabels = require('./services/contactLabelStore');
+const ConversationControl = require('./services/conversationControl');
 const { env } = require('./config/env');
 
-const BUILD_ID = 'persistent-contact-label-registry-2026-07-11-01';
+const BUILD_ID = 'stage1-closure-72h-handoff-2026-07-13-01';
 const MULTI_MESSAGE_STAGES = new Set([
   'plotagem_descricao',
   'plotagem_medida',
@@ -113,9 +114,10 @@ function extractInteractiveId(raw = {}) {
 function mediaMarker(raw = {}) {
   const type = String(raw?.type || raw?.mimetype || raw?.mediaType || '').toLowerCase();
   const fileName = raw?.filename || raw?.fileName || raw?.document?.filename || '';
-  if (/image/.test(type)) return '[imagem enviada]';
+  if (/image|sticker/.test(type)) return '[imagem enviada]';
   if (/document|pdf|application/.test(type) || fileName) return `[arquivo enviado${fileName ? `: ${fileName}` : ''}]`;
   if (/video/.test(type)) return '[vídeo enviado]';
+  if (/audio|ptt/.test(type)) return '[áudio enviado]';
   return '';
 }
 
@@ -145,7 +147,6 @@ function resolveBufferDelay(clientId, raw, interactiveId) {
   const session = Store.getSession(clientId);
   const stage = String(session?.etapa || '').trim();
 
-  // Mesmos tempos operacionais do fluxo Personalize em produção.
   if (stage === 'tamanho') return env.measureBufferMs;
   if (stage === 'arte_coleta') return env.artBufferMs;
   if (stage === 'endereco') return env.addressBufferMs;
@@ -201,6 +202,11 @@ function registerIncomingContact({ from, raw, source = 'event' }) {
   return { allowed: true, canonicalChatId, identity, profileName, tracked };
 }
 
+function formatRemaining(ms) {
+  const hours = Math.ceil(Math.max(0, Number(ms || 0)) / (60 * 60 * 1000));
+  return `${hours}h`;
+}
+
 async function main() {
   console.log('[PersonalizeWppConect] iniciando...');
   console.log(`[PersonalizeWppConect] BUILD: ${BUILD_ID}`);
@@ -208,9 +214,8 @@ async function main() {
   console.log(`[PersonalizeWppConect] buffers de coleta: medida=${env.measureBufferMs}ms arte=${env.artBufferMs}ms endereço=${env.addressBufferMs}ms Pantone=${env.pantoneBufferMs}ms observação=${env.observationBufferMs}ms cidade=${env.cityBufferMs}ms`);
   console.log(`[PersonalizeWppConect] buffer listas/botões: ${env.interactiveBufferMs}ms`);
   console.log('[PersonalizeWppConect] respostas comuns: digitação única + balões sem pausa artificial');
-  console.log('[PersonalizeWppConect] boas-vindas: saudação + imagem com link na legenda + lista, sem digitação e sem delay artificial');
   console.log('[PersonalizeWppConect] etiquetas: catálogo obrigatório + banco persistente por cliente + reconciliação após não lidas');
-  console.log('[PersonalizeWppConect] finalização: dados salvos na nota do contato; sem encaminhamento ao vendedor');
+  console.log(`[PersonalizeWppConect] handoff: mensagem manual pausa o bot; novo atendimento após ${env.botReentryAfterHours}h`);
 
   if (env.allowedClientNumbers?.length || env.allowedChatIds?.length) {
     console.log(`[PersonalizeWppConect] whitelist ativa: números=${env.allowedClientNumbers.join(', ') || '-'} chatIds=${env.allowedChatIds.join(', ') || '-'}`);
@@ -222,6 +227,11 @@ async function main() {
   const buffer = new BufferManager({
     delayMs: env.bufferMs,
     onFlush: async (clientId, bufferedMessages) => {
+      if (ConversationControl.shouldBlockBotOutbound(clientId)) {
+        console.log(`[HANDOFF] buffer descartado para ${clientId}; bot em silêncio.`);
+        return;
+      }
+
       const text = mergeMessages(bufferedMessages);
       if (!text) return;
       const preparedText = prepareBufferedInput(clientId, text, bufferedMessages);
@@ -230,12 +240,16 @@ async function main() {
       const stageBeforeResponse = String(Store.getSession(clientId)?.etapa || '').trim();
       const isWelcomeBlock = stageBeforeResponse === 'inicio';
 
-      const action = () => processCustomerMessage({
-        clientId,
-        text: preparedText,
-        channel,
-        messages: bufferedMessages,
-      });
+      const action = async () => {
+        const result = await processCustomerMessage({
+          clientId,
+          text: preparedText,
+          channel,
+          messages: bufferedMessages,
+        });
+        ConversationControl.ensureCompletionSilence(clientId);
+        return result;
+      };
 
       if (typeof channel?.runResponseGroup === 'function') {
         await channel.runResponseGroup(clientId, preparedText, action, {
@@ -257,6 +271,22 @@ async function main() {
     if (!registered.allowed) {
       console.log(`[PersonalizeWppConect] ignorado (${source}) fora da whitelist: ${canonicalChatId}`);
       return;
+    }
+
+    const gate = ConversationControl.evaluateIncoming(canonicalChatId, {
+      at: Date.now(),
+      text: effectiveText,
+    });
+    if (gate.action === 'ignore') {
+      buffer.clear(canonicalChatId);
+      console.log(
+        `[HANDOFF] cliente ${canonicalChatId} sem resposta automática; motivo=${gate.reason} `
+        + `restante=${formatRemaining(gate.remainingMs)} até=${gate.silenceUntil}`,
+      );
+      return;
+    }
+    if (gate.reset) {
+      console.log(`[HANDOFF] janela encerrada; novo atendimento iniciado para ${canonicalChatId}.`);
     }
 
     await observeContactLabels(channel, canonicalChatId, {
@@ -286,6 +316,26 @@ async function main() {
     }, { delayMs });
   };
 
+  const onManualOutgoing = async ({ to, text, raw, messageId }) => {
+    const registered = registerIncomingContact({ from: to, raw, source: 'seller-outgoing' });
+    if (!registered.allowed) {
+      console.log(`[HANDOFF] mensagem manual ignorada fora da whitelist: ${registered.canonicalChatId}`);
+      return;
+    }
+
+    const clientId = registered.canonicalChatId;
+    buffer.clear(clientId);
+    const saved = ConversationControl.beginSellerTakeover(clientId, {
+      at: Date.now(),
+      messageId,
+      text,
+    });
+    console.log(
+      `[HANDOFF] vendedor assumiu ${clientId}; etapa=${saved?.etapa || '-'} `
+      + `bot silencioso até ${saved?.dados?.botControl?.silenceUntil || '-'}`,
+    );
+  };
+
   if (env.mockMode) {
     channel = installMessageExperience(createMockChannel());
     blockPdfSending(channel);
@@ -294,7 +344,11 @@ async function main() {
   }
 
   ContactLabels.initializeTracking();
-  channel = await createWppChannel({ onMessage });
+  channel = await createWppChannel({
+    onMessage,
+    onManualOutgoing,
+    shouldSendBotMessage: (clientId) => !ConversationControl.shouldBlockBotOutbound(clientId),
+  });
   blockPdfSending(channel);
   installMessageExperience(channel);
   console.log('[PersonalizeWppConect] conectado. Iniciando recuperação de etiquetas e mensagens...');
