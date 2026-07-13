@@ -73,6 +73,12 @@ const env = {
   detectManualContactLabels: bool('DETECT_MANUAL_CONTACT_LABELS', true),
   storeManualContactLabels: bool('STORE_MANUAL_CONTACT_LABELS', true),
 
+  // Depois da conclusão ou de uma mensagem manual do vendedor, o bot fica em silêncio.
+  // O primeiro contato recebido após essa janela cria um novo atendimento.
+  botReentryAfterHours: Math.max(1, num('BOT_REENTRY_AFTER_HOURS', 72)),
+  detectManualSellerMessages: bool('DETECT_MANUAL_SELLER_MESSAGES', true),
+  botOutboundTrackerTtlMs: Math.max(5000, num('BOT_OUTBOUND_TRACKER_TTL_MS', 45000)),
+
   awaitingQuoteLabelName: process.env.AWAITING_QUOTE_LABEL_NAME || serviceLabelLetreiro,
   awaitingQuoteLabelColor: process.env.AWAITING_QUOTE_LABEL_COLOR || serviceLabelLetreiroColor,
   serviceLabelLetreiro,
