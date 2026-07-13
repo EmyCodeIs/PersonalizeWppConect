@@ -79,6 +79,8 @@ const env = {
   serviceLabelPlotagem,
   serviceLabelOutros,
   serviceLabelLetreiroColor,
+  serviceLabelLetreiroColorHex: process.env.SERVICE_LABEL_LETREIRO_COLOR_HEX || '#7f66ff',
+  serviceLabelLetreiroColorIndex: Math.max(0, num('SERVICE_LABEL_LETREIRO_COLOR_INDEX', 5)),
   serviceLabelPlotagemColor: process.env.SERVICE_LABEL_PLOTAGEM_COLOR || 'gray',
   serviceLabelOutrosColor: process.env.SERVICE_LABEL_OUTROS_COLOR || 'red',
   supportLabelName: process.env.SUPPORT_LABEL_NAME || 'Suporte',
@@ -94,7 +96,14 @@ const env = {
     serviceLabelOutros,
     process.env.SUPPORT_LABEL_NAME || 'Suporte',
   ]),
+
+  // Cria a versão correta ao lado de uma duplicada com cor errada; nunca apaga antes da migração.
   recreateMismatchedOperationalLabels: bool('RECREATE_MISMATCHED_OPERATIONAL_LABELS', true),
+
+  // Só remove uma duplicada global depois de confirmar a etiqueta canônica nos contatos rastreados
+  // e de o próprio WhatsApp informar que a duplicada não possui mais vínculos.
+  cleanupDuplicateOperationalLabels: bool('CLEANUP_DUPLICATE_OPERATIONAL_LABELS', true),
+
   labelObservationMinIntervalMs: Math.max(0, num('LABEL_OBSERVATION_MIN_INTERVAL_MS', 30000)),
   labelReconcileDelayMs: Math.max(0, num('LABEL_RECONCILE_DELAY_MS', 120)),
   labelReconcileIntervalMs: (() => {
