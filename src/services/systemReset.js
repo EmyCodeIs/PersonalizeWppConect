@@ -62,68 +62,27 @@ function collectTrackedTargets() {
   for (const session of Sessions.listSessions()) {
     const id = session.chatId || session.contactIdentity?.primaryChatId || session.clientId || session.id;
     add(id, session.contactIdentity?.contactKey || session.id || null, 'sessions');
+    const key = session.contactIdentity?.contactKey || session.id || null;
+    const target = key ? targets.get(key) : null;
+    if (target) {
+      target.aliases = [...new Set([
+        ...(target.aliases || []),
+        ...(session.contactIdentity?.aliases || []),
+        session.contactIdentity?.lid,
+        session.contactIdentity?.cUsId,
+      ].filter(Boolean))];
+    }
   }
 
   return [...targets.values()];
 }
 
-async function inspectManagedLabels(client, chatId, names) {
-  if (!client?.page?.evaluate || !chatId) {
-    return { chatFound: false, available: false, managedIds: [], allItems: [] };
-  }
-
-  return client.page.evaluate(async ({ chatId: targetChatId, names: expectedNames }) => {
-    const normalize = (value) => String(value || '')
-      .normalize('NFD')
-      .replace(/[\u0300-\u036f]/g, '')
-      .toLowerCase()
-      .replace(/\s+/g, ' ')
-      .trim();
-    const wanted = new Set(expectedNames.map(normalize));
-    const WPP = window.WPP || null;
-    const StoreWindow = window.Store || null;
-
-    let chat = StoreWindow?.Chat?.get?.(targetChatId) || null;
-    if (!chat && typeof StoreWindow?.Chat?.find === 'function') {
-      try { chat = await StoreWindow.Chat.find(targetChatId); } catch (_) {}
-    }
-    if (!chat) return { chatFound: false, available: false, managedIds: [], allItems: [] };
-
-    let catalog = [];
-    try {
-      if (WPP?.labels?.getAllLabels) {
-        const value = await WPP.labels.getAllLabels();
-        catalog = Array.isArray(value) ? value : Object.values(value || {});
-      }
-    } catch (_) {}
-
-    const labelStore = StoreWindow?.Label || StoreWindow?.Labels || null;
-    if (typeof labelStore?.getLabelsForModel !== 'function') {
-      return { chatFound: true, available: false, managedIds: [], allItems: [] };
-    }
-
-    const value = labelStore.getLabelsForModel(chat) || [];
-    const attached = Array.isArray(value) ? value : Object.values(value || {});
-    const allItems = attached.map((entry) => {
-      const id = String(entry?.id?._serialized || entry?.id || entry?.labelId || entry || '');
-      const known = catalog.find((item) => String(
-        item?.id?._serialized || item?.id || item?.labelId || '',
-      ) === id) || null;
-      return {
-        id,
-        name: String(entry?.name || entry?.label || known?.name || known?.label || ''),
-      };
-    }).filter((item) => item.id);
-
-    return {
-      chatFound: true,
-      available: true,
-      managedIds: allItems
-        .filter((item) => wanted.has(normalize(item.name)))
-        .map((item) => item.id),
-      allItems,
-    };
-  }, { chatId, names });
+function targetCandidates(target) {
+  return [...new Set([
+    target?.clientId,
+    ...(target?.aliases || []),
+    ...Identity.getLabelCandidateIds(target?.clientId),
+  ].map((item) => String(item || '').trim()).filter(Boolean))];
 }
 
 async function removeManagedLabelsFromContact(channel, target) {
@@ -133,75 +92,314 @@ async function removeManagedLabelsFromContact(channel, target) {
   }
 
   const names = managedLabelNames();
-  const candidates = [...new Set([
-    target?.clientId,
-    ...(target?.aliases || []),
-    ...Identity.getLabelCandidateIds(target?.clientId),
-  ].filter(Boolean))];
+  const candidates = targetCandidates(target);
+  let lastFailure = null;
 
   for (const chatId of candidates) {
-    let inspected;
+    let result;
     try {
-      inspected = await inspectManagedLabels(client, chatId, names);
-    } catch (err) {
-      inspected = { chatFound: false, available: false, error: err?.message || String(err) };
-    }
-    if (!inspected?.chatFound) continue;
-    if (inspected.available === false) {
-      return { success: false, reason: 'label_inspection_unavailable', removedIds: [], chatId };
-    }
-
-    const removeIds = [...new Set((inspected.managedIds || []).map(String).filter(Boolean))];
-    if (!removeIds.length) {
-      return { success: true, removedIds: [], chatId, alreadyClean: true };
-    }
-
-    try {
-      await client.page.evaluate(async ({ chatId: targetChatId, removeIds: ids }) => {
+      result = await client.page.evaluate(async ({ chatId: requestedChatId, names: expectedNames }) => {
+        const normalize = (value) => String(value || '')
+          .normalize('NFD')
+          .replace(/[\u0300-\u036f]/g, '')
+          .toLowerCase()
+          .replace(/\s+/g, ' ')
+          .trim();
+        const wanted = new Set(expectedNames.map(normalize));
         const WPP = window.WPP || null;
-        if (!WPP?.lists?.removeChats) throw new Error('WPP.lists.removeChats indisponível');
-        for (const id of ids) await WPP.lists.removeChats(String(id), [targetChatId]);
-      }, { chatId, removeIds });
+        const StoreWindow = window.Store || null;
+        const waitBrowser = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+        const itemId = (item) => String(item?.id?._serialized || item?.id || item?.labelId || item || '');
+        const itemName = (item) => String(item?.name || item?.label || '');
+
+        const resolveChat = async () => {
+          let chat = StoreWindow?.Chat?.get?.(requestedChatId) || null;
+          if (!chat && typeof StoreWindow?.Chat?.find === 'function') {
+            try { chat = await StoreWindow.Chat.find(requestedChatId); } catch (_) {}
+          }
+          return chat;
+        };
+
+        const chat = await resolveChat();
+        if (!chat) return { success: false, chatFound: false, reason: 'chat_not_found' };
+        const resolvedChatId = String(chat?.id?._serialized || chat?.id || requestedChatId);
+
+        if (!WPP?.labels?.getAllLabels) {
+          return { success: false, chatFound: true, reason: 'label_catalog_unavailable', chatId: resolvedChatId };
+        }
+        const catalogValue = await WPP.labels.getAllLabels();
+        const catalog = Array.isArray(catalogValue) ? catalogValue : Object.values(catalogValue || {});
+        const managed = catalog.filter((item) => wanted.has(normalize(itemName(item))));
+        const managedIds = [...new Set(managed.map(itemId).filter(Boolean))];
+        if (!managedIds.length) {
+          return {
+            success: true,
+            chatFound: true,
+            chatId: resolvedChatId,
+            removedIds: [],
+            alreadyClean: true,
+            reason: 'managed_labels_not_in_catalog',
+          };
+        }
+
+        const readAttachedIds = async () => {
+          const refreshed = await resolveChat();
+          if (!refreshed) return { available: false, ids: [] };
+          const ids = new Set();
+          let available = false;
+
+          if (Array.isArray(refreshed.labels)) {
+            available = true;
+            for (const id of refreshed.labels) {
+              const value = itemId(id);
+              if (value) ids.add(value);
+            }
+          }
+
+          const labelStore = StoreWindow?.Label || StoreWindow?.Labels || null;
+          if (typeof labelStore?.getLabelsForModel === 'function') {
+            available = true;
+            const value = labelStore.getLabelsForModel(refreshed) || [];
+            for (const entry of (Array.isArray(value) ? value : Object.values(value || {}))) {
+              const id = itemId(entry);
+              if (id) ids.add(id);
+            }
+          }
+          return { available, ids: [...ids] };
+        };
+
+        const before = await readAttachedIds();
+        const attachedManagedBefore = before.available
+          ? managedIds.filter((id) => before.ids.includes(id))
+          : [...managedIds];
+
+        if (WPP?.labels?.addOrRemoveLabels) {
+          await WPP.labels.addOrRemoveLabels(
+            resolvedChatId,
+            managedIds.map((labelId) => ({ labelId: String(labelId), type: 'remove' })),
+          );
+        } else if (WPP?.lists?.removeChats) {
+          for (const id of managedIds) await WPP.lists.removeChats(String(id), [resolvedChatId]);
+        } else {
+          return { success: false, chatFound: true, reason: 'label_remove_api_unavailable', chatId: resolvedChatId };
+        }
+
+        let after = { available: false, ids: [] };
+        for (let attempt = 0; attempt < 10; attempt += 1) {
+          if (attempt > 0) await waitBrowser(350);
+          after = await readAttachedIds();
+          if (after.available && !managedIds.some((id) => after.ids.includes(id))) break;
+        }
+
+        const remainingIds = after.available
+          ? managedIds.filter((id) => after.ids.includes(id))
+          : [];
+        return {
+          success: after.available ? remainingIds.length === 0 : true,
+          chatFound: true,
+          chatId: resolvedChatId,
+          removedIds: attachedManagedBefore.filter((id) => !remainingIds.includes(id)),
+          requestedIds: managedIds,
+          remainingIds,
+          verified: after.available && remainingIds.length === 0,
+          verificationAvailable: after.available,
+          reason: after.available && remainingIds.length ? 'label_removal_not_confirmed' : null,
+        };
+      }, { chatId, names });
     } catch (err) {
-      return {
-        success: false,
-        reason: err?.message || String(err),
-        removedIds: [],
-        chatId,
-      };
+      result = { success: false, chatFound: false, reason: err?.message || String(err), chatId };
     }
 
-    for (let attempt = 0; attempt < 6; attempt += 1) {
-      if (attempt > 0) await wait(400);
-      const after = await inspectManagedLabels(client, chatId, names).catch(() => null);
-      if (after?.chatFound && after.available !== false && !(after.managedIds || []).length) {
-        return { success: true, removedIds: removeIds, chatId, verified: true };
-      }
-    }
-
-    return {
-      success: false,
-      reason: 'label_removal_not_confirmed',
-      removedIds: removeIds,
-      chatId,
-    };
+    if (result?.success) return result;
+    lastFailure = result;
+    if (result?.chatFound) return result;
   }
 
-  return { success: false, reason: 'chat_not_found', removedIds: [], chatId: null };
+  return lastFailure || { success: false, reason: 'chat_not_found', removedIds: [], chatId: null };
 }
 
-async function clearContactNote(channel, clientId) {
-  if (typeof channel?.setContactNote !== 'function') {
-    return { success: false, reason: 'set_note_unavailable' };
+async function clearContactNote(channel, clientId, target = null) {
+  const client = channel?.client;
+  if (!client?.page?.evaluate) {
+    return { success: false, reason: 'page_unavailable', chatId: null };
   }
-  try {
-    const result = await channel.setContactNote(clientId, '');
-    return result === false
-      ? { success: false, reason: 'note_clear_returned_false' }
-      : { success: true };
-  } catch (err) {
-    return { success: false, reason: err?.message || String(err) };
+
+  const candidates = targetCandidates(target || { clientId });
+  let lastFailure = null;
+
+  for (const chatId of candidates) {
+    let result;
+    try {
+      result = await client.page.evaluate(async ({ chatId: requestedChatId }) => {
+        const WPP = window.WPP || null;
+        const StoreWindow = window.Store || null;
+        const waitBrowser = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+        const stripInvisible = (value) => String(value || '').replace(/[\u200B-\u200D\u2060\uFEFF]/g, '').trim();
+
+        const resolveChat = async () => {
+          let chat = StoreWindow?.Chat?.get?.(requestedChatId) || null;
+          if (!chat && typeof StoreWindow?.Chat?.find === 'function') {
+            try { chat = await StoreWindow.Chat.find(requestedChatId); } catch (_) {}
+          }
+          return chat;
+        };
+
+        const chat = await resolveChat();
+        if (!chat) return { success: false, chatFound: false, reason: 'chat_not_found' };
+        const resolvedChatId = String(chat?.id?._serialized || chat?.id || requestedChatId);
+        const chatJid = String(
+          (typeof chat?.id?.toJid === 'function' ? chat.id.toJid() : null)
+          || chat?.id?._serialized
+          || chat?.id
+          || resolvedChatId,
+        );
+
+        const getNote = async () => {
+          if (WPP?.chat?.getNotes) {
+            try { return await WPP.chat.getNotes(resolvedChatId); } catch (_) {}
+          }
+          try {
+            const noteAction = window.require?.('WAWebNoteAction');
+            if (noteAction?.retrieveOnlyNoteForChatJid) {
+              return await noteAction.retrieveOnlyNoteForChatJid(chatJid);
+            }
+          } catch (_) {}
+          return undefined;
+        };
+
+        const existing = await getNote();
+        if (existing === null) {
+          return { success: true, chatFound: true, chatId: resolvedChatId, alreadyClean: true, mode: 'already-empty' };
+        }
+        if (existing === undefined) {
+          return { success: false, chatFound: true, chatId: resolvedChatId, reason: 'note_read_api_unavailable' };
+        }
+
+        let deleteError = null;
+        try {
+          const requireModule = window.require;
+          if (typeof requireModule !== 'function') throw new Error('window.require indisponível');
+
+          const noteAction = requireModule('WAWebNoteAction');
+          const noteSyncModule = requireModule('WAWebNoteSync');
+          const noteSync = noteSyncModule?.default || noteSyncModule;
+          const syncdGetChat = requireModule('WAWebSyncdGetChat');
+          const widFactory = requireModule('WAWebWidFactory');
+          const widToJid = requireModule('WAWebWidToJid');
+          const actionUtils = requireModule('WAWebSyncdActionUtils');
+          const serverProto = requireModule('WAWebProtobufsServerSync.pb');
+          const syncdCore = requireModule('WAWebSyncdCoreApi');
+          const schemaNote = requireModule('WAWebSchemaNote');
+          const noteCollectionModule = requireModule('WAWebNoteCollection');
+
+          const note = noteAction?.retrieveOnlyNoteForChatJid
+            ? await noteAction.retrieveOnlyNoteForChatJid(chatJid)
+            : existing;
+          if (!note?.id) throw new Error('nota não localizada para exclusão');
+          if (!noteSync?.getAction || !noteSync?.getVersion || !noteSync?.resolveNoteId) {
+            throw new Error('WAWebNoteSync incompleto');
+          }
+
+          const sourceJid = String(note.chatJid || chatJid);
+          const mutationIndex = await syncdGetChat.getChatJidMutationIndexForChat(
+            widFactory.createWid(sourceJid),
+            noteSync.getAction(),
+          );
+          const mutationChatJid = widToJid.widToChatJid(widFactory.createWid(mutationIndex));
+          const mutationNoteId = await noteSync.resolveNoteId(
+            sourceJid,
+            mutationChatJid,
+            String(note.id),
+          );
+          const operation = serverProto?.SyncdMutation$SyncdOperation?.SET;
+          if (operation === undefined) throw new Error('operação Syncd SET indisponível');
+
+          const mutation = actionUtils.buildPendingMutation({
+            collection: noteSync.collectionName,
+            indexArgs: [mutationNoteId],
+            value: { noteEditAction: { deleted: true } },
+            version: noteSync.getVersion(),
+            operation,
+            timestamp: Date.now(),
+            action: noteSync.getAction(),
+          });
+
+          await syncdCore.lockForSync(['note'], [mutation], async () => {
+            const table = schemaNote.getNoteTable();
+            await table.remove(mutationNoteId);
+            if (String(note.id) !== String(mutationNoteId)) {
+              try { await table.remove(String(note.id)); } catch (_) {}
+            }
+          });
+
+          const noteCollection = noteCollectionModule?.NoteCollection;
+          if (noteCollection?.purgeNotesByChatJid) noteCollection.purgeNotesByChatJid(sourceJid);
+          else if (noteCollection?.remove) noteCollection.remove([String(note.id), String(mutationNoteId)]);
+
+          for (let attempt = 0; attempt < 8; attempt += 1) {
+            if (attempt > 0) await waitBrowser(350);
+            const after = await getNote();
+            if (after === null || (after && !stripInvisible(after.content))) {
+              return {
+                success: true,
+                chatFound: true,
+                chatId: resolvedChatId,
+                mode: after === null ? 'deleted' : 'blank-after-delete',
+                verified: true,
+              };
+            }
+          }
+          deleteError = 'note_deletion_not_confirmed';
+        } catch (err) {
+          deleteError = err?.message || String(err);
+        }
+
+        // Compatibilidade: versões que não expõem a mutação de exclusão recebem
+        // um caractere invisível. Visualmente a nota fica vazia e o resultado é verificado.
+        try {
+          if (!WPP?.chat?.setNotes) throw new Error('WPP.chat.setNotes indisponível');
+          await WPP.chat.setNotes(resolvedChatId, '\u2060');
+          for (let attempt = 0; attempt < 6; attempt += 1) {
+            if (attempt > 0) await waitBrowser(300);
+            const after = await getNote();
+            if (after && !stripInvisible(after.content)) {
+              return {
+                success: true,
+                chatFound: true,
+                chatId: resolvedChatId,
+                mode: 'blanked-fallback',
+                verified: true,
+                deleteError,
+              };
+            }
+          }
+          return {
+            success: false,
+            chatFound: true,
+            chatId: resolvedChatId,
+            reason: 'note_clear_not_confirmed',
+            deleteError,
+          };
+        } catch (fallbackError) {
+          return {
+            success: false,
+            chatFound: true,
+            chatId: resolvedChatId,
+            reason: fallbackError?.message || String(fallbackError),
+            deleteError,
+          };
+        }
+      }, { chatId });
+    } catch (err) {
+      result = { success: false, chatFound: false, chatId, reason: err?.message || String(err) };
+    }
+
+    if (result?.success) return result;
+    lastFailure = result;
+    if (result?.chatFound) return result;
   }
+
+  return lastFailure || { success: false, reason: 'chat_not_found', chatId: null };
 }
 
 async function resetSystemWithWhatsAppCleanup({
@@ -230,6 +428,11 @@ async function resetSystemWithWhatsAppCleanup({
       labelResult,
       noteResult,
     });
+
+    console.log(
+      `[RESETARSYS] ${target.clientId}: etiquetas=${labelResult?.success ? 'ok' : `falha(${labelResult?.reason})`} `
+      + `nota=${noteResult?.success ? `ok(${noteResult?.mode || 'limpa'})` : `falha(${noteResult?.reason})`}`,
+    );
   }
 
   const contactReset = ContactLabels.resetContacts({
@@ -257,7 +460,7 @@ module.exports = {
   clearContactNote,
   managedLabelNames,
   _test: {
-    inspectManagedLabels,
     normalizeName,
+    targetCandidates,
   },
 };
