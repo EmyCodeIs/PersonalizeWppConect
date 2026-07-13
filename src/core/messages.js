@@ -1,6 +1,13 @@
 'use strict';
 
-function welcome(name) {
+function welcome(name, options = {}) {
+  const isReturning = !!options.isReturning;
+  if (isReturning) {
+    return name
+      ? `Olá, ${name}! 👋\nQue bom te ver novamente no Canal de Atendimento da Personalize!`
+      : 'Olá! 👋\nQue bom te ver novamente no Canal de Atendimento da Personalize!';
+  }
+
   return name
     ? `Olá, ${name}! 👋\nBem-vindo(a) ao Canal de Atendimento da Personalize!`
     : 'Olá! 👋\nBem-vindo(a) ao Canal de Atendimento da Personalize!';
