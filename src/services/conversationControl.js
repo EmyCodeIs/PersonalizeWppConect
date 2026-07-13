@@ -4,6 +4,8 @@ const Store = require('./leadStore');
 const { env } = require('../config/env');
 
 const HOUR_MS = 60 * 60 * 1000;
+const COMMAND_BYPASS_MS = 30 * 1000;
+const commandBypassUntilByClient = new Map();
 
 function nowIso(now = Date.now()) {
   return new Date(now).toISOString();
@@ -26,6 +28,34 @@ function calculateSilenceUntil(startedAt, hours = configuredSilenceHours()) {
 
 function isTestCommand(text) {
   return /^\/(?:reset|reiniciar|resetarsys)$/i.test(String(text || '').trim().split(/\s+/)[0] || '');
+}
+
+function commandBypassKey(clientId) {
+  return Store.normalizeClientId?.(clientId) || String(clientId || '').trim();
+}
+
+function grantCommandBypass(clientId, now = Date.now()) {
+  const key = commandBypassKey(clientId);
+  if (!key) return 0;
+  const until = Number(now || Date.now()) + COMMAND_BYPASS_MS;
+  commandBypassUntilByClient.set(key, until);
+  return until;
+}
+
+function hasCommandBypass(clientId, now = Date.now()) {
+  const key = commandBypassKey(clientId);
+  if (!key) return false;
+  const until = Number(commandBypassUntilByClient.get(key) || 0);
+  if (until <= Number(now || Date.now())) {
+    commandBypassUntilByClient.delete(key);
+    return false;
+  }
+  return true;
+}
+
+function clearCommandBypass(clientId) {
+  const key = commandBypassKey(clientId);
+  if (key) commandBypassUntilByClient.delete(key);
 }
 
 function getControl(session) {
@@ -84,6 +114,7 @@ function beginSellerTakeover(clientId, {
 } = {}) {
   const session = Store.getSession(clientId);
   if (!session) return null;
+  clearCommandBypass(clientId);
   const saved = applySilence(session, {
     reason: 'seller_message',
     startedAt: at,
@@ -130,7 +161,13 @@ function evaluateIncoming(clientId, {
   text = '',
 } = {}) {
   if (env.enableTestCommands && isTestCommand(text)) {
-    return { action: 'process', reason: 'test_command' };
+    const bypassUntil = grantCommandBypass(clientId, at);
+    return {
+      action: 'process',
+      reason: 'test_command',
+      bypassSilence: true,
+      bypassUntil: nowIso(bypassUntil),
+    };
   }
 
   let session = Store.getSession(clientId);
@@ -180,6 +217,7 @@ function evaluateIncoming(clientId, {
 }
 
 function shouldBlockBotOutbound(clientId, now = Date.now()) {
+  if (hasCommandBypass(clientId, now)) return false;
   const session = Store.getSession(clientId);
   const control = getControl(session);
   return isSilenceActive(control, now);
@@ -193,6 +231,7 @@ function status(clientId, now = Date.now()) {
     reason: control?.reason || null,
     silenceUntil: control?.silenceUntil || null,
     humanTakeover: Boolean(session?.dados?.humanTakeover?.active),
+    commandBypassActive: hasCommandBypass(clientId, now),
   };
 }
 
@@ -204,10 +243,14 @@ module.exports = {
   status,
   _test: {
     HOUR_MS,
+    COMMAND_BYPASS_MS,
     applySilence,
     calculateSilenceUntil,
+    clearCommandBypass,
     configuredSilenceHours,
     getControl,
+    grantCommandBypass,
+    hasCommandBypass,
     isSilenceActive,
     isTestCommand,
     toTimestamp,
