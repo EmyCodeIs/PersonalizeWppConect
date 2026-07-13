@@ -52,6 +52,20 @@ function listName(item) {
   return String(item?.name || item?.label || '').trim();
 }
 
+function listCount(item) {
+  const value = Number(item?.count);
+  return Number.isFinite(value) ? value : 0;
+}
+
+function compareListIds(a, b) {
+  const aId = listId(a);
+  const bId = listId(b);
+  const aNumber = Number(aId);
+  const bNumber = Number(bId);
+  if (Number.isFinite(aNumber) && Number.isFinite(bNumber)) return aNumber - bNumber;
+  return aId.localeCompare(bId);
+}
+
 function normalizeDefinition(definition = {}) {
   const name = String(definition.name || '').trim();
   if (!name) return null;
@@ -201,21 +215,68 @@ function nearestPaletteIndex(palette, requestedHex) {
   return Number.isInteger(bestIndex) ? bestIndex : null;
 }
 
-function findByDefinition(catalog, definition) {
-  const wanted = normalizeName(definition?.name);
-  return (catalog || []).find((item) => normalizeName(listName(item)) === wanted) || null;
+function expectedColorIndex(definition, palette = []) {
+  const requestedHex = definition?.key === 'service:letreiro'
+    ? env.serviceLabelLetreiroColorHex
+    : desiredHex(definition?.color);
+  const fromPalette = nearestPaletteIndex(palette, requestedHex);
+  if (Number.isInteger(fromPalette)) return fromPalette;
+  if (definition?.key === 'service:letreiro') {
+    const configured = Number(env.serviceLabelLetreiroColorIndex);
+    return Number.isInteger(configured) && configured >= 0 ? configured : 5;
+  }
+  return null;
 }
 
-async function createMissingList(client, definition, palette) {
+function matchingLists(catalog, definition) {
+  const wanted = normalizeName(definition?.name);
+  return (catalog || [])
+    .filter((item) => normalizeName(listName(item)) === wanted)
+    .filter((item) => listId(item));
+}
+
+function pickPreferredList(items = []) {
+  return [...items].sort((a, b) => {
+    const countDifference = listCount(b) - listCount(a);
+    if (countDifference) return countDifference;
+    return compareListIds(a, b);
+  })[0] || null;
+}
+
+function resolveCanonicalList(catalog, definition, palette = []) {
+  const matches = matchingLists(catalog, definition);
+  const expectedIndex = expectedColorIndex(definition, palette);
+  const correctColor = Number.isInteger(expectedIndex)
+    ? matches.filter((item) => Number(item.colorIndex) === expectedIndex)
+    : [];
+
+  let item = null;
+  if (correctColor.length) item = pickPreferredList(correctColor);
+  else if (!Number.isInteger(expectedIndex) && matches.length) item = pickPreferredList(matches);
+
+  return {
+    item,
+    expectedIndex,
+    matches,
+    duplicates: item ? matches.filter((candidate) => listId(candidate) !== listId(item)) : matches,
+  };
+}
+
+function findByDefinition(catalog, definition, palette = []) {
+  return resolveCanonicalList(catalog, definition, palette).item;
+}
+
+async function createCanonicalList(client, definition, palette) {
   if (!client?.page?.evaluate) return null;
   const key = definition.key;
   if (creationLocks.has(key)) return creationLocks.get(key);
 
   const task = (async () => {
-    const current = findByDefinition(await readBusinessLists(client), definition);
-    if (current) return current;
+    const beforeCatalog = await readBusinessLists(client);
+    const before = resolveCanonicalList(beforeCatalog, definition, palette);
+    if (before.item) return before.item;
 
-    const requestedIndex = nearestPaletteIndex(palette, desiredHex(definition.color));
+    const requestedIndex = expectedColorIndex(definition, palette);
     let createdId = '';
     try {
       createdId = await client.page.evaluate(async ({ name, colorIndex }) => {
@@ -235,12 +296,25 @@ async function createMissingList(client, definition, palette) {
     for (let attempt = 1; attempt <= 12; attempt += 1) {
       await wait(500);
       const catalog = await readBusinessLists(client);
-      const visible = catalog.find((item) => listId(item) === String(createdId))
-        || findByDefinition(catalog, definition);
+      const byCreatedId = catalog.find((item) => listId(item) === String(createdId)) || null;
+      const resolved = resolveCanonicalList(catalog, definition, palette);
+      let visible = resolved.item;
+      if (
+        !visible
+        && byCreatedId
+        && (
+          !Number.isInteger(requestedIndex)
+          || Number(byCreatedId.colorIndex) === requestedIndex
+        )
+      ) {
+        visible = byCreatedId;
+      }
       if (visible) return visible;
     }
 
-    console.warn(`[ETIQUETAS] "${definition.name}" foi criada, mas não apareceu no catálogo real.`);
+    console.warn(
+      `[ETIQUETAS] "${definition.name}" foi criada, mas a versão com a cor esperada não apareceu no catálogo.`,
+    );
     return null;
   })().finally(() => creationLocks.delete(key));
 
@@ -248,41 +322,15 @@ async function createMissingList(client, definition, palette) {
   return task;
 }
 
-async function recreateListWithExpectedColor(client, definition, existing, palette) {
-  if (!env.recreateMismatchedOperationalLabels || !client?.page?.evaluate) return null;
-  const existingId = listId(existing);
-  if (!existingId) return null;
-
-  console.warn(
-    `[ETIQUETAS] recriando "${definition.name}" para corrigir a cor para ${definition.color}. `
-    + `Os clientes rastreados serão restaurados pelo banco.`,
-  );
-
-  try {
-    await client.page.evaluate(async ({ listId: targetId }) => {
-      const WPP = window.WPP || null;
-      if (!WPP?.lists?.remove) throw new Error('WPP.lists.remove indisponível');
-      await WPP.lists.remove(String(targetId));
-    }, { listId: existingId });
-  } catch (err) {
-    console.warn(`[ETIQUETAS] não foi possível remover a versão com cor incorreta:`, err?.message || err);
-    return null;
-  }
-
-  for (let attempt = 1; attempt <= 10; attempt += 1) {
-    await wait(400);
-    const catalog = await readBusinessLists(client);
-    const stillThere = catalog.some((item) => listId(item) === existingId);
-    if (!stillThere) break;
-    if (attempt === 10) return null;
-  }
-
-  return createMissingList(client, definition, palette);
-}
-
 async function ensureRequiredCatalog(channel, { definitions = requiredLabelDefinitions() } = {}) {
   if (!env.enableContactLabels || !channel?.client) {
-    return { ready: false, catalog: {}, missing: definitions.map((item) => item.key), colorMismatches: [] };
+    return {
+      ready: false,
+      catalog: {},
+      missing: definitions.map((item) => item.key),
+      colorMismatches: [],
+      duplicates: [],
+    };
   }
 
   const client = channel.client;
@@ -290,39 +338,70 @@ async function ensureRequiredCatalog(channel, { definitions = requiredLabelDefin
   const catalogByKey = {};
   const missing = [];
   const colorMismatches = [];
+  const duplicateReport = [];
 
   for (const rawDefinition of definitions) {
     const definition = normalizeDefinition(rawDefinition);
     if (!definition) continue;
-    const catalog = await readBusinessLists(client);
-    let item = findByDefinition(catalog, definition);
-    if (!item) item = await createMissingList(client, definition, palette);
-    if (!item) {
-      missing.push(definition.key);
-      continue;
-    }
 
-    const expectedIndex = nearestPaletteIndex(palette, desiredHex(definition.color));
-    const actualIndex = Number(item.colorIndex);
-    if (Number.isInteger(expectedIndex) && Number.isFinite(actualIndex) && actualIndex !== expectedIndex) {
-      const recreated = await recreateListWithExpectedColor(client, definition, item, palette);
-      if (recreated) {
-        item = recreated;
-      } else {
-        colorMismatches.push({
-          key: definition.key,
-          name: definition.name,
-          expectedIndex,
-          actualIndex,
-        });
-        console.warn(
-          `[ETIQUETAS] "${definition.name}" continua com índice ${actualIndex}; esperado=${expectedIndex}.`,
-        );
+    let catalog = await readBusinessLists(client);
+    let resolved = resolveCanonicalList(catalog, definition, palette);
+
+    if (!resolved.item) {
+      const shouldCreate = resolved.matches.length === 0 || env.recreateMismatchedOperationalLabels;
+      if (shouldCreate) {
+        await createCanonicalList(client, definition, palette);
+        catalog = await readBusinessLists(client);
+        resolved = resolveCanonicalList(catalog, definition, palette);
       }
     }
 
-    catalogByKey[definition.key] = { ...item, definition };
-    LabelStore.saveCatalog(definition, item);
+    if (!resolved.item) {
+      missing.push(definition.key);
+      if (resolved.matches.length) {
+        colorMismatches.push({
+          key: definition.key,
+          name: definition.name,
+          expectedIndex: resolved.expectedIndex,
+          found: resolved.matches.map((item) => ({
+            id: listId(item),
+            colorIndex: Number(item.colorIndex),
+          })),
+        });
+      }
+      continue;
+    }
+
+    const duplicateIds = resolved.duplicates.map(listId).filter(Boolean);
+    const entry = {
+      ...resolved.item,
+      definition,
+      expectedColorIndex: resolved.expectedIndex,
+      duplicateIds,
+      duplicates: resolved.duplicates,
+    };
+    catalogByKey[definition.key] = entry;
+    LabelStore.saveCatalog(definition, resolved.item);
+
+    if (duplicateIds.length) {
+      duplicateReport.push({
+        key: definition.key,
+        name: definition.name,
+        canonicalId: listId(resolved.item),
+        canonicalColorIndex: Number(resolved.item.colorIndex),
+        duplicateIds,
+      });
+      console.warn(
+        `[ETIQUETAS] duplicata detectada em "${definition.name}": `
+        + `canônica=${listId(resolved.item)} cor=${String(resolved.item.colorIndex)} `
+        + `duplicadas=${duplicateIds.join(',')}`,
+      );
+    } else {
+      console.log(
+        `[ETIQUETAS] canônica: "${definition.name}" | ID ${listId(resolved.item)} `
+        + `| cor=${String(resolved.item.colorIndex)}`,
+      );
+    }
   }
 
   return {
@@ -330,6 +409,8 @@ async function ensureRequiredCatalog(channel, { definitions = requiredLabelDefin
     catalog: catalogByKey,
     missing,
     colorMismatches,
+    duplicates: duplicateReport,
+    palette,
   };
 }
 
@@ -431,68 +512,223 @@ async function observeContactLabels(channel, clientId, { force = false, source =
   return task;
 }
 
+async function addTargetLabel(client, chatId, targetId) {
+  return client.page.evaluate(async ({ chatId: targetChatId, targetId: id }) => {
+    const WPP = window.WPP || null;
+    if (!WPP?.lists?.addChats) throw new Error('WPP.lists.addChats indisponível');
+    await WPP.lists.addChats(String(id), [targetChatId]);
+    return true;
+  }, { chatId, targetId });
+}
+
+async function removeLabelsFromChat(client, chatId, removeIds) {
+  const ids = [...new Set((removeIds || []).map(String).filter(Boolean))];
+  if (!ids.length) return true;
+  return client.page.evaluate(async ({ chatId: targetChatId, removeIds: targetIds }) => {
+    const WPP = window.WPP || null;
+    if (!WPP?.lists?.removeChats) throw new Error('WPP.lists.removeChats indisponível');
+    for (const id of targetIds) {
+      await WPP.lists.removeChats(String(id), [targetChatId]);
+    }
+    return true;
+  }, { chatId, removeIds: ids });
+}
+
+async function verifyTargetAndRemoved(client, chatId, targetId, removeIds = []) {
+  const removedSet = new Set((removeIds || []).map(String));
+  for (let attempt = 1; attempt <= 5; attempt += 1) {
+    if (attempt > 1) await wait(450);
+    const after = await inspectCandidate(client, chatId);
+    if (!after.chatFound || after.available === false) {
+      return { verified: null, items: after.items || [] };
+    }
+    const ids = new Set(after.items.map((item) => String(item.id)));
+    const hasTarget = ids.has(String(targetId));
+    const removedGone = [...removedSet].every((id) => !ids.has(id));
+    if (hasTarget && removedGone) return { verified: true, items: after.items };
+  }
+  const finalState = await inspectCandidate(client, chatId);
+  return { verified: false, items: finalState.items || [] };
+}
+
 async function applyDefinitionWithCatalog(channel, clientId, definition, catalogByKey) {
   const normalized = normalizeDefinition(definition);
   if (!normalized || !channel?.client) return { applied: false, reason: 'invalid_definition' };
   const target = catalogByKey?.[normalized.key];
   if (!target) return { applied: false, reason: 'target_missing' };
+
   const targetId = listId(target);
-  const sameRole = requiredLabelDefinitions().filter((item) => item.key !== normalized.key);
+  const duplicateIds = new Set((target.duplicateIds || []).map(String).filter(Boolean));
+  const otherOperationalIds = requiredLabelDefinitions()
+    .filter((item) => item.key !== normalized.key)
+    .map((item) => catalogByKey?.[item.key])
+    .map(listId)
+    .filter(Boolean);
 
   for (const chatId of orderedCandidateIds(clientId)) {
     const before = await inspectCandidate(channel.client, chatId);
     if (!before.chatFound) continue;
-    const attachedIds = new Set(before.items.map((item) => String(item.id)));
 
+    const attachedIds = new Set(before.items.map((item) => String(item.id)));
     try {
-      await channel.client.page.evaluate(async ({ chatId: targetChatId, targetId: id, removeIds }) => {
-        const WPP = window.WPP || null;
-        if (!WPP?.lists?.addChats || !WPP?.lists?.removeChats) {
-          throw new Error('WPP.lists indisponível');
-        }
-        for (const removeId of removeIds) {
-          try { await WPP.lists.removeChats(String(removeId), [targetChatId]); } catch (_) {}
-        }
-        await WPP.lists.addChats(String(id), [targetChatId]);
-      }, {
-        chatId,
-        targetId,
-        removeIds: sameRole
-          .map((item) => catalogByKey?.[item.key])
-          .map(listId)
-          .filter((id) => id && attachedIds.has(id)),
-      });
-    } catch (_) {
+      if (!attachedIds.has(targetId)) {
+        await addTargetLabel(channel.client, chatId, targetId);
+      }
+    } catch (err) {
+      console.warn(`[ETIQUETAS] falha ao aplicar a canônica ${targetId} em ${chatId}:`, err?.message || err);
       continue;
     }
 
-    for (let attempt = 1; attempt <= 4; attempt += 1) {
-      if (attempt > 1) await wait(450);
-      const after = await inspectCandidate(channel.client, chatId);
-      if (after.items.some((item) => String(item.id) === targetId)) {
-        persistManualLabels(clientId, after.items);
+    const targetVerification = await verifyTargetAndRemoved(channel.client, chatId, targetId, []);
+    if (targetVerification.verified !== true) {
+      return {
+        applied: true,
+        verified: targetVerification.verified,
+        migrated: false,
+        chatId,
+        targetId,
+        targetName: normalized.name,
+        key: normalized.key,
+        reason: targetVerification.verified === false ? 'target_not_confirmed' : null,
+      };
+    }
+
+    const removable = [...new Set([
+      ...[...duplicateIds].filter((id) => attachedIds.has(id)),
+      ...otherOperationalIds.filter((id) => attachedIds.has(id)),
+    ])].filter((id) => id !== targetId);
+
+    if (removable.length) {
+      try {
+        await removeLabelsFromChat(channel.client, chatId, removable);
+      } catch (err) {
         return {
           applied: true,
           verified: true,
+          migrated: false,
           chatId,
           targetId,
           targetName: normalized.name,
           key: normalized.key,
+          reason: `remove_failed:${err?.message || err}`,
         };
       }
     }
 
+    const finalVerification = await verifyTargetAndRemoved(
+      channel.client,
+      chatId,
+      targetId,
+      removable,
+    );
+    persistManualLabels(clientId, finalVerification.items);
+
+    if (finalVerification.verified === true && removable.length) {
+      console.log(
+        `[ETIQUETAS] migração confirmada em ${chatId}: canônica=${targetId} `
+        + `removidas=${removable.join(',')}`,
+      );
+    }
+
     return {
       applied: true,
-      verified: null,
+      verified: finalVerification.verified,
+      migrated: finalVerification.verified === true && removable.length > 0,
       chatId,
       targetId,
       targetName: normalized.name,
       key: normalized.key,
+      removedIds: removable,
+      duplicateIdsRemoved: removable.filter((id) => duplicateIds.has(id)),
     };
   }
 
   return { applied: false, reason: 'chat_not_found', key: normalized.key };
+}
+
+async function removeGlobalList(client, id) {
+  return client.page.evaluate(async ({ listId: targetId }) => {
+    const WPP = window.WPP || null;
+    if (!WPP?.lists?.remove) throw new Error('WPP.lists.remove indisponível');
+    await WPP.lists.remove(String(targetId));
+    return true;
+  }, { listId: id });
+}
+
+async function trackedContactsAreMigrated(channel, definition, canonicalId, duplicateId) {
+  const contacts = LabelStore.listContacts()
+    .filter((record) => record.expected?.operational?.key === definition.key);
+
+  for (const record of contacts) {
+    const clientId = record.primaryChatId || record.aliases?.[0] || record.contactKey;
+    const inspected = await inspectContactLabels(channel.client, clientId);
+    if (!inspected.chatFound || inspected.available === false) return false;
+    const ids = new Set(inspected.items.map((item) => String(item.id)));
+    if (!ids.has(String(canonicalId)) || ids.has(String(duplicateId))) return false;
+  }
+
+  return true;
+}
+
+async function cleanupUnusedDuplicateLists(channel, catalogByKey, { keys = null } = {}) {
+  if (!env.cleanupDuplicateOperationalLabels || !channel?.client?.page?.evaluate) {
+    return { removed: [], skipped: [] };
+  }
+
+  const allowed = keys ? new Set(keys) : null;
+  const removed = [];
+  const skipped = [];
+
+  await wait(500);
+  for (const [key, entry] of Object.entries(catalogByKey || {})) {
+    if (allowed && !allowed.has(key)) continue;
+    const definition = entry?.definition;
+    const canonicalId = listId(entry);
+    if (!definition || !canonicalId) continue;
+
+    const current = await readBusinessLists(channel.client);
+    const duplicates = matchingLists(current, definition)
+      .filter((item) => listId(item) !== canonicalId);
+
+    for (const duplicate of duplicates) {
+      const duplicateId = listId(duplicate);
+      const count = listCount(duplicate);
+      if (count > 0) {
+        skipped.push({ key, id: duplicateId, reason: 'still_linked', count });
+        continue;
+      }
+
+      const trackedMigrated = await trackedContactsAreMigrated(
+        channel,
+        definition,
+        canonicalId,
+        duplicateId,
+      );
+      if (!trackedMigrated) {
+        skipped.push({ key, id: duplicateId, reason: 'tracked_contact_not_confirmed', count });
+        continue;
+      }
+
+      try {
+        await removeGlobalList(channel.client, duplicateId);
+        await wait(450);
+        const after = await readBusinessLists(channel.client);
+        if (after.some((item) => listId(item) === duplicateId)) {
+          skipped.push({ key, id: duplicateId, reason: 'remove_not_confirmed', count });
+          continue;
+        }
+        removed.push({ key, id: duplicateId, canonicalId });
+        console.log(
+          `[ETIQUETAS] duplicata global removida após migração: ${duplicateId} `
+          + `| canônica=${canonicalId} | ${definition.name}`,
+        );
+      } catch (err) {
+        skipped.push({ key, id: duplicateId, reason: err?.message || String(err), count });
+      }
+    }
+  }
+
+  return { removed, skipped };
 }
 
 async function markContactUnread(channel, clientId, { source = 'seller-attention', force = false } = {}) {
@@ -579,22 +815,37 @@ async function applyExpectedLabel(channel, clientId, definition, { source = 'flo
   if (!normalized) return false;
   LabelStore.registerContact({ clientId, source });
   LabelStore.setExpectedLabel(clientId, normalized, { source });
+
   const required = requiredLabelDefinitions();
   const definitions = required.some((item) => item.key === normalized.key)
     ? required
     : [...required, normalized];
   const ensured = await ensureRequiredCatalog(channel, { definitions });
   const result = await applyDefinitionWithCatalog(channel, clientId, normalized, ensured.catalog);
+
+  let duplicateCleanup = { removed: [], skipped: [] };
+  if (result?.verified === true) {
+    duplicateCleanup = await cleanupUnusedDuplicateLists(channel, ensured.catalog, {
+      keys: [normalized.key],
+    });
+  }
+
   LabelStore.markReconciled(clientId, {
     source,
     applied: Boolean(result?.applied),
     key: normalized.key,
     verified: result?.verified ?? null,
+    migratedDuplicateIds: result?.duplicateIdsRemoved || [],
+    duplicateListsRemoved: duplicateCleanup.removed,
     error: result?.applied ? null : result?.reason,
   });
+
   if (result?.applied) {
-    console.log(`[ETIQUETAS] aplicada: ${normalized.name} | ${result.chatId} | verificada=${String(result.verified)}`);
-    return result;
+    console.log(
+      `[ETIQUETAS] aplicada: ${normalized.name} | ${result.chatId} `
+      + `| ID=${result.targetId} | verificada=${String(result.verified)}`,
+    );
+    return { ...result, duplicateCleanup };
   }
   console.warn(`[ETIQUETAS] não foi possível aplicar "${normalized.name}": ${result?.reason || 'falha'}`);
   return false;
@@ -639,8 +890,13 @@ async function reconcileTrackedContacts(channel, { contactKeys = null } = {}) {
     const results = [];
     if (operational) {
       const result = await applyDefinitionWithCatalog(channel, clientId, operational, ensured.catalog);
-      results.push({ key: operational.key, applied: Boolean(result?.applied), verified: result?.verified ?? null });
-      if (!result?.applied) contactOk = false;
+      results.push({
+        key: operational.key,
+        applied: Boolean(result?.applied),
+        verified: result?.verified ?? null,
+        migratedDuplicateIds: result?.duplicateIdsRemoved || [],
+      });
+      if (!result?.applied || result?.verified === false) contactOk = false;
     } else {
       pending += 1;
     }
@@ -663,9 +919,13 @@ async function reconcileTrackedContacts(channel, { contactKeys = null } = {}) {
     if (env.labelReconcileDelayMs) await wait(env.labelReconcileDelayMs);
   }
 
+  const duplicateCleanup = await cleanupUnusedDuplicateLists(channel, ensured.catalog);
+
   return {
     catalogReady: ensured.ready,
     catalogMissing: ensured.missing,
+    catalogDuplicates: ensured.duplicates,
+    duplicateCleanup,
     total: contacts.length,
     reconciled,
     pending,
@@ -691,6 +951,7 @@ module.exports = {
   clearSellerResponsibility,
   clearSellerAttention,
   markContactUnread,
+  cleanupUnusedDuplicateLists,
   requiredLabelDefinitions,
   getServiceLabel,
   getSupportLabel,
@@ -699,13 +960,16 @@ module.exports = {
     canonicalSellerName,
     definitionByName,
     desiredHex,
+    expectedColorIndex,
     findByDefinition,
     listId,
     listName,
+    matchingLists,
     nearestPaletteIndex,
     normalizeDefinition,
     normalizeName,
     orderedCandidateIds,
+    resolveCanonicalList,
     resetRuntimeAttentionMarks() {
       sellerAttentionMarkedThisRuntime.clear();
     },
