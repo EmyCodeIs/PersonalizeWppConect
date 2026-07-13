@@ -61,6 +61,23 @@ function sanitizeProfileName(value) {
   return String(value || '').replace(/\s+/g, ' ').trim().slice(0, 120) || null;
 }
 
+function cleanText(value, maxLength = 160) {
+  const text = String(value || '').replace(/\s+/g, ' ').trim();
+  return text ? text.slice(0, maxLength) : null;
+}
+
+function cleanOptionalList(values = [], maxItems = 5, maxLength = 60) {
+  if (!Array.isArray(values)) return [];
+  const out = [];
+  for (const item of values) {
+    const text = cleanText(item, maxLength);
+    if (!text || out.includes(text)) continue;
+    out.push(text);
+    if (out.length >= maxItems) break;
+  }
+  return out;
+}
+
 function normalizeClientId(clientId) {
   return Identity.getSessionKey(clientId);
 }
@@ -264,13 +281,56 @@ function listCustomerProfiles() {
   ));
 }
 
-function appendLead(payload = {}) {
-  ensureDataDir();
-  const lead = {
+function buildCompactLead(payload = {}) {
+  const dados = payload?.dados && typeof payload.dados === 'object' ? payload.dados : {};
+  const demanda = dados?.demanda && typeof dados.demanda === 'object' ? dados.demanda : {};
+  const medias = Array.isArray(dados.arteMedias) ? dados.arteMedias : [];
+  const city = cleanText(dados.cidade, 120);
+  const service = cleanText(dados.flow || payload.service, 40);
+  const summary = {
+    origin: cleanText(dados.origem, 40),
+    customerName: cleanText(dados.nome, 120),
+    phone: cleanText(dados.telefone, 40),
+    city,
+    service,
+    demandDescription: cleanText(demanda.descricao, 240),
+    demandMeasure: cleanText(demanda.medida, 120),
+    demandLocation: cleanText(demanda.local, 120),
+    demandReference: cleanText(demanda.referencia, 160),
+    demandDeadline: cleanText(demanda.prazo, 120),
+    acrylicType: cleanText(dados.tipoAcrilico, 40),
+    pantoneDescription: cleanText(dados.pantoneDescricao, 160),
+    colorCount: Number.isFinite(Number(dados.corBasicaQtd)) ? Number(dados.corBasicaQtd) : null,
+    colors: cleanOptionalList(dados.coresSelecionadas, 5, 60),
+    measureMode: cleanText(dados.tamanhoModo, 40),
+    measureDescription: cleanText(dados.tamanhoDescricao, 160),
+    widthCm: Number.isFinite(Number(dados?.medida?.largura)) ? Number(dados.medida.largura) : null,
+    heightCm: Number.isFinite(Number(dados?.medida?.altura)) ? Number(dados.medida.altura) : null,
+    thickness: cleanText(dados.espessura, 60),
+    extraAcrylic: cleanText(dados.acrescimoAcrilico, 40),
+    deliveryMethod: cleanText(dados.envio, 40),
+    hasAddress: Boolean(cleanText(dados.endereco, 20)),
+    artMode: cleanText(dados.arteModo, 40),
+    artDescription: cleanText(dados.arteTexto, 240),
+    artMediaCount: medias.length || 0,
+    observation: cleanText(dados.observacaoPedido, 240),
+  };
+
+  return {
     id: `lead_${Date.now()}_${Math.random().toString(16).slice(2)}`,
     createdAt: nowIso(),
-    ...payload,
+    clientId: payload.clientId ? normalizeClientId(payload.clientId) : null,
+    reason: cleanText(payload.reason, 80),
+    stage: cleanText(payload.etapa, 60),
+    completedAt: cleanText(dados.completedAt || payload.completedAt, 80) || nowIso(),
+    customerProfile: payload.clientId ? getCustomerProfile(payload.clientId) : null,
+    summary,
   };
+}
+
+function appendLead(payload = {}) {
+  ensureDataDir();
+  const lead = buildCompactLead(payload);
   fs.appendFileSync(LEADS_PATH, JSON.stringify(lead) + '\n', 'utf8');
   return lead;
 }
@@ -329,4 +389,9 @@ module.exports = {
   rememberCustomerProfile,
   beginCustomerConversation,
   listCustomerProfiles,
+  _test: {
+    buildCompactLead,
+    cleanText,
+    cleanOptionalList,
+  },
 };
