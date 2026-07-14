@@ -200,6 +200,21 @@ function buildListPayload(menu) {
   };
 }
 
+function registerOutboundList(channel, clientId, menu) {
+  return channel?.outboundTracker?.register(clientId, {
+    type: 'list',
+    text: menu?.description || menu?.title || '',
+  }) || null;
+}
+
+function confirmOutboundList(channel, pending, result) {
+  channel?.outboundTracker?.confirm?.(pending, result);
+}
+
+function failOutboundList(channel, pending) {
+  channel?.outboundTracker?.fail?.(pending);
+}
+
 async function trySendWppList(channel, clientId, menu) {
   const client = channel?.client;
   if (!client) return false;
@@ -209,13 +224,27 @@ async function trySendWppList(channel, clientId, menu) {
   const attempts = [
     async () => {
       if (typeof client.sendListMessage !== 'function') return false;
-      await client.sendListMessage(chatId, payload);
-      return true;
+      const pending = registerOutboundList(channel, clientId, menu);
+      try {
+        const result = await client.sendListMessage(chatId, payload);
+        confirmOutboundList(channel, pending, result);
+        return true;
+      } catch (err) {
+        failOutboundList(channel, pending);
+        throw err;
+      }
     },
     async () => {
       if (typeof client.sendList !== 'function') return false;
-      await client.sendList(chatId, menu.description, menu.buttonText || 'Escolher', payload.sections, 'Selecione uma opção');
-      return true;
+      const pending = registerOutboundList(channel, clientId, menu);
+      try {
+        const result = await client.sendList(chatId, menu.description, menu.buttonText || 'Escolher', payload.sections, 'Selecione uma opção');
+        confirmOutboundList(channel, pending, result);
+        return true;
+      } catch (err) {
+        failOutboundList(channel, pending);
+        throw err;
+      }
     },
   ];
 
