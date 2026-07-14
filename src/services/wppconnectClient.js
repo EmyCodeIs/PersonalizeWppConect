@@ -3,6 +3,7 @@
 const path = require('path');
 const { env } = require('../config/env');
 const { applyNamedLabel } = require('../core/serviceLabels');
+const { OutboundTracker } = require('../core/outboundTracker');
 
 function wait(ms) {
   return new Promise((resolve) => setTimeout(resolve, Math.max(0, Number(ms || 0))));
@@ -59,6 +60,18 @@ function getMessageFrom(message, fallbackChatId = '') {
   return String(message?.from || message?.chatId || message?.sender?.id || fallbackChatId || '').trim();
 }
 
+function getOutgoingChatId(message, fallbackChatId = '') {
+  return normalizeChatId(
+    message?.to
+    || message?.chatId
+    || message?.id?.remote
+    || message?.key?.remoteJid
+    || message?.from
+    || fallbackChatId
+    || ''
+  );
+}
+
 function normalizeUnreadMessage(message, fallbackChatId = '') {
   const from = getMessageFrom(message, fallbackChatId);
   const text = getMessageText(message) || getMediaMarker(message);
@@ -67,7 +80,20 @@ function normalizeUnreadMessage(message, fallbackChatId = '') {
   return { from, text, raw: message };
 }
 
+function registerOutbound(channel, clientId, payload = {}) {
+  return channel?.outboundTracker?.register?.(clientId, payload) || null;
+}
+
+function confirmOutbound(channel, pending, result) {
+  channel?.outboundTracker?.confirm?.(pending, result);
+}
+
+function failOutbound(channel, pending) {
+  channel?.outboundTracker?.fail?.(pending);
+}
+
 function createMockChannel() {
+  const tracker = new OutboundTracker();
   const client = {
     async sendText(chatId, text) {
       console.log(`\n[BOT -> ${chatId}] ${text}\n`);
@@ -91,6 +117,7 @@ function createMockChannel() {
 
   return {
     client,
+    outboundTracker: tracker,
     async sendText(clientId, text) { return client.sendText(normalizeChatId(clientId), text); },
     async sendImage(clientId, filePath, caption = '') {
       const fullPath = path.resolve(process.cwd(), filePath);
@@ -185,7 +212,7 @@ async function collectUnreadMessages(client) {
   });
 }
 
-async function createWppChannel({ onMessage, onQr } = {}) {
+async function createWppChannel({ onMessage, onOutgoingMessage, onQr } = {}) {
   const wppconnect = require('@wppconnect-team/wppconnect');
   console.log(`[WPPConnect] Chrome visível: ${env.wppHeadless ? 'não (headless)' : 'sim'}`);
 
@@ -203,28 +230,60 @@ async function createWppChannel({ onMessage, onQr } = {}) {
     folderNameToken: 'tokens',
   });
 
+  const tracker = new OutboundTracker();
   const channel = {
     client,
+    outboundTracker: tracker,
     async sendText(clientId, text, options = {}) {
       const chatId = normalizeChatId(clientId);
       if (!options.noDelay) await wait(randomDelay());
-      return client.sendText(chatId, String(text || ''));
+      const pending = registerOutbound(channel, chatId, { type: 'text', text });
+      try {
+        const result = await client.sendText(chatId, String(text || ''));
+        confirmOutbound(channel, pending, result);
+        return result;
+      } catch (err) {
+        failOutbound(channel, pending);
+        throw err;
+      }
     },
     async sendImage(clientId, filePath, caption = '', options = {}) {
       const chatId = normalizeChatId(clientId);
       const fullPath = path.resolve(process.cwd(), filePath);
       if (!options.noDelay) await wait(randomDelay());
       if (typeof client.sendImage !== 'function') return false;
-      await client.sendImage(chatId, fullPath, path.basename(fullPath), String(caption || ''));
-      return true;
+      const pending = registerOutbound(channel, chatId, {
+        type: 'image',
+        text: caption,
+        filename: path.basename(fullPath),
+      });
+      try {
+        const result = await client.sendImage(chatId, fullPath, path.basename(fullPath), String(caption || ''));
+        confirmOutbound(channel, pending, result);
+        return result;
+      } catch (err) {
+        failOutbound(channel, pending);
+        throw err;
+      }
     },
     async sendDocument(clientId, filePath, fileName, caption = '', options = {}) {
       const chatId = normalizeChatId(clientId);
       const fullPath = path.resolve(process.cwd(), filePath);
       if (!options.noDelay) await wait(randomDelay());
       if (typeof client.sendFile !== 'function') return false;
-      await client.sendFile(chatId, fullPath, fileName || path.basename(fullPath), String(caption || ''));
-      return true;
+      const pending = registerOutbound(channel, chatId, {
+        type: 'document',
+        text: caption,
+        filename: fileName || path.basename(fullPath),
+      });
+      try {
+        const result = await client.sendFile(chatId, fullPath, fileName || path.basename(fullPath), String(caption || ''));
+        confirmOutbound(channel, pending, result);
+        return result;
+      } catch (err) {
+        failOutbound(channel, pending);
+        throw err;
+      }
     },
     async setContactNote(clientId, note) {
       const chatId = normalizeChatId(clientId);
@@ -263,7 +322,16 @@ async function createWppChannel({ onMessage, onQr } = {}) {
 
   client.onStateChange((state) => console.log('[WPPConnect] estado:', state));
   client.onMessage(async (message) => {
-    if (message?.fromMe || message?.isGroupMsg) return;
+    if (message?.isGroupMsg) return;
+
+    if (message?.fromMe) {
+      const to = getOutgoingChatId(message);
+      const text = getMessageText(message) || getMediaMarker(message);
+      if (!to) return;
+      await onOutgoingMessage?.({ from: to, text, raw: message, channel });
+      return;
+    }
+
     const from = String(message?.from || message?.chatId || '').trim();
     const text = getMessageText(message) || getMediaMarker(message);
     if (!from || !text) return;
