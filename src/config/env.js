@@ -42,6 +42,7 @@ const serviceLabelPlotagem = process.env.SERVICE_LABEL_PLOTAGEM || 'Plotagens';
 const serviceLabelOutros = process.env.SERVICE_LABEL_OUTROS || 'Outros';
 const serviceLabelLetreiroColor = process.env.SERVICE_LABEL_LETREIRO_COLOR || 'purple';
 const flowSessionTtlHours = Math.max(1, num('FLOW_SESSION_TTL_HOURS', 24));
+const legacyMaxConcurrentChats = Math.max(1, num('MAX_CONCURRENT_CHATS', 2));
 
 const env = {
   sessionName: process.env.WPP_SESSION_NAME || 'personalize-wppconnect',
@@ -55,8 +56,9 @@ const env = {
   flowSessionTtlHours,
   completedSessionTtlHours: Math.max(1, num('COMPLETED_SESSION_TTL_HOURS', flowSessionTtlHours)),
 
-  // Controle global de concorrência para evitar excesso de processamento simultâneo.
-  maxConcurrentChats: Math.max(1, num('MAX_CONCURRENT_CHATS', 2)),
+  // Fila global por consumo. MAX_CONCURRENT_CHATS continua apenas como fallback legado.
+  maxConcurrentChats: legacyMaxConcurrentChats,
+  queueMaxUnits: Math.max(1, num('QUEUE_MAX_UNITS', Math.max(2, legacyMaxConcurrentChats * 2))),
   maxQueueSize: Math.max(1, num('MAX_QUEUE_SIZE', 40)),
   chatProcessTimeoutMs: Math.max(5000, num('CHAT_PROCESS_TIMEOUT_MS', 45000)),
 
