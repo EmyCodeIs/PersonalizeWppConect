@@ -15,6 +15,7 @@ const {
   initializeServiceLabels,
   replaceServiceLabel,
 } = require('./core/serviceLabels');
+const { getAutomationBlock } = require('./core/sellerHandoff');
 const Store = require('./services/leadStore');
 const Identity = require('./services/contactIdentity');
 const { env } = require('./config/env');
@@ -256,6 +257,7 @@ async function main() {
   console.log(`[PersonalizeWppConect] buffers de coleta: medida=${env.measureBufferMs}ms arte=${env.artBufferMs}ms endereço=${env.addressBufferMs}ms Pantone=${env.pantoneBufferMs}ms observação=${env.observationBufferMs}ms cidade=${env.cityBufferMs}ms`);
   console.log(`[PersonalizeWppConect] buffer listas/botões: ${env.interactiveBufferMs}ms`);
   console.log(`[PersonalizeWppConect] fila global: concorrência=${env.maxConcurrentChats} espera=${env.maxQueueSize} timeout=${env.chatProcessTimeoutMs}ms`);
+  console.log('[PersonalizeWppConect] handoff: etiqueta de vendedor bloqueia o bot e pausa o fluxo automaticamente');
   console.log('[PersonalizeWppConect] respostas comuns: digitação única + balões sem pausa artificial');
   console.log('[PersonalizeWppConect] boas-vindas: saudação + imagem com link na legenda + lista, sem digitação e sem delay artificial');
   console.log('[PersonalizeWppConect] listas: cria uma única vez com WPP.lists, reutiliza pelo nome, recupera sessões ativas e nunca remove listas manuais');
@@ -277,6 +279,13 @@ async function main() {
   const buffer = new BufferManager({
     delayMs: env.bufferMs,
     onFlush: async (clientId, bufferedMessages) => {
+      const guardBeforeQueue = await getAutomationBlock(channel, clientId);
+      if (guardBeforeQueue.blocked) {
+        console.log(`[HANDOFF] bloqueado antes da fila: ${clientId} | motivo=${guardBeforeQueue.reason} | vendedor=${guardBeforeQueue.seller || '-'} | etiqueta=${guardBeforeQueue.labelName || '-'}`);
+        buffer.clear(clientId);
+        return;
+      }
+
       const text = mergeMessages(bufferedMessages);
       if (!text) return;
       const preparedText = prepareBufferedInput(clientId, text, bufferedMessages);
@@ -287,6 +296,12 @@ async function main() {
 
       try {
         await taskQueue.enqueue(clientId, async () => {
+          const guardBeforeRun = await getAutomationBlock(channel, clientId);
+          if (guardBeforeRun.blocked) {
+            console.log(`[HANDOFF] bloqueado antes do processamento: ${clientId} | motivo=${guardBeforeRun.reason} | vendedor=${guardBeforeRun.seller || '-'} | etiqueta=${guardBeforeRun.labelName || '-'}`);
+            return;
+          }
+
           const waitMs = Date.now() - queuedAt;
           console.log(`[QUEUE] iniciado chat=${clientId} espera=${waitMs}ms ${formatQueueStats(taskQueue.stats())}`);
 
@@ -331,6 +346,13 @@ async function main() {
     const allowed = isAllowedClient({ from: canonicalChatId, raw });
     if (!allowed.allowed) {
       console.log(`[PersonalizeWppConect] ignorado (${source}) fora da whitelist: ${canonicalChatId}`);
+      return;
+    }
+
+    const guardBeforeBuffer = await getAutomationBlock(channel, canonicalChatId);
+    if (guardBeforeBuffer.blocked) {
+      console.log(`[HANDOFF] mensagem ignorada (${source}) em ${canonicalChatId} | motivo=${guardBeforeBuffer.reason} | vendedor=${guardBeforeBuffer.seller || '-'} | etiqueta=${guardBeforeBuffer.labelName || '-'}`);
+      buffer.clear(canonicalChatId);
       return;
     }
 
