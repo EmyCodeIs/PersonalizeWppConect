@@ -172,7 +172,61 @@ function serviceRepairKey(session, flow, fallbackClientId = '') {
 }
 
 function formatQueueStats(stats = {}) {
-  return `running=${Number(stats.running || 0)}/${Number(stats.limit || 0)} queued=${Number(stats.queued || 0)}`;
+  return `chats=${Number(stats.running || 0)} units=${Number(stats.runningUnits || 0)}/${Number(stats.limit || 0)} queued=${Number(stats.queued || 0)}`;
+}
+
+function firstCommandLine(value = '') {
+  return String(value || '').split(/\r?\n/)[0].trim();
+}
+
+function isImmediateSystemCommand(text = '') {
+  if (!env.enableTestCommands) return false;
+  const command = firstCommandLine(text);
+  return /^\/resetarsys$/i.test(command) || /^\/(reset|reiniciar)$/i.test(command);
+}
+
+async function handleImmediateSystemCommand(channel, clientId, text) {
+  const command = firstCommandLine(text);
+
+  if (/^\/resetarsys$/i.test(command)) {
+    const result = Store.resetSystem();
+    await channel.sendText(
+      clientId,
+      `Sistema resetado para teste.\n\nSessões apagadas: ${result.previousSessionCount}\nPerfis apagados: ${result.previousProfileCount}\nLeads apagados: ${result.previousLeadCount}\n\nMe envie uma nova mensagem para começar como primeiro contato.`,
+      { noTyping: true }
+    );
+    return Store.resetSession(clientId);
+  }
+
+  if (/^\/(reset|reiniciar)$/i.test(command)) {
+    const fresh = Store.resetSession(clientId);
+    await channel.sendText(clientId, 'Atendimento reiniciado para teste. Envie uma nova mensagem para começar.', { noTyping: true });
+    return fresh;
+  }
+
+  return null;
+}
+
+function hasBufferedMedia(messages = []) {
+  return messages.some((item) => {
+    const raw = item?.raw || item || {};
+    const type = String(raw?.type || raw?.mimetype || raw?.mediaType || '').toLowerCase();
+    const filename = raw?.filename || raw?.fileName || raw?.document?.filename || '';
+    return /image|document|pdf|application|video/.test(type) || Boolean(filename);
+  });
+}
+
+function estimateQueueUnits(clientId, preparedText, bufferedMessages = []) {
+  const stage = String(Store.getSession(clientId)?.etapa || '').trim();
+  let units = 1;
+
+  if (stage === 'inicio') units = Math.max(units, 2);
+  if (hasBufferedMedia(bufferedMessages)) units = Math.max(units, 2);
+  if (['arte_coleta', 'pantone', 'endereco', 'observacao_pedido_coleta'].includes(stage)) units = Math.max(units, 2);
+  if (MULTI_MESSAGE_STAGES.has(stage)) units = Math.max(units, 2);
+  if (String(preparedText || '').length > 600) units = Math.max(units, 2);
+
+  return Math.min(env.queueMaxUnits, units);
 }
 
 async function repairSessionServiceLabel(channel, clientId, repairedKeys, source = 'runtime') {
@@ -255,7 +309,8 @@ async function main() {
   console.log(`[PersonalizeWppConect] buffer comum: ${env.bufferMs}ms`);
   console.log(`[PersonalizeWppConect] buffers de coleta: medida=${env.measureBufferMs}ms arte=${env.artBufferMs}ms endereço=${env.addressBufferMs}ms Pantone=${env.pantoneBufferMs}ms observação=${env.observationBufferMs}ms cidade=${env.cityBufferMs}ms`);
   console.log(`[PersonalizeWppConect] buffer listas/botões: ${env.interactiveBufferMs}ms`);
-  console.log(`[PersonalizeWppConect] fila global: concorrência=${env.maxConcurrentChats} espera=${env.maxQueueSize} timeout=${env.chatProcessTimeoutMs}ms`);
+  console.log(`[PersonalizeWppConect] fila global por consumo: unidades=${env.queueMaxUnits} espera=${env.maxQueueSize} timeout=${env.chatProcessTimeoutMs}ms`);
+  console.log('[PersonalizeWppConect] comandos administrativos: /reset, /reiniciar e /resetarsys furam buffer e fila');
   console.log('[PersonalizeWppConect] handoff: etiqueta de vendedor e mensagem manual bloqueiam o bot automaticamente');
   console.log('[PersonalizeWppConect] respostas comuns: digitação única + balões sem pausa artificial');
   console.log('[PersonalizeWppConect] boas-vindas: saudação + imagem com link na legenda + lista, sem digitação e sem delay artificial');
@@ -270,7 +325,7 @@ async function main() {
   const processedMessageIds = new Set();
   const repairedServiceLabels = new Set();
   const taskQueue = new ChatTaskQueue({
-    maxConcurrent: env.maxConcurrentChats,
+    maxUnits: env.queueMaxUnits,
     maxQueueSize: env.maxQueueSize,
     taskTimeoutMs: env.chatProcessTimeoutMs,
   });
@@ -288,10 +343,11 @@ async function main() {
       const text = mergeMessages(bufferedMessages);
       if (!text) return;
       const preparedText = prepareBufferedInput(clientId, text, bufferedMessages);
+      const units = estimateQueueUnits(clientId, preparedText, bufferedMessages);
       console.log(`\n[CLIENTE ${clientId}] ${preparedText}\n`);
 
       const queuedAt = Date.now();
-      console.log(`[QUEUE] agendado chat=${clientId} ${formatQueueStats(taskQueue.stats())}`);
+      console.log(`[QUEUE] agendado chat=${clientId} units=${units} ${formatQueueStats(taskQueue.stats())}`);
 
       try {
         await taskQueue.enqueue(clientId, async () => {
@@ -302,7 +358,7 @@ async function main() {
           }
 
           const waitMs = Date.now() - queuedAt;
-          console.log(`[QUEUE] iniciado chat=${clientId} espera=${waitMs}ms ${formatQueueStats(taskQueue.stats())}`);
+          console.log(`[QUEUE] iniciado chat=${clientId} units=${units} espera=${waitMs}ms ${formatQueueStats(taskQueue.stats())}`);
 
           const stageBeforeResponse = String(Store.getSession(clientId)?.etapa || '').trim();
           const isWelcomeBlock = stageBeforeResponse === 'inicio';
@@ -322,9 +378,9 @@ async function main() {
           }
 
           await action();
-        });
+        }, { units });
 
-        console.log(`[QUEUE] concluído chat=${clientId} ${formatQueueStats(taskQueue.stats())}`);
+        console.log(`[QUEUE] concluído chat=${clientId} units=${units} ${formatQueueStats(taskQueue.stats())}`);
       } catch (err) {
         const reason = err?.code || 'QUEUE_ERROR';
         console.warn(`[QUEUE] falha no chat ${clientId}: ${reason} - ${err?.message || err}`);
@@ -374,6 +430,20 @@ async function main() {
       return;
     }
 
+    const key = messageKey(raw || { from: canonicalChatId, text: effectiveText });
+    if (processedMessageIds.has(key)) return;
+    processedMessageIds.add(key);
+    if (processedMessageIds.size > 5000) {
+      const first = processedMessageIds.values().next().value;
+      processedMessageIds.delete(first);
+    }
+
+    if (isImmediateSystemCommand(effectiveText)) {
+      console.log(`[COMANDO] executando imediatamente em ${canonicalChatId}: ${firstCommandLine(effectiveText)}`);
+      await handleImmediateSystemCommand(channel, canonicalChatId, effectiveText);
+      return;
+    }
+
     const guardBeforeBuffer = await getAutomationBlock(channel, canonicalChatId);
     if (guardBeforeBuffer.blocked) {
       console.log(`[HANDOFF] mensagem ignorada (${source}) em ${canonicalChatId} | motivo=${guardBeforeBuffer.reason} | vendedor=${guardBeforeBuffer.seller || '-'} | etiqueta=${guardBeforeBuffer.labelName || '-'}`);
@@ -382,14 +452,6 @@ async function main() {
     }
 
     await repairSessionServiceLabel(channel, canonicalChatId, repairedServiceLabels, 'primeira mensagem');
-
-    const key = messageKey(raw || { from: canonicalChatId, text: effectiveText });
-    if (processedMessageIds.has(key)) return;
-    processedMessageIds.add(key);
-    if (processedMessageIds.size > 5000) {
-      const first = processedMessageIds.values().next().value;
-      processedMessageIds.delete(first);
-    }
 
     const delayMs = resolveBufferDelay(canonicalChatId, raw, interactiveId);
     console.log(`[PersonalizeWppConect] mensagem enfileirada (${source}) de ${canonicalChatId}; espera=${delayMs}ms${interactiveId ? `; ação=${interactiveId}` : ''}`);
