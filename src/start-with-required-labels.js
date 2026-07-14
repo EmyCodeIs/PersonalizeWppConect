@@ -8,4 +8,5 @@ serviceLabels.initializeServiceLabels = ensureRequiredLabelsOnce;
 installIdempotentServiceLabels();
 
 require('./core/handoffPreload');
+require('./core/resetCleanupPreload');
 require('./bootstrap');
