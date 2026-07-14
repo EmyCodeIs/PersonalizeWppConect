@@ -49,71 +49,113 @@ async function clearLabels(channel, candidates) {
     const WPP = window.WPP || null;
     const Store = window.Store || null;
     const labelStore = Store?.Label || Store?.Labels || null;
+    const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
     const getId = (item) => String(item?.id?._serialized || item?.id || item?.labelId || item || '').trim();
 
     if (typeof labelStore?.getLabelsForModel !== 'function') {
       return { requested: 0, removed: 0, remaining: 0, chatIds: [], error: 'LABEL_STORE_UNAVAILABLE' };
     }
 
-    const foundChats = [];
-    const labelsByChat = [];
-
-    for (const chatId of candidates) {
+    const resolveChat = async (chatId) => {
       let chat = null;
       try {
         chat = Store?.Chat?.get?.(chatId) || null;
         if (!chat && typeof Store?.Chat?.find === 'function') chat = await Store.Chat.find(chatId);
       } catch (_) {}
-      if (!chat) continue;
+      return chat;
+    };
 
+    const readAttachedIds = async (chatId) => {
+      const chat = await resolveChat(chatId);
+      if (!chat) return { chatFound: false, ids: [] };
       const raw = labelStore.getLabelsForModel(chat) || [];
       const attached = Array.isArray(raw) ? raw : Object.values(raw || {});
-      const ids = [...new Set(attached.map(getId).filter(Boolean))];
-      foundChats.push({ chatId, chat });
-      labelsByChat.push({ chatId, ids });
+      return {
+        chatFound: true,
+        ids: [...new Set(attached.map(getId).filter(Boolean))],
+      };
+    };
+
+    const labelsByChat = [];
+    for (const chatId of candidates) {
+      const before = await readAttachedIds(chatId);
+      if (!before.chatFound) continue;
+      labelsByChat.push({ chatId, ids: before.ids });
     }
 
     const requested = labelsByChat.reduce((sum, item) => sum + item.ids.length, 0);
     if (!requested) {
-      return { requested: 0, removed: 0, remaining: 0, chatIds: foundChats.map((item) => item.chatId) };
-    }
-
-    if (typeof WPP?.labels?.addOrRemoveLabels === 'function') {
-      for (const item of labelsByChat) {
-        if (!item.ids.length) continue;
-        await WPP.labels.addOrRemoveLabels(
-          [item.chatId],
-          item.ids.map((id) => ({ labelId: id, type: 'remove' })),
-        );
-      }
-    } else if (typeof WPP?.lists?.removeChats === 'function') {
-      for (const item of labelsByChat) {
-        for (const id of item.ids) await WPP.lists.removeChats(id, [item.chatId]);
-      }
-    } else {
       return {
-        requested,
+        requested: 0,
         removed: 0,
-        remaining: requested,
-        chatIds: foundChats.map((item) => item.chatId),
-        error: 'REMOVE_LABEL_API_UNAVAILABLE',
+        remaining: 0,
+        chatIds: labelsByChat.map((item) => item.chatId),
+        mode: 'already-clean',
       };
     }
 
-    await new Promise((resolve) => setTimeout(resolve, 900));
+    const errors = [];
+    const modes = [];
 
-    let remaining = 0;
-    for (const item of foundChats) {
-      const raw = labelStore.getLabelsForModel(item.chat) || [];
-      const attached = Array.isArray(raw) ? raw : Object.values(raw || {});
-      remaining += [...new Set(attached.map(getId).filter(Boolean))].length;
+    for (const item of labelsByChat) {
+      if (!item.ids.length) continue;
+
+      let submitted = false;
+      if (typeof WPP?.labels?.addOrRemoveLabels === 'function') {
+        try {
+          // A API recebe um chatId em string, não um array de chatIds.
+          await WPP.labels.addOrRemoveLabels(
+            item.chatId,
+            item.ids.map((id) => ({ labelId: String(id), type: 'remove' })),
+          );
+          submitted = true;
+          modes.push('labels.addOrRemoveLabels');
+        } catch (error) {
+          errors.push(`addOrRemoveLabels:${item.chatId}:${error?.message || error}`);
+        }
+      }
+
+      await wait(500);
+      let after = await readAttachedIds(item.chatId);
+      let remainingIds = after.ids.filter((id) => item.ids.includes(id));
+
+      // Fallback real: remove cada vínculo pela API de listas quando a primeira
+      // chamada não existir, falhar ou não for confirmada pelo Store do WhatsApp.
+      if (remainingIds.length && typeof WPP?.lists?.removeChats === 'function') {
+        try {
+          for (const id of remainingIds) {
+            await WPP.lists.removeChats(String(id), [item.chatId]);
+          }
+          submitted = true;
+          modes.push('lists.removeChats');
+        } catch (error) {
+          errors.push(`removeChats:${item.chatId}:${error?.message || error}`);
+        }
+      }
+
+      if (!submitted) {
+        errors.push(`REMOVE_LABEL_API_UNAVAILABLE:${item.chatId}`);
+      }
+    }
+
+    let remaining = requested;
+    for (let attempt = 1; attempt <= 8; attempt += 1) {
+      if (attempt > 1) await wait(350);
+      remaining = 0;
+      for (const item of labelsByChat) {
+        const after = await readAttachedIds(item.chatId);
+        remaining += after.ids.filter((id) => item.ids.includes(id)).length;
+      }
+      if (remaining === 0) break;
     }
 
     return {
       requested,
       removed: Math.max(0, requested - remaining),
       remaining,
-      chatIds: foundChats.map((item) => item.chatId),
+      chatIds: labelsByChat.map((item) => item.chatId),
+      mode: [...new Set(modes)].join('+') || null,
+      error: remaining > 0 ? (errors.join(' | ') || 'LABEL_REMOVAL_NOT_CONFIRMED') : null,
     };
   }, { candidates });
 }
@@ -143,8 +185,9 @@ async function clearContactForSystemReset(channel, clientId) {
     `[RESETARSYS] contato limpo | cliente=${clientId} | ids=${candidates.join(',') || '-'} `
     + `| nota=${note.cleared ? `apagada:${note.chatId}` : 'não_confirmada'} `
     + `| etiquetas=${Number(labels.removed || 0)}/${Number(labels.requested || 0)} `
-    + `| restantes=${Number(labels.remaining || 0)} | bloqueioHumano=limpo `
-    + `| resultado=${ok ? 'OK' : 'PARCIAL'}${labels.error ? ` | erro=${labels.error}` : ''}`,
+    + `| restantes=${Number(labels.remaining || 0)} | modo=${labels.mode || '-'} `
+    + `| bloqueioHumano=limpo | resultado=${ok ? 'OK' : 'PARCIAL'}`
+    + `${labels.error ? ` | erro=${labels.error}` : ''}`,
   );
 
   return { ok, candidates, note, labels };
