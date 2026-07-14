@@ -1,6 +1,9 @@
 'use strict';
 
 const WppClient = require('../services/wppconnectClient');
+const SellerHandoff = require('./sellerHandoff');
+const HumanControl = require('../services/humanControlStore');
+const { env } = require('../config/env');
 
 function normalizeChatId(value) {
   const raw = String(value || '').trim();
@@ -88,6 +91,55 @@ function createDeduplicatedOutgoingHandler(handler) {
   };
 }
 
+const originalGetAutomationBlock = SellerHandoff.getAutomationBlock;
+
+SellerHandoff.getAutomationBlock = async function getAutomationBlockExactSeller(channel, clientId) {
+  if (!env.sellerLabelBlockingEnabled) {
+    return { blocked: false, reason: null };
+  }
+
+  const assignment = await SellerHandoff.detectSellerLabelAssignment(channel, clientId);
+  if (assignment?.assigned && assignment.matchMode === 'name') {
+    HumanControl.setBlock(clientId, {
+      reason: 'seller_label',
+      source: 'seller_label',
+      seller: assignment.seller,
+      labelName: assignment.labelName,
+      blockedHours: env.humanBlockHours,
+    });
+
+    return {
+      blocked: true,
+      reason: 'seller_label',
+      seller: assignment.seller,
+      labelName: assignment.labelName,
+      source: assignment.source,
+      details: assignment,
+    };
+  }
+
+  if (assignment?.assigned && assignment.matchMode !== 'name') {
+    console.warn(
+      `[HANDOFF] etiqueta ignorada por corresponder apenas à cor | chat=${clientId} `
+      + `| etiqueta=${assignment.labelName || '-'} | vendedor=${assignment.seller || '-'}`,
+    );
+  }
+
+  const humanControl = HumanControl.getBlock(clientId);
+  if (humanControl?.blocked) {
+    return {
+      blocked: true,
+      reason: humanControl.control?.reason || 'human_block',
+      seller: humanControl.control?.seller || null,
+      labelName: humanControl.control?.labelName || null,
+      source: humanControl.control?.source || 'human_control',
+      details: humanControl.control,
+    };
+  }
+
+  return { blocked: false, reason: null };
+};
+
 const originalCreateWppChannel = WppClient.createWppChannel;
 
 WppClient.createWppChannel = async function createWppChannelWithReliableOutgoing(options = {}) {
@@ -128,5 +180,6 @@ module.exports = {
     normalizeChatId,
     outgoingChatId,
     outgoingText,
+    originalGetAutomationBlock,
   },
 };
