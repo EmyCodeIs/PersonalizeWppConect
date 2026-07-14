@@ -27,12 +27,46 @@ function readState() {
 
 const state = readState();
 
+function sleepSync(ms) {
+  if (!Number.isFinite(ms) || ms <= 0) return;
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, Math.max(1, Math.floor(ms)));
+}
+
 function saveState() {
   ensureDataDir();
   state.updatedAt = new Date().toISOString();
-  const temp = `${IDENTITIES_PATH}.tmp`;
-  fs.writeFileSync(temp, JSON.stringify(state, null, 2), 'utf8');
-  fs.renameSync(temp, IDENTITIES_PATH);
+  const serialized = JSON.stringify(state, null, 2);
+  const temp = `${IDENTITIES_PATH}.${process.pid}.tmp`;
+  fs.writeFileSync(temp, serialized, 'utf8');
+
+  let renamed = false;
+  let lastError = null;
+  for (let attempt = 1; attempt <= 5; attempt += 1) {
+    try {
+      fs.renameSync(temp, IDENTITIES_PATH);
+      renamed = true;
+      break;
+    } catch (err) {
+      lastError = err;
+      if (!['EPERM', 'EBUSY', 'EACCES'].includes(err?.code)) break;
+      sleepSync(40 * attempt);
+    }
+  }
+
+  if (!renamed) {
+    try {
+      fs.writeFileSync(IDENTITIES_PATH, serialized, 'utf8');
+      renamed = true;
+    } catch (err) {
+      lastError = err;
+    }
+  }
+
+  try {
+    if (fs.existsSync(temp)) fs.unlinkSync(temp);
+  } catch (_) {}
+
+  if (!renamed && lastError) throw lastError;
 }
 
 function normalizeChatId(value) {
@@ -126,8 +160,6 @@ function registerContact({ chatId, raw, phone } = {}) {
   state.contacts[contactKey] = existing;
   for (const alias of mergedAliases) state.aliases[alias] = contactKey;
 
-  // Compatibilidade temporária: o mapa manual apenas enriquece a identidade;
-  // nunca é necessário para conversar ou manter a sessão.
   const lidMap = env.lidNumberMap || {};
   if (existing.lid && lidMap[existing.lid]) {
     const mappedPhone = normalizePhone(lidMap[existing.lid]);
