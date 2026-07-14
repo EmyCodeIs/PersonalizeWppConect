@@ -1,6 +1,7 @@
 'use strict';
 
 const { BufferManager, mergeMessages } = require('./core/bufferManager');
+const { ChatTaskQueue } = require('./core/chatTaskQueue');
 const { processCustomerMessage } = require('./flow/customerFlow');
 const {
   createWppChannel,
@@ -170,6 +171,10 @@ function serviceRepairKey(session, flow, fallbackClientId = '') {
   return `${Store.normalizeClientId(contactId)}:${flow}`;
 }
 
+function formatQueueStats(stats = {}) {
+  return `running=${Number(stats.running || 0)}/${Number(stats.limit || 0)} queued=${Number(stats.queued || 0)}`;
+}
+
 async function repairSessionServiceLabel(channel, clientId, repairedKeys, source = 'runtime') {
   if (!channel?.client) return false;
 
@@ -250,6 +255,7 @@ async function main() {
   console.log(`[PersonalizeWppConect] buffer comum: ${env.bufferMs}ms`);
   console.log(`[PersonalizeWppConect] buffers de coleta: medida=${env.measureBufferMs}ms arte=${env.artBufferMs}ms endereço=${env.addressBufferMs}ms Pantone=${env.pantoneBufferMs}ms observação=${env.observationBufferMs}ms cidade=${env.cityBufferMs}ms`);
   console.log(`[PersonalizeWppConect] buffer listas/botões: ${env.interactiveBufferMs}ms`);
+  console.log(`[PersonalizeWppConect] fila global: concorrência=${env.maxConcurrentChats} espera=${env.maxQueueSize} timeout=${env.chatProcessTimeoutMs}ms`);
   console.log('[PersonalizeWppConect] respostas comuns: digitação única + balões sem pausa artificial');
   console.log('[PersonalizeWppConect] boas-vindas: saudação + imagem com link na legenda + lista, sem digitação e sem delay artificial');
   console.log('[PersonalizeWppConect] listas: cria uma única vez com WPP.lists, reutiliza pelo nome, recupera sessões ativas e nunca remove listas manuais');
@@ -262,6 +268,11 @@ async function main() {
   let channel = null;
   const processedMessageIds = new Set();
   const repairedServiceLabels = new Set();
+  const taskQueue = new ChatTaskQueue({
+    maxConcurrent: env.maxConcurrentChats,
+    maxQueueSize: env.maxQueueSize,
+    taskTimeoutMs: env.chatProcessTimeoutMs,
+  });
 
   const buffer = new BufferManager({
     delayMs: env.bufferMs,
@@ -271,22 +282,39 @@ async function main() {
       const preparedText = prepareBufferedInput(clientId, text, bufferedMessages);
       console.log(`\n[CLIENTE ${clientId}] ${preparedText}\n`);
 
-      const stageBeforeResponse = String(Store.getSession(clientId)?.etapa || '').trim();
-      const isWelcomeBlock = stageBeforeResponse === 'inicio';
+      const queuedAt = Date.now();
+      console.log(`[QUEUE] agendado chat=${clientId} ${formatQueueStats(taskQueue.stats())}`);
 
-      const action = () => processCustomerMessage({
-        clientId,
-        text: preparedText,
-        channel,
-        messages: bufferedMessages,
-      });
+      try {
+        await taskQueue.enqueue(clientId, async () => {
+          const waitMs = Date.now() - queuedAt;
+          console.log(`[QUEUE] iniciado chat=${clientId} espera=${waitMs}ms ${formatQueueStats(taskQueue.stats())}`);
 
-      if (typeof channel?.runResponseGroup === 'function') {
-        await channel.runResponseGroup(clientId, preparedText, action, {
-          noTyping: isWelcomeBlock,
+          const stageBeforeResponse = String(Store.getSession(clientId)?.etapa || '').trim();
+          const isWelcomeBlock = stageBeforeResponse === 'inicio';
+
+          const action = () => processCustomerMessage({
+            clientId,
+            text: preparedText,
+            channel,
+            messages: bufferedMessages,
+          });
+
+          if (typeof channel?.runResponseGroup === 'function') {
+            await channel.runResponseGroup(clientId, preparedText, action, {
+              noTyping: isWelcomeBlock,
+            });
+            return;
+          }
+
+          await action();
         });
-      } else {
-        await action();
+
+        console.log(`[QUEUE] concluído chat=${clientId} ${formatQueueStats(taskQueue.stats())}`);
+      } catch (err) {
+        const reason = err?.code || 'QUEUE_ERROR';
+        console.warn(`[QUEUE] falha no chat ${clientId}: ${reason} - ${err?.message || err}`);
+        await channel?.markUnread?.(clientId).catch(() => false);
       }
     },
   });
