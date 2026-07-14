@@ -81,11 +81,14 @@ function isWelcomeText(text) {
 }
 
 async function sendTextDirect(channel, clientId, text) {
+  if (typeof channel?.__rawSendText === 'function') {
+    return channel.__rawSendText(clientId, text, { noDelay: true });
+  }
   const chatId = normalizeChatId(clientId);
   if (typeof channel?.client?.sendText === 'function') {
     return channel.client.sendText(chatId, String(text || ''));
   }
-  return channel.__rawSendText(clientId, text);
+  return channel?.sendText?.(clientId, text, { noDelay: true });
 }
 
 async function sendTextWithLinkedWelcome(channel, clientId, text, options = {}) {
@@ -97,12 +100,15 @@ async function sendTextWithLinkedWelcome(channel, clientId, text, options = {}) 
 }
 
 async function sendImageDirect(channel, clientId, filePath, caption = '') {
+  if (typeof channel?.__rawSendImage === 'function') {
+    return channel.__rawSendImage(clientId, filePath, caption, { noDelay: true });
+  }
   const chatId = normalizeChatId(clientId);
   const fullPath = path.resolve(process.cwd(), filePath);
   if (typeof channel?.client?.sendImage === 'function') {
     return channel.client.sendImage(chatId, fullPath, path.basename(fullPath), String(caption || ''));
   }
-  return channel.__rawSendImage(clientId, filePath, caption);
+  return channel?.sendImage?.(clientId, filePath, caption, { noDelay: true });
 }
 
 function installMessageExperience(channel) {
