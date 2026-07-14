@@ -57,7 +57,7 @@ function stopWindowsSessionAccess() {
   try { sessionAccessChild.kill(); } catch (_) {}
 }
 
-async function runStartupLabelCheck(channel) {
+async function runLabelStartupOnce(channel) {
   if (!boolEnv('LABEL_MAINTENANCE_ENABLED', true)) {
     console.log('[LISTAS][INÍCIO] checagem automática desativada no .env.');
     return;
@@ -74,52 +74,45 @@ async function runStartupLabelCheck(channel) {
     'LABEL_STARTUP_AUTO_REMOVE_DUPLICATES',
   );
 
-  console.log('[LISTAS][INÍCIO] checagem única das etiquetas iniciada.');
+  console.log('[LISTAS][INÍCIO] conferindo etiquetas existentes uma única vez...');
 
   try {
     const prepared = await initializeServiceLabels(channel);
     if (!prepared) {
-      console.warn('[LISTAS][INÍCIO] alguma etiqueta de serviço não pôde ser criada ou localizada.');
+      console.warn('[LISTAS][INÍCIO] alguma etiqueta de serviço não pôde ser criada ou localizada. O atendimento continuará.');
     }
+  } catch (error) {
+    console.error('[LISTAS][INÍCIO] falha ao criar/localizar etiquetas; atendimento preservado:', error?.stack || error?.message || error);
+  }
 
+  try {
     let report = await auditStartupLabels(channel, { requireColor });
-    const hasDuplicates = (report?.issues || []).some((item) => item.code === 'duplicate');
+    const hasDuplicates = (report?.issues || []).some(
+      (item) => item.code === 'duplicate' && item.target?.type === 'serviço',
+    );
 
     if (hasDuplicates && autoRemoveDuplicates) {
       const repair = await repairDuplicateLabels(channel, report.snapshot);
       if (repair.deletedIds?.length) {
-        console.log(`[LISTAS][INÍCIO] duplicatas removidas: ${repair.deletedIds.join(', ')}`);
+        console.log(`[LISTAS][INÍCIO] duplicatas removidas e confirmadas: ${repair.deletedIds.join(', ')}`);
       }
       if (repair.failures?.length) {
-        for (const failure of repair.failures) {
-          console.warn(
-            `[LISTAS][INÍCIO] não foi possível remover ${failure.target?.name || 'etiqueta'} `
-            + `IDs=${failure.ids?.join(',') || '-'} | motivo=${failure.reason || 'desconhecido'}`,
-          );
-        }
+        console.warn(`[LISTAS][INÍCIO] duplicatas que permaneceram: ${JSON.stringify(repair.failures)}`);
       }
-
       await wait(900);
       report = await auditStartupLabels(channel, { requireColor });
     }
 
     logAuditReport(report, '[LISTAS][INÍCIO]');
-  } catch (err) {
-    console.warn(
-      '[LISTAS][INÍCIO] checagem falhou, mas o atendimento continua normalmente:',
-      err?.stack || err?.message || err,
-    );
+  } catch (error) {
+    console.error('[LISTAS][INÍCIO] falha isolada na conferência; atendimento preservado:', error?.stack || error?.message || error);
   }
 }
 
 const originalCreateWppChannel = WppClient.createWppChannel;
 WppClient.createWppChannel = async function createChannelWithStartupLabelCheck(options = {}) {
   const channel = await originalCreateWppChannel(options);
-  setImmediate(() => {
-    runStartupLabelCheck(channel).catch((err) => {
-      console.warn('[LISTAS][INÍCIO] erro isolado:', err?.stack || err?.message || err);
-    });
-  });
+  await runLabelStartupOnce(channel);
   return channel;
 };
 
