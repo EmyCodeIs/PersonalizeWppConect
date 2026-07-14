@@ -5,4 +5,5 @@ const { ensureRequiredLabelsOnce } = require('./core/requiredLabelsStartup');
 
 serviceLabels.initializeServiceLabels = ensureRequiredLabelsOnce;
 
+require('./core/handoffPreload');
 require('./bootstrap');
