@@ -3,37 +3,22 @@
 const WppClient = require('../services/wppconnectClient');
 const Identity = require('../services/contactIdentity');
 const HumanControl = require('../services/humanControlStore');
+const { env } = require('../config/env');
 const { clearServiceLabelCache } = require('./idempotentServiceLabels');
 
 function normalizeChatId(value) {
-  const raw = String(value || '').trim();
+  const raw = String(value || '').trim().toLowerCase();
   if (!raw) return '';
   if (/@(c\.us|g\.us|lid)$/i.test(raw)) return raw;
   const digits = raw.replace(/\D/g, '');
   return digits ? `${digits}@c.us` : raw;
 }
 
-function mappedChatIds(clientId) {
-  const direct = normalizeChatId(clientId);
-  const entries = String(process.env.LID_NUMBER_MAP || '')
-    .split(/[;,\n]+/)
-    .map((item) => item.trim())
-    .filter(Boolean);
-  const mapped = [];
-
-  for (const entry of entries) {
-    const separatorIndex = entry.indexOf('=');
-    if (separatorIndex < 1) continue;
-    const lid = normalizeChatId(entry.slice(0, separatorIndex));
-    const number = String(entry.slice(separatorIndex + 1) || '').replace(/\D/g, '');
-    if (!lid || !number) continue;
-    const cUs = normalizeChatId(number);
-
-    if (direct === lid) mapped.push(cUs);
-    if (direct === cUs) mapped.push(lid);
-  }
-
-  return [...new Set(mapped.filter(Boolean))];
+function normalizePhone(value) {
+  let digits = String(value || '').replace(/\D/g, '');
+  if (!digits) return '';
+  if (digits.length === 10 || digits.length === 11) digits = `55${digits}`;
+  return digits;
 }
 
 function candidateChatIds(clientId) {
@@ -45,11 +30,13 @@ function candidateChatIds(clientId) {
       : [];
   } catch (_) {}
 
-  return [...new Set([
-    direct,
-    ...known.map(normalizeChatId),
-    ...mappedChatIds(clientId),
-  ].filter(Boolean))];
+  const mapped = [];
+  const lidMap = env.lidNumberMap || {};
+  const directLid = direct.endsWith('@lid') ? direct : '';
+  const mappedPhone = directLid ? normalizePhone(lidMap[directLid]) : '';
+  if (mappedPhone) mapped.push(`${mappedPhone}@c.us`);
+
+  return [...new Set([direct, ...known.map(normalizeChatId), ...mapped].filter(Boolean))];
 }
 
 async function clearNote(channel, candidates) {
@@ -79,105 +66,97 @@ async function clearLabels(channel, candidates) {
     const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
     const getId = (item) => String(item?.id?._serialized || item?.id || item?.labelId || item || '').trim();
 
-    if (typeof labelStore?.getLabelsForModel !== 'function') {
-      return { requested: 0, removed: 0, remaining: 0, chatIds: [], error: 'LABEL_STORE_UNAVAILABLE' };
+    if (typeof WPP?.labels?.getAllLabels !== 'function'
+      || typeof WPP?.labels?.addOrRemoveLabels !== 'function') {
+      return { requested: 0, removed: 0, remaining: 0, chatIds: [], error: 'LABEL_API_UNAVAILABLE' };
     }
 
-    const resolveChat = async (chatId) => {
-      let chat = null;
-      try {
-        chat = Store?.Chat?.get?.(chatId) || null;
-        if (!chat && typeof Store?.Chat?.find === 'function') chat = await Store.Chat.find(chatId);
-      } catch (_) {}
-      return chat;
-    };
-
-    const readAttachedIds = async (chatId) => {
-      const chat = await resolveChat(chatId);
-      if (!chat) return { chatFound: false, ids: [] };
-      const raw = labelStore.getLabelsForModel(chat) || [];
-      const attached = Array.isArray(raw) ? raw : Object.values(raw || {});
-      return {
-        chatFound: true,
-        ids: [...new Set(attached.map(getId).filter(Boolean))],
-      };
-    };
-
-    const labelsByChat = [];
+    const resolvedChatIds = [];
     for (const chatId of candidates) {
-      const before = await readAttachedIds(chatId);
-      if (!before.chatFound) continue;
-      labelsByChat.push({ chatId, ids: before.ids });
+      try {
+        let chat = Store?.Chat?.get?.(chatId) || null;
+        if (!chat && typeof Store?.Chat?.find === 'function') chat = await Store.Chat.find(chatId);
+        if (chat) resolvedChatIds.push(chatId);
+      } catch (_) {}
     }
 
-    const requested = labelsByChat.reduce((sum, item) => sum + item.ids.length, 0);
-    if (!requested) {
+    const uniqueChatIds = [...new Set(resolvedChatIds)];
+    if (!uniqueChatIds.length) {
       return {
         requested: 0,
         removed: 0,
         remaining: 0,
-        chatIds: labelsByChat.map((item) => item.chatId),
-        mode: 'already-clean',
+        chatIds: [],
+        error: `CONTACT_CHAT_NOT_FOUND:${candidates.join(',')}`,
       };
     }
 
-    const errors = [];
-    const modes = [];
+    // Importante: usa o cadastro global de etiquetas, não apenas o cache de
+    // vínculos carregado nesta execução. Assim também remove etiquetas que já
+    // estavam no contato antes do sistema iniciar.
+    const allRaw = await WPP.labels.getAllLabels();
+    const allLabels = Array.isArray(allRaw) ? allRaw : Object.values(allRaw || {});
+    const allLabelIds = [...new Set(allLabels.map(getId).filter(Boolean))];
 
-    for (const item of labelsByChat) {
-      if (!item.ids.length) continue;
-
-      let submitted = false;
-      if (typeof WPP?.labels?.addOrRemoveLabels === 'function') {
-        try {
-          await WPP.labels.addOrRemoveLabels(
-            item.chatId,
-            item.ids.map((id) => ({ labelId: String(id), type: 'remove' })),
-          );
-          submitted = true;
-          modes.push('labels.addOrRemoveLabels');
-        } catch (error) {
-          errors.push(`addOrRemoveLabels:${item.chatId}:${error?.message || error}`);
-        }
-      }
-
-      await wait(500);
-      const after = await readAttachedIds(item.chatId);
-      const remainingIds = after.ids.filter((id) => item.ids.includes(id));
-
-      if (remainingIds.length && typeof WPP?.lists?.removeChats === 'function') {
-        try {
-          for (const id of remainingIds) {
-            await WPP.lists.removeChats(String(id), [item.chatId]);
-          }
-          submitted = true;
-          modes.push('lists.removeChats');
-        } catch (error) {
-          errors.push(`removeChats:${item.chatId}:${error?.message || error}`);
-        }
-      }
-
-      if (!submitted) errors.push(`REMOVE_LABEL_API_UNAVAILABLE:${item.chatId}`);
+    if (!allLabelIds.length) {
+      return {
+        requested: 0,
+        removed: 0,
+        remaining: 0,
+        chatIds: uniqueChatIds,
+        mode: 'no-global-labels',
+      };
     }
 
-    let remaining = requested;
-    for (let attempt = 1; attempt <= 8; attempt += 1) {
-      if (attempt > 1) await wait(350);
-      remaining = 0;
-      for (const item of labelsByChat) {
-        const after = await readAttachedIds(item.chatId);
-        remaining += after.ids.filter((id) => item.ids.includes(id)).length;
+    const options = allLabelIds.map((labelId) => ({ labelId, type: 'remove' }));
+    const errors = [];
+
+    try {
+      await WPP.labels.addOrRemoveLabels(uniqueChatIds, options);
+    } catch (error) {
+      errors.push(`addOrRemoveLabels:${error?.message || error}`);
+    }
+
+    await wait(1000);
+
+    // Fallback por lista, útil quando a API principal retorna sem aplicar tudo.
+    if (typeof WPP?.lists?.removeChats === 'function') {
+      for (const labelId of allLabelIds) {
+        try {
+          await WPP.lists.removeChats(labelId, uniqueChatIds);
+        } catch (error) {
+          errors.push(`removeChats:${labelId}:${error?.message || error}`);
+        }
       }
-      if (remaining === 0) break;
+    }
+
+    let remaining = null;
+    if (typeof labelStore?.getLabelsForModel === 'function') {
+      for (let attempt = 1; attempt <= 10; attempt += 1) {
+        if (attempt > 1) await wait(400);
+        remaining = 0;
+        for (const chatId of uniqueChatIds) {
+          let chat = null;
+          try {
+            chat = Store?.Chat?.get?.(chatId) || null;
+            if (!chat && typeof Store?.Chat?.find === 'function') chat = await Store.Chat.find(chatId);
+          } catch (_) {}
+          if (!chat) continue;
+          const raw = labelStore.getLabelsForModel(chat) || [];
+          const attached = Array.isArray(raw) ? raw : Object.values(raw || {});
+          remaining += [...new Set(attached.map(getId).filter(Boolean))].length;
+        }
+        if (remaining === 0) break;
+      }
     }
 
     return {
-      requested,
-      removed: Math.max(0, requested - remaining),
+      requested: allLabelIds.length,
+      removed: remaining === null ? null : Math.max(0, allLabelIds.length - remaining),
       remaining,
-      chatIds: labelsByChat.map((item) => item.chatId),
-      mode: [...new Set(modes)].join('+') || null,
-      error: remaining > 0 ? (errors.join(' | ') || 'LABEL_REMOVAL_NOT_CONFIRMED') : null,
+      chatIds: uniqueChatIds,
+      mode: 'global-label-registry',
+      error: remaining === 0 ? null : (errors.join(' | ') || 'LABEL_REMOVAL_NOT_CONFIRMED'),
     };
   }, { candidates });
 }
@@ -193,7 +172,7 @@ async function clearContactForSystemReset(channel, clientId) {
     labels = {
       requested: 0,
       removed: 0,
-      remaining: 0,
+      remaining: null,
       chatIds: [],
       error: error?.message || String(error),
     };
@@ -202,13 +181,16 @@ async function clearContactForSystemReset(channel, clientId) {
   try { HumanControl.clearBlock(clientId); } catch (_) {}
   try { clearServiceLabelCache(clientId); } catch (_) {}
 
-  const ok = note.cleared && !labels.error && Number(labels.remaining || 0) === 0;
+  const labelsConfirmed = labels.remaining === 0 && !labels.error;
+  const ok = note.cleared && labelsConfirmed;
   console.log(
     `[RESETARSYS] contato limpo | cliente=${clientId} | ids=${candidates.join(',') || '-'} `
+    + `| chatsEncontrados=${(labels.chatIds || []).join(',') || '-'} `
     + `| nota=${note.cleared ? `apagada:${note.chatId}` : 'não_confirmada'} `
-    + `| etiquetas=${Number(labels.removed || 0)}/${Number(labels.requested || 0)} `
-    + `| restantes=${Number(labels.remaining || 0)} | modo=${labels.mode || '-'} `
-    + `| bloqueioHumano=limpo | resultado=${ok ? 'OK' : 'PARCIAL'}`
+    + `| etiquetasGlobais=${Number(labels.requested || 0)} `
+    + `| restantes=${labels.remaining === null ? 'não_confirmado' : Number(labels.remaining)} `
+    + `| modo=${labels.mode || '-'} | bloqueioHumano=limpo `
+    + `| resultado=${ok ? 'OK' : 'PARCIAL'}`
     + `${labels.error ? ` | erro=${labels.error}` : ''}`,
   );
 
@@ -241,5 +223,4 @@ module.exports = {
   candidateChatIds,
   clearContactForSystemReset,
   installResetCleanup,
-  mappedChatIds,
 };
