@@ -9,7 +9,10 @@
     "dev": "node src/index.js",
     "test:flow": "node scripts/test-flow.js",
     "check": "node --check src/index.js && node --check src/config/env.js && node --check src/core/bufferManager.js && node --check src/core/chatTaskQueue.js && node --check src/core/messageExperience.js && node --check src/core/menuCatalog.js && node --check src/core/messages.js && node --check src/core/outboundTracker.js && node --check src/core/parsers.js && node --check src/core/sellerHandoff.js && node --check src/domain/acrilicoThickness.js && node --check src/services/contactIdentity.js && node --check src/services/systemStateStore.js && node --check src/services/humanControlStore.js && node --check src/services/leadStore.js && node --check src/services/wppconnectClient.js && node --check src/core/allowedClient.js && node --check src/core/serviceLabels.js && node --check src/core/mostruario.js && node --check src/flow/customerFlow.js && node --check scripts/test-flow.js && node --check scripts/test-labels.js",
-    "test:labels": "node scripts/test-labels.js"
+    "test:labels": "node scripts/test-labels.js",
+    "session:access": "bash scripts/start-session-access.sh",
+    "session:access:stop": "bash scripts/stop-session-access.sh",
+    "session:access:install:ubuntu": "bash scripts/install-session-access-ubuntu.sh"
   },
   "dependencies": {
     "@wppconnect-team/wppconnect": "^2.2.1",
