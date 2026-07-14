@@ -172,6 +172,7 @@ async function finish(channel, clientId, session, reason) {
     Store.saveSession(session);
   }
   await channel.sendText(clientId, messages.completedContactNote);
+  await channel?.markUnread?.(clientId).catch(() => false);
   return session;
 }
 
@@ -210,7 +211,7 @@ async function finishColor(channel, id, s, color) {
   d.corUnica = total === 1 ? color : null;
   if (count < total) {
     d.corBasicaIndex = count + 1; s.etapa = 'cor_basica_tipo'; Store.saveSession(s);
-    await channel.sendText(id, `Cor ${count} anotada: ${color}. Agora selecione a próxima cor.`);
+    await channel.sendText(id, `Cor ${count} de ${total} anotada: ${color}.`);
     await sendMenu(channel, id, buildColorTypeMenu(count + 1, total));
     return s;
   }
@@ -375,34 +376,25 @@ async function processCustomerMessage({ clientId, text, channel, messages: inbou
   }
   if (s.etapa === 'cidade') { d.cidade = input.replace(/\s{2,}/g, ' ').replace(/\s*\/\s*/g, '/').trim(); Store.saveSession(s); await startDelivery(channel, clientId, s); return s; }
   if (s.etapa === 'envio') {
-    if (isBack(input, 'envio_voltar')) { d.cidade = null; d.envio = null; d.endereco = null; await startCity(channel, clientId, s); return s; }
-    const delivery = deliveryOf(input);
-    if (!delivery || (delivery === 'Instalação' && !isGrandeBH(d.cidade))) { await sendMenu(channel, clientId, buildDeliveryMenu(isGrandeBH(d.cidade))); return s; }
-    d.envio = delivery;
-    if (delivery === 'Retirada') { d.endereco = null; Store.saveSession(s); await channel.sendText(clientId, messages.pickupAddress); await askObservation(channel, clientId, s); return s; }
-    s.etapa = 'endereco'; Store.saveSession(s);
-    if (delivery === 'Instalação') await channel.sendText(clientId, messages.installationNote);
-    await channel.sendText(clientId, messages.askAddress); return s;
+    if (isBack(input, 'envio_voltar')) { await startCity(channel, clientId, s); return s; }
+    const envio = deliveryOf(input);
+    if (!envio) { await sendMenu(channel, clientId, buildDeliveryMenu(isGrandeBH(d.cidade))); return s; }
+    d.envio = envio; Store.saveSession(s);
+    if (envio === 'Retirada') { await askObservation(channel, clientId, s); return s; }
+    s.etapa = 'endereco'; Store.saveSession(s); await channel.sendText(clientId, messages.askAddress); return s;
   }
-  if (s.etapa === 'endereco') {
-    const address = input.replace(/\s{2,}/g, ' ').trim();
-    if (!address) { await channel.sendText(clientId, messages.askAddress); return s; }
-    d.endereco = address; Store.saveSession(s); await channel.sendText(clientId, 'Endereço anotado!'); await askObservation(channel, clientId, s); return s;
-  }
+  if (s.etapa === 'endereco') { d.endereco = input; Store.saveSession(s); await askObservation(channel, clientId, s); return s; }
   if (s.etapa === 'observacao_pedido_menu') {
-    const x = norm(input);
-    if (x === normalizeText('OBS_PEDIDO|ADD') || /fazer observacao/.test(x)) { s.etapa = 'observacao_pedido_coleta'; Store.saveSession(s); await channel.sendText(clientId, messages.askObservationText); return s; }
-    if (x === normalizeText('OBS_PEDIDO|SKIP') || /nao preciso/.test(x)) { d.observacaoPedido = null; return finish(channel, clientId, s, 'letreiro_coleta_completa'); }
+    if (norm(input) === 'obs_nao') { d.observacaoPedido = null; Store.saveSession(s); return finish(channel, clientId, s, 'letreiro_coleta_completa'); }
+    if (norm(input) === 'obs_sim') { s.etapa = 'observacao_pedido_coleta'; Store.saveSession(s); await channel.sendText(clientId, messages.askObservationWrite); return s; }
     await sendMenu(channel, clientId, 'observacao'); return s;
   }
   if (s.etapa === 'observacao_pedido_coleta') {
-    d.observacaoPedido = sanitizeObservation(input) || null; Store.saveSession(s);
-    await channel.sendText(clientId, d.observacaoPedido ? 'Observação anotada!' : 'Sem problemas! Finalizei sem observação.');
-    return finish(channel, clientId, s, 'letreiro_coleta_completa');
+    d.observacaoPedido = sanitizeObservation(input); Store.saveSession(s); return finish(channel, clientId, s, 'letreiro_coleta_completa');
   }
 
   await channel.sendText(clientId, messages.fallback);
   return s;
 }
 
-module.exports = { processCustomerMessage, buildBusinessNote, isGrandeBH, quantityOf, colorTypeOf, colorOf };
+module.exports = { processCustomerMessage };
