@@ -42,6 +42,7 @@ const serviceLabelPlotagem = process.env.SERVICE_LABEL_PLOTAGEM || 'Plotagens';
 const serviceLabelOutros = process.env.SERVICE_LABEL_OUTROS || 'Outros';
 const serviceLabelLetreiroColor = process.env.SERVICE_LABEL_LETREIRO_COLOR || 'purple';
 const flowSessionTtlHours = Math.max(1, num('FLOW_SESSION_TTL_HOURS', 24));
+const configuredSellerRules = mapList('SELLER_LABEL_RULES');
 
 const env = {
   sessionName: process.env.WPP_SESSION_NAME || 'personalize-wppconnect',
@@ -86,6 +87,11 @@ const env = {
   enableContactLabels: bool('ENABLE_CONTACT_LABELS', true),
   detectManualContactLabels: bool('DETECT_MANUAL_CONTACT_LABELS', true),
   storeManualContactLabels: bool('STORE_MANUAL_CONTACT_LABELS', true),
+  sellerLabelBlockingEnabled: bool('SELLER_LABEL_BLOCKING_ENABLED', true),
+  sellerLabelRules: Object.keys(configuredSellerRules).length
+    ? configuredSellerRules
+    : { adriano: 'green', ana: 'blue', dudu: 'yellow' },
+  humanBlockHours: Math.max(1, num('HUMAN_BLOCK_HOURS', 24)),
   awaitingQuoteLabelName: process.env.AWAITING_QUOTE_LABEL_NAME || serviceLabelLetreiro,
   awaitingQuoteLabelColor: process.env.AWAITING_QUOTE_LABEL_COLOR || serviceLabelLetreiroColor,
   serviceLabelLetreiro,
