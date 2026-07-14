@@ -78,6 +78,24 @@ function cleanOptionalList(values = [], maxItems = 5, maxLength = 60) {
   return out;
 }
 
+function normalizeHumanControl(control) {
+  if (!control || typeof control !== 'object') return null;
+
+  const blockedAt = cleanText(control.blockedAt, 80) || nowIso();
+  const blockedUntil = cleanText(control.blockedUntil, 80);
+  const untilTimestamp = toFiniteTimestamp(blockedUntil);
+  if (blockedUntil && untilTimestamp && untilTimestamp <= Date.now()) return null;
+
+  return {
+    reason: cleanText(control.reason, 80) || 'human_block',
+    source: cleanText(control.source, 80) || 'manual',
+    seller: cleanText(control.seller, 80),
+    labelName: cleanText(control.labelName, 120),
+    blockedAt,
+    blockedUntil: blockedUntil || null,
+  };
+}
+
 function normalizeClientId(clientId) {
   return Identity.getSessionKey(clientId);
 }
@@ -129,6 +147,7 @@ function createCustomerProfile(id, payload = {}) {
     lastSeenAt: createdAt,
     visitCount: 0,
     knownName: sanitizeProfileName(payload.name),
+    humanControl: normalizeHumanControl(payload.humanControl),
     createdAt,
     updatedAt: createdAt,
   };
@@ -141,6 +160,7 @@ function migrateCustomerProfile(profile, id) {
   next.lastSeenAt = next.lastSeenAt || next.updatedAt || next.firstSeenAt || nowIso();
   next.visitCount = Math.max(0, Number(next.visitCount || 0));
   next.knownName = sanitizeProfileName(next.knownName || next.name);
+  next.humanControl = normalizeHumanControl(next.humanControl);
   next.createdAt = next.createdAt || next.firstSeenAt;
   next.updatedAt = next.updatedAt || next.lastSeenAt;
   return next;
@@ -248,6 +268,7 @@ function rememberCustomerProfile(clientId, payload = {}) {
   if (!next.firstSeenAt) next.firstSeenAt = timestamp;
   const nextName = sanitizeProfileName(payload.name);
   if (nextName) next.knownName = nextName;
+  if (payload.humanControl !== undefined) next.humanControl = normalizeHumanControl(payload.humanControl);
   if (!existing && next.visitCount < 1) next.visitCount = 1;
   profileState.profiles[id] = next;
   persistProfiles();
@@ -273,6 +294,59 @@ function beginCustomerConversation(clientId, payload = {}) {
     profile: next,
     isReturning: Boolean(existing && Number(existing.visitCount || 0) >= 1),
   };
+}
+
+function getHumanControlState(clientId) {
+  const profile = getCustomerProfile(clientId);
+  const control = normalizeHumanControl(profile?.humanControl);
+  if (!control) {
+    if (profile?.humanControl) {
+      profile.humanControl = null;
+      profile.updatedAt = nowIso();
+      profileState.profiles[profile.clientId] = profile;
+      persistProfiles();
+    }
+    return { blocked: false, control: null };
+  }
+  return { blocked: true, control };
+}
+
+function setHumanControlBlock(clientId, payload = {}) {
+  const id = normalizeClientId(clientId);
+  if (!id) return null;
+
+  const existing = profileState.profiles[id];
+  const next = migrateCustomerProfile(existing, id);
+  const blockedAt = payload.blockedAt || nowIso();
+  const blockedUntil = payload.persistent
+    ? null
+    : (payload.blockedUntil || addHoursIso(blockedAt, payload.blockedHours || env.humanBlockHours));
+
+  next.humanControl = normalizeHumanControl({
+    reason: payload.reason || 'human_block',
+    source: payload.source || 'manual',
+    seller: payload.seller || null,
+    labelName: payload.labelName || null,
+    blockedAt,
+    blockedUntil,
+  });
+  next.updatedAt = blockedAt;
+  profileState.profiles[id] = next;
+  persistProfiles();
+  return next.humanControl;
+}
+
+function clearHumanControlBlock(clientId) {
+  const id = normalizeClientId(clientId);
+  if (!id) return false;
+  const existing = profileState.profiles[id];
+  if (!existing) return false;
+  const next = migrateCustomerProfile(existing, id);
+  next.humanControl = null;
+  next.updatedAt = nowIso();
+  profileState.profiles[id] = next;
+  persistProfiles();
+  return true;
 }
 
 function listCustomerProfiles() {
@@ -388,10 +462,14 @@ module.exports = {
   getCustomerProfile,
   rememberCustomerProfile,
   beginCustomerConversation,
+  getHumanControlState,
+  setHumanControlBlock,
+  clearHumanControlBlock,
   listCustomerProfiles,
   _test: {
     buildCompactLead,
     cleanText,
     cleanOptionalList,
+    normalizeHumanControl,
   },
 };
