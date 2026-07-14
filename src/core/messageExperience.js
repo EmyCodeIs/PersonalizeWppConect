@@ -161,7 +161,7 @@ function installMessageExperience(channel) {
     if (isGroupedResponse()) return action();
 
     const chatId = normalizeChatId(clientId);
-    const shouldType = env.enableTyping && options.noTyping !== true;
+    const shouldType = env.enableTyping;
     const started = shouldType ? await startTypingCompat(channel.client, chatId) : false;
 
     try {
@@ -169,7 +169,6 @@ function installMessageExperience(channel) {
       return await responseContext.run({
         grouped: true,
         clientId: chatId,
-        noTyping: options.noTyping === true,
       }, action);
     } finally {
       if (started) await stopTypingCompat(channel.client, chatId);
