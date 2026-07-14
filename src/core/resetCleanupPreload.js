@@ -13,6 +13,29 @@ function normalizeChatId(value) {
   return digits ? `${digits}@c.us` : raw;
 }
 
+function mappedChatIds(clientId) {
+  const direct = normalizeChatId(clientId);
+  const entries = String(process.env.LID_NUMBER_MAP || '')
+    .split(/[;,\n]+/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+  const mapped = [];
+
+  for (const entry of entries) {
+    const separatorIndex = entry.indexOf('=');
+    if (separatorIndex < 1) continue;
+    const lid = normalizeChatId(entry.slice(0, separatorIndex));
+    const number = String(entry.slice(separatorIndex + 1) || '').replace(/\D/g, '');
+    if (!lid || !number) continue;
+    const cUs = normalizeChatId(number);
+
+    if (direct === lid) mapped.push(cUs);
+    if (direct === cUs) mapped.push(lid);
+  }
+
+  return [...new Set(mapped.filter(Boolean))];
+}
+
 function candidateChatIds(clientId) {
   const direct = normalizeChatId(clientId);
   let known = [];
@@ -22,7 +45,11 @@ function candidateChatIds(clientId) {
       : [];
   } catch (_) {}
 
-  return [...new Set([direct, ...known.map(normalizeChatId)].filter(Boolean))];
+  return [...new Set([
+    direct,
+    ...known.map(normalizeChatId),
+    ...mappedChatIds(clientId),
+  ].filter(Boolean))];
 }
 
 async function clearNote(channel, candidates) {
@@ -103,7 +130,6 @@ async function clearLabels(channel, candidates) {
       let submitted = false;
       if (typeof WPP?.labels?.addOrRemoveLabels === 'function') {
         try {
-          // A API recebe um chatId em string, não um array de chatIds.
           await WPP.labels.addOrRemoveLabels(
             item.chatId,
             item.ids.map((id) => ({ labelId: String(id), type: 'remove' })),
@@ -116,11 +142,9 @@ async function clearLabels(channel, candidates) {
       }
 
       await wait(500);
-      let after = await readAttachedIds(item.chatId);
-      let remainingIds = after.ids.filter((id) => item.ids.includes(id));
+      const after = await readAttachedIds(item.chatId);
+      const remainingIds = after.ids.filter((id) => item.ids.includes(id));
 
-      // Fallback real: remove cada vínculo pela API de listas quando a primeira
-      // chamada não existir, falhar ou não for confirmada pelo Store do WhatsApp.
       if (remainingIds.length && typeof WPP?.lists?.removeChats === 'function') {
         try {
           for (const id of remainingIds) {
@@ -133,9 +157,7 @@ async function clearLabels(channel, candidates) {
         }
       }
 
-      if (!submitted) {
-        errors.push(`REMOVE_LABEL_API_UNAVAILABLE:${item.chatId}`);
-      }
+      if (!submitted) errors.push(`REMOVE_LABEL_API_UNAVAILABLE:${item.chatId}`);
     }
 
     let remaining = requested;
@@ -219,4 +241,5 @@ module.exports = {
   candidateChatIds,
   clearContactForSystemReset,
   installResetCleanup,
+  mappedChatIds,
 };
