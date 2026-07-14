@@ -1,7 +1,7 @@
 'use strict';
 
 class ChatTaskQueue {
-  constructor({ maxUnits = 4, maxQueueSize = 40, taskTimeoutMs = 45000 } = {}) {
+  constructor({ maxUnits = 2, maxQueueSize = 40, taskTimeoutMs = 45000 } = {}) {
     this.maxUnits = Math.max(1, Number(maxUnits || 1));
     this.maxQueueSize = Math.max(1, Number(maxQueueSize || 1));
     this.taskTimeoutMs = Math.max(5000, Number(taskTimeoutMs || 0));
@@ -13,7 +13,6 @@ class ChatTaskQueue {
 
   stats() {
     return {
-      running: this.runningChats.size,
       runningUnits: this.runningUnits,
       queued: this.queue.length,
       limit: this.maxUnits,
@@ -29,7 +28,6 @@ class ChatTaskQueue {
     if (typeof task !== 'function') {
       return Promise.reject(new Error('A fila global recebeu uma tarefa inválida.'));
     }
-
     if (this.queue.length >= this.maxQueueSize) {
       const error = new Error(`Fila global cheia (${this.maxQueueSize}).`);
       error.code = 'QUEUE_FULL';
@@ -38,14 +36,7 @@ class ChatTaskQueue {
     }
 
     const timeoutMs = Math.max(5000, Number(options.timeoutMs || this.taskTimeoutMs));
-    const units = Math.max(1, Number(options.units || 1));
-    if (units > this.maxUnits) {
-      const error = new Error(`Tarefa do chat ${normalizedChatId} exige ${units} unidades, acima do limite ${this.maxUnits}.`);
-      error.code = 'QUEUE_UNITS_EXCEEDED';
-      error.chatId = normalizedChatId;
-      error.units = units;
-      return Promise.reject(error);
-    }
+    const units = Math.max(0, Math.min(this.maxUnits, Number(options.units ?? 1)));
 
     return new Promise((resolve, reject) => {
       this.queue.push({
@@ -57,17 +48,16 @@ class ChatTaskQueue {
         resolve,
         reject,
       });
-
       this.processNext();
     });
   }
 
   processNext() {
-    while (this.runningUnits < this.maxUnits) {
-      const index = this.queue.findIndex((item) => {
-        if (this.runningChats.has(item.chatId)) return false;
-        return (this.runningUnits + item.units) <= this.maxUnits;
-      });
+    while (true) {
+      const index = this.queue.findIndex((item) => (
+        !this.runningChats.has(item.chatId)
+        && (this.runningUnits + item.units) <= this.maxUnits
+      ));
       if (index < 0) return;
 
       const item = this.queue.splice(index, 1)[0];
@@ -76,13 +66,13 @@ class ChatTaskQueue {
 
       this.runItem(item)
         .then((result) => {
-          this.runningUnits = Math.max(0, this.runningUnits - item.units);
+          this.runningUnits -= item.units;
           this.runningChats.delete(item.chatId);
           item.resolve(result);
           this.processNext();
         })
         .catch((error) => {
-          this.runningUnits = Math.max(0, this.runningUnits - item.units);
+          this.runningUnits -= item.units;
           this.runningChats.delete(item.chatId);
           item.reject(error);
           this.processNext();
