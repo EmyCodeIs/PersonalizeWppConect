@@ -29,6 +29,7 @@ const MULTI_MESSAGE_STAGES = new Set([
   'outros_descricao',
   'outros_referencia',
 ]);
+const IMMEDIATE_TEST_COMMANDS = new Set(['/reset', '/reiniciar', '/resetarsys']);
 
 function messageKey(message) {
   const rawId = message?.id?._serialized || message?.id || message?.messageId || message?.key?.id;
@@ -120,6 +121,43 @@ function mediaMarker(raw = {}) {
   return '';
 }
 
+function firstLine(value) {
+  return String(value || '').split(/\r?\n/).map((line) => line.trim()).find(Boolean) || '';
+}
+
+function isImmediateTestCommand(text) {
+  const command = firstLine(text).toLowerCase();
+  return IMMEDIATE_TEST_COMMANDS.has(command);
+}
+
+async function runImmediateTestCommand(channel, clientId, text) {
+  const command = firstLine(text).toLowerCase();
+  if (!env.enableTestCommands || !IMMEDIATE_TEST_COMMANDS.has(command)) return false;
+
+  if (command === '/resetarsys') {
+    const result = Store.resetSystem();
+    await channel.sendText(
+      clientId,
+      `Sistema resetado para teste.\n\nSessões apagadas: ${result.previousSessionCount}\nPerfis apagados: ${result.previousProfileCount}\nLeads apagados: ${result.previousLeadCount}\n\nMe envie uma nova mensagem para começar como primeiro contato.`,
+      { noDelay: true, noTyping: true }
+    );
+    Store.resetSession(clientId);
+    return true;
+  }
+
+  if (command === '/reset' || command === '/reiniciar') {
+    Store.resetSession(clientId);
+    await channel.sendText(
+      clientId,
+      'Atendimento reiniciado para teste. Envie uma nova mensagem para começar.',
+      { noDelay: true, noTyping: true }
+    );
+    return true;
+  }
+
+  return false;
+}
+
 function prepareBufferedInput(clientId, text, bufferedMessages) {
   const session = Store.getSession(clientId);
   if (!session) return text;
@@ -172,61 +210,25 @@ function serviceRepairKey(session, flow, fallbackClientId = '') {
 }
 
 function formatQueueStats(stats = {}) {
-  return `chats=${Number(stats.running || 0)} units=${Number(stats.runningUnits || 0)}/${Number(stats.limit || 0)} queued=${Number(stats.queued || 0)}`;
+  return `units=${Number(stats.runningUnits || 0)}/${Number(stats.limit || 0)} queued=${Number(stats.queued || 0)}`;
 }
 
-function firstCommandLine(value = '') {
-  return String(value || '').split(/\r?\n/)[0].trim();
-}
-
-function isImmediateSystemCommand(text = '') {
-  if (!env.enableTestCommands) return false;
-  const command = firstCommandLine(text);
-  return /^\/resetarsys$/i.test(command) || /^\/(reset|reiniciar)$/i.test(command);
-}
-
-async function handleImmediateSystemCommand(channel, clientId, text) {
-  const command = firstCommandLine(text);
-
-  if (/^\/resetarsys$/i.test(command)) {
-    const result = Store.resetSystem();
-    await channel.sendText(
-      clientId,
-      `Sistema resetado para teste.\n\nSessões apagadas: ${result.previousSessionCount}\nPerfis apagados: ${result.previousProfileCount}\nLeads apagados: ${result.previousLeadCount}\n\nMe envie uma nova mensagem para começar como primeiro contato.`,
-      { noTyping: true }
-    );
-    return Store.resetSession(clientId);
-  }
-
-  if (/^\/(reset|reiniciar)$/i.test(command)) {
-    const fresh = Store.resetSession(clientId);
-    await channel.sendText(clientId, 'Atendimento reiniciado para teste. Envie uma nova mensagem para começar.', { noTyping: true });
-    return fresh;
-  }
-
-  return null;
-}
-
-function hasBufferedMedia(messages = []) {
-  return messages.some((item) => {
-    const raw = item?.raw || item || {};
-    const type = String(raw?.type || raw?.mimetype || raw?.mediaType || '').toLowerCase();
-    const filename = raw?.filename || raw?.fileName || raw?.document?.filename || '';
-    return /image|document|pdf|application|video/.test(type) || Boolean(filename);
-  });
-}
-
-function estimateQueueUnits(clientId, preparedText, bufferedMessages = []) {
+function estimateTaskUnits({ clientId, preparedText, bufferedMessages }) {
   const stage = String(Store.getSession(clientId)?.etapa || '').trim();
-  let units = 1;
+  const normalizedText = normalizeText(preparedText);
+  const hasMedia = Array.isArray(bufferedMessages)
+    && bufferedMessages.some((item) => {
+      const type = String(item?.raw?.type || item?.raw?.mimetype || item?.raw?.mediaType || '').toLowerCase();
+      return /image|document|pdf|application|video/.test(type);
+    });
 
-  if (stage === 'inicio') units = Math.max(units, 2);
-  if (hasBufferedMedia(bufferedMessages)) units = Math.max(units, 2);
-  if (['arte_coleta', 'pantone', 'endereco', 'observacao_pedido_coleta'].includes(stage)) units = Math.max(units, 2);
-  if (MULTI_MESSAGE_STAGES.has(stage)) units = Math.max(units, 2);
-  if (String(preparedText || '').length > 600) units = Math.max(units, 2);
-
-  return Math.min(env.queueMaxUnits, units);
+  if (!normalizedText) return 1;
+  if (isImmediateTestCommand(preparedText)) return 0;
+  if (stage === 'inicio') return 2;
+  if (hasMedia) return 2;
+  if (normalizedText.length > 500) return 2;
+  if (MULTI_MESSAGE_STAGES.has(stage)) return 2;
+  return 1;
 }
 
 async function repairSessionServiceLabel(channel, clientId, repairedKeys, source = 'runtime') {
@@ -309,11 +311,10 @@ async function main() {
   console.log(`[PersonalizeWppConect] buffer comum: ${env.bufferMs}ms`);
   console.log(`[PersonalizeWppConect] buffers de coleta: medida=${env.measureBufferMs}ms arte=${env.artBufferMs}ms endereço=${env.addressBufferMs}ms Pantone=${env.pantoneBufferMs}ms observação=${env.observationBufferMs}ms cidade=${env.cityBufferMs}ms`);
   console.log(`[PersonalizeWppConect] buffer listas/botões: ${env.interactiveBufferMs}ms`);
-  console.log(`[PersonalizeWppConect] fila global por consumo: unidades=${env.queueMaxUnits} espera=${env.maxQueueSize} timeout=${env.chatProcessTimeoutMs}ms`);
-  console.log('[PersonalizeWppConect] comandos administrativos: /reset, /reiniciar e /resetarsys furam buffer e fila');
+  console.log(`[PersonalizeWppConect] fila global: consumo=${env.queueMaxUnits}u espera=${env.maxQueueSize} timeout=${env.chatProcessTimeoutMs}ms`);
   console.log('[PersonalizeWppConect] handoff: etiqueta de vendedor e mensagem manual bloqueiam o bot automaticamente');
   console.log('[PersonalizeWppConect] respostas comuns: digitação única + balões sem pausa artificial');
-  console.log('[PersonalizeWppConect] boas-vindas: saudação + imagem com link na legenda + lista, sem digitação e sem delay artificial');
+  console.log('[PersonalizeWppConect] boas-vindas: saudação + imagem com link na legenda + lista, com digitação única antes do grupo');
   console.log('[PersonalizeWppConect] listas: cria uma única vez com WPP.lists, reutiliza pelo nome, recupera sessões ativas e nunca remove listas manuais');
   console.log('[PersonalizeWppConect] finalização: dados salvos na nota do contato; sem encaminhamento ao vendedor');
 
@@ -343,9 +344,9 @@ async function main() {
       const text = mergeMessages(bufferedMessages);
       if (!text) return;
       const preparedText = prepareBufferedInput(clientId, text, bufferedMessages);
-      const units = estimateQueueUnits(clientId, preparedText, bufferedMessages);
       console.log(`\n[CLIENTE ${clientId}] ${preparedText}\n`);
 
+      const units = estimateTaskUnits({ clientId, preparedText, bufferedMessages });
       const queuedAt = Date.now();
       console.log(`[QUEUE] agendado chat=${clientId} units=${units} ${formatQueueStats(taskQueue.stats())}`);
 
@@ -360,9 +361,6 @@ async function main() {
           const waitMs = Date.now() - queuedAt;
           console.log(`[QUEUE] iniciado chat=${clientId} units=${units} espera=${waitMs}ms ${formatQueueStats(taskQueue.stats())}`);
 
-          const stageBeforeResponse = String(Store.getSession(clientId)?.etapa || '').trim();
-          const isWelcomeBlock = stageBeforeResponse === 'inicio';
-
           const action = () => processCustomerMessage({
             clientId,
             text: preparedText,
@@ -371,16 +369,14 @@ async function main() {
           });
 
           if (typeof channel?.runResponseGroup === 'function') {
-            await channel.runResponseGroup(clientId, preparedText, action, {
-              noTyping: isWelcomeBlock,
-            });
+            await channel.runResponseGroup(clientId, preparedText, action);
             return;
           }
 
           await action();
         }, { units });
 
-        console.log(`[QUEUE] concluído chat=${clientId} units=${units} ${formatQueueStats(taskQueue.stats())}`);
+        console.log(`[QUEUE] concluído chat=${clientId} ${formatQueueStats(taskQueue.stats())}`);
       } catch (err) {
         const reason = err?.code || 'QUEUE_ERROR';
         console.warn(`[QUEUE] falha no chat ${clientId}: ${reason} - ${err?.message || err}`);
@@ -430,17 +426,9 @@ async function main() {
       return;
     }
 
-    const key = messageKey(raw || { from: canonicalChatId, text: effectiveText });
-    if (processedMessageIds.has(key)) return;
-    processedMessageIds.add(key);
-    if (processedMessageIds.size > 5000) {
-      const first = processedMessageIds.values().next().value;
-      processedMessageIds.delete(first);
-    }
-
-    if (isImmediateSystemCommand(effectiveText)) {
-      console.log(`[COMANDO] executando imediatamente em ${canonicalChatId}: ${firstCommandLine(effectiveText)}`);
-      await handleImmediateSystemCommand(channel, canonicalChatId, effectiveText);
+    if (await runImmediateTestCommand(channel, canonicalChatId, effectiveText)) {
+      console.log(`[PersonalizeWppConect] comando imediato executado (${source}) em ${canonicalChatId}`);
+      buffer.clear(canonicalChatId);
       return;
     }
 
@@ -452,6 +440,14 @@ async function main() {
     }
 
     await repairSessionServiceLabel(channel, canonicalChatId, repairedServiceLabels, 'primeira mensagem');
+
+    const key = messageKey(raw || { from: canonicalChatId, text: effectiveText });
+    if (processedMessageIds.has(key)) return;
+    processedMessageIds.add(key);
+    if (processedMessageIds.size > 5000) {
+      const first = processedMessageIds.values().next().value;
+      processedMessageIds.delete(first);
+    }
 
     const delayMs = resolveBufferDelay(canonicalChatId, raw, interactiveId);
     console.log(`[PersonalizeWppConect] mensagem enfileirada (${source}) de ${canonicalChatId}; espera=${delayMs}ms${interactiveId ? `; ação=${interactiveId}` : ''}`);
