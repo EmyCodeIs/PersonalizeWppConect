@@ -14,6 +14,10 @@ const COLOR_HEX = Object.freeze({
   pink: '#ff7eb6',
 });
 
+function wait(ms) {
+  return new Promise((resolve) => setTimeout(resolve, Math.max(0, Number(ms || 0))));
+}
+
 function normalizeName(value) {
   return String(value || '')
     .normalize('NFD')
@@ -139,6 +143,124 @@ async function readLabelSnapshot(channel) {
   }
 }
 
+function itemColorStatus(snapshot, item, target) {
+  const expectedHex = desiredHex(target.color);
+  const expectedIndex = nearestPaletteIndex(snapshot.palette, expectedHex);
+  const actualIndex = Number.isFinite(Number(item?.colorIndex)) ? Number(item.colorIndex) : null;
+  const actualHex = paletteHex(item?.hexColor)
+    || (Number.isInteger(actualIndex) ? paletteHex(snapshot.palette?.[actualIndex]) : null);
+
+  let matches = null;
+  if (Number.isInteger(expectedIndex) && Number.isInteger(actualIndex)) {
+    matches = expectedIndex === actualIndex;
+  } else if (expectedHex && actualHex) {
+    matches = expectedHex === actualHex;
+  }
+
+  return { expectedHex, expectedIndex, actualHex, actualIndex, matches };
+}
+
+function compareIds(a, b) {
+  const aId = String(a?.id || '');
+  const bId = String(b?.id || '');
+  const aNumber = Number(aId);
+  const bNumber = Number(bId);
+  if (Number.isFinite(aNumber) && Number.isFinite(bNumber)) return aNumber - bNumber;
+  return aId.localeCompare(bId);
+}
+
+function chooseCanonicalMatch(snapshot, target, matches = []) {
+  return [...matches].sort((a, b) => {
+    const colorA = itemColorStatus(snapshot, a, target).matches === true ? 1 : 0;
+    const colorB = itemColorStatus(snapshot, b, target).matches === true ? 1 : 0;
+    if (colorA !== colorB) return colorB - colorA;
+
+    const exactA = String(a?.name || '').trim() === String(target?.name || '').trim() ? 1 : 0;
+    const exactB = String(b?.name || '').trim() === String(target?.name || '').trim() ? 1 : 0;
+    if (exactA !== exactB) return exactB - exactA;
+
+    const countDifference = Number(b?.count || 0) - Number(a?.count || 0);
+    if (countDifference) return countDifference;
+    return compareIds(a, b);
+  })[0] || null;
+}
+
+async function deleteManagedLabels(channel, ids = []) {
+  const cleanIds = [...new Set(ids.map((id) => String(id || '').trim()).filter(Boolean))];
+  if (!cleanIds.length) return { ok: true, deletedIds: [] };
+  const client = channel?.client;
+  if (!client?.page?.evaluate) return { ok: false, deletedIds: [], reason: 'page_unavailable' };
+
+  try {
+    const result = await client.page.evaluate(async ({ ids }) => {
+      const WPP = window.WPP || null;
+      if (!WPP?.labels?.deleteLabel) {
+        return { ok: false, deletedIds: [], reason: 'delete_api_unavailable' };
+      }
+
+      const raw = await WPP.labels.deleteLabel(ids.length === 1 ? ids[0] : ids);
+      const values = Array.isArray(raw) ? raw : [raw];
+      const deletedIds = values
+        .filter((item) => item?.deleteLabelResult === true)
+        .map((item) => String(item?.id || ''));
+      return {
+        ok: deletedIds.length === ids.length,
+        deletedIds,
+        reason: deletedIds.length === ids.length ? null : 'partial_delete',
+      };
+    }, { ids: cleanIds });
+
+    return result || { ok: false, deletedIds: [], reason: 'empty_delete_result' };
+  } catch (err) {
+    return { ok: false, deletedIds: [], reason: String(err?.message || err || 'delete_error') };
+  }
+}
+
+async function repairDuplicateLabels(channel, snapshot = null) {
+  const current = snapshot || await readLabelSnapshot(channel);
+  if (!current.available) {
+    return { ok: false, repaired: 0, deletedIds: [], reason: current.reason || 'snapshot_unavailable' };
+  }
+
+  let repaired = 0;
+  const deletedIds = [];
+  const failures = [];
+
+  for (const target of managedTargets()) {
+    const matches = (current.items || []).filter((item) => normalizeName(item.name) === normalizeName(target.name));
+    if (matches.length <= 1) continue;
+
+    const canonical = chooseCanonicalMatch(current, target, matches);
+    const duplicates = matches.filter((item) => String(item.id) !== String(canonical?.id));
+    const ids = duplicates.map((item) => String(item.id || '')).filter(Boolean);
+    if (!canonical || !ids.length) continue;
+
+    console.warn(
+      `[LISTAS][REPARO] ${target.type} "${target.name}" duplicada. `
+      + `Mantendo ID=${canonical.id} e removendo IDs=${ids.join(', ')}`,
+    );
+
+    const result = await deleteManagedLabels(channel, ids);
+    if (result.ok) {
+      repaired += 1;
+      deletedIds.push(...result.deletedIds);
+      await wait(900);
+    } else {
+      failures.push({ target, ids, reason: result.reason || 'delete_failed' });
+      console.error(
+        `[LISTAS][REPARO] falha ao remover duplicatas de "${target.name}": ${result.reason || 'erro desconhecido'}`,
+      );
+    }
+  }
+
+  return {
+    ok: failures.length === 0,
+    repaired,
+    deletedIds,
+    failures,
+  };
+}
+
 function inspectTarget(snapshot, target, { requireColor = true } = {}) {
   const wantedName = normalizeName(target.name);
   const matches = (snapshot.items || []).filter((item) => normalizeName(item.name) === wantedName);
@@ -168,44 +290,29 @@ function inspectTarget(snapshot, target, { requireColor = true } = {}) {
   }
 
   const item = matches[0];
-  const actualIndex = Number.isFinite(Number(item.colorIndex)) ? Number(item.colorIndex) : null;
-  const actualHex = paletteHex(item.hexColor)
-    || (Number.isInteger(actualIndex) ? paletteHex(snapshot.palette?.[actualIndex]) : null);
+  const color = itemColorStatus(snapshot, item, target);
 
-  let colorMatches = null;
-  if (Number.isInteger(expectedIndex) && Number.isInteger(actualIndex)) {
-    colorMatches = expectedIndex === actualIndex;
-  } else if (expectedHex && actualHex) {
-    colorMatches = expectedHex === actualHex;
-  }
-
-  if (colorMatches === false) {
+  if (color.matches === false) {
     return {
       ok: false,
       blocking: true,
       code: 'wrong_color',
       target,
       item,
-      expectedHex,
-      expectedIndex,
-      actualHex,
-      actualIndex,
+      ...color,
       message: `${target.type} "${target.name}" está com cor diferente da configurada (${target.color})`,
       matches,
     };
   }
 
-  if (requireColor && colorMatches === null) {
+  if (requireColor && color.matches === null) {
     return {
       ok: false,
       blocking: true,
       code: 'color_unverified',
       target,
       item,
-      expectedHex,
-      expectedIndex,
-      actualHex,
-      actualIndex,
+      ...color,
       message: `não foi possível confirmar a cor de ${target.type} "${target.name}"`,
       matches,
     };
@@ -217,10 +324,7 @@ function inspectTarget(snapshot, target, { requireColor = true } = {}) {
     code: 'ok',
     target,
     item,
-    expectedHex,
-    expectedIndex,
-    actualHex,
-    actualIndex,
+    ...color,
     matches,
   };
 }
@@ -270,9 +374,13 @@ function logAuditReport(report, prefix = '[LISTAS][PRECHECK]') {
 
 module.exports = {
   auditStartupLabels,
+  deleteManagedLabels,
   logAuditReport,
   managedTargets,
+  readLabelSnapshot,
+  repairDuplicateLabels,
   _test: {
+    chooseCanonicalMatch,
     desiredHex,
     inspectTarget,
     nearestPaletteIndex,
