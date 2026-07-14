@@ -9,4 +9,5 @@ installIdempotentServiceLabels();
 
 require('./core/handoffPreload');
 require('./core/resetCleanupPreload');
+require('./core/customerFlowFixPreload');
 require('./bootstrap');
