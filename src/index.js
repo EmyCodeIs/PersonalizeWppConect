@@ -15,6 +15,7 @@ const {
   initializeServiceLabels,
   replaceServiceLabel,
 } = require('./core/serviceLabels');
+const { getAutomationBlock, registerManualTakeover } = require('./core/sellerHandoff');
 const Store = require('./services/leadStore');
 const Identity = require('./services/contactIdentity');
 const { env } = require('./config/env');
@@ -145,7 +146,6 @@ function resolveBufferDelay(clientId, raw, interactiveId) {
   const session = Store.getSession(clientId);
   const stage = String(session?.etapa || '').trim();
 
-  // Mesmos tempos operacionais do fluxo Personalize em produção.
   if (stage === 'tamanho') return env.measureBufferMs;
   if (stage === 'arte_coleta') return env.artBufferMs;
   if (stage === 'endereco') return env.addressBufferMs;
@@ -256,6 +256,7 @@ async function main() {
   console.log(`[PersonalizeWppConect] buffers de coleta: medida=${env.measureBufferMs}ms arte=${env.artBufferMs}ms endereço=${env.addressBufferMs}ms Pantone=${env.pantoneBufferMs}ms observação=${env.observationBufferMs}ms cidade=${env.cityBufferMs}ms`);
   console.log(`[PersonalizeWppConect] buffer listas/botões: ${env.interactiveBufferMs}ms`);
   console.log(`[PersonalizeWppConect] fila global: concorrência=${env.maxConcurrentChats} espera=${env.maxQueueSize} timeout=${env.chatProcessTimeoutMs}ms`);
+  console.log('[PersonalizeWppConect] handoff: etiqueta de vendedor e mensagem manual bloqueiam o bot automaticamente');
   console.log('[PersonalizeWppConect] respostas comuns: digitação única + balões sem pausa artificial');
   console.log('[PersonalizeWppConect] boas-vindas: saudação + imagem com link na legenda + lista, sem digitação e sem delay artificial');
   console.log('[PersonalizeWppConect] listas: cria uma única vez com WPP.lists, reutiliza pelo nome, recupera sessões ativas e nunca remove listas manuais');
@@ -277,6 +278,13 @@ async function main() {
   const buffer = new BufferManager({
     delayMs: env.bufferMs,
     onFlush: async (clientId, bufferedMessages) => {
+      const guardBeforeQueue = await getAutomationBlock(channel, clientId);
+      if (guardBeforeQueue.blocked) {
+        console.log(`[HANDOFF] bloqueado antes da fila: ${clientId} | motivo=${guardBeforeQueue.reason} | vendedor=${guardBeforeQueue.seller || '-'} | etiqueta=${guardBeforeQueue.labelName || '-'}`);
+        buffer.clear(clientId);
+        return;
+      }
+
       const text = mergeMessages(bufferedMessages);
       if (!text) return;
       const preparedText = prepareBufferedInput(clientId, text, bufferedMessages);
@@ -287,6 +295,12 @@ async function main() {
 
       try {
         await taskQueue.enqueue(clientId, async () => {
+          const guardBeforeRun = await getAutomationBlock(channel, clientId);
+          if (guardBeforeRun.blocked) {
+            console.log(`[HANDOFF] bloqueado antes do processamento: ${clientId} | motivo=${guardBeforeRun.reason} | vendedor=${guardBeforeRun.seller || '-'} | etiqueta=${guardBeforeRun.labelName || '-'}`);
+            return;
+          }
+
           const waitMs = Date.now() - queuedAt;
           console.log(`[QUEUE] iniciado chat=${clientId} espera=${waitMs}ms ${formatQueueStats(taskQueue.stats())}`);
 
@@ -319,6 +333,32 @@ async function main() {
     },
   });
 
+  const onOutgoingMessage = async ({ from, text, raw, source = 'outgoing-event' }) => {
+    const effectiveText = String(text || '').trim() || mediaMarker(raw);
+    const identity = Identity.registerContact({ chatId: from, raw });
+    const canonicalChatId = identity?.primaryChatId || from;
+    if (!canonicalChatId || /@g\.us$/i.test(canonicalChatId)) return;
+
+    const allowed = isAllowedClient({ from: canonicalChatId, raw });
+    if (!allowed.allowed) return;
+
+    const matchedBotMessage = channel?.outboundTracker?.consumeIfBot?.(canonicalChatId, raw);
+    if (matchedBotMessage) {
+      console.log(`[HANDOFF] saída do bot reconhecida: ${canonicalChatId} | tipo=${matchedBotMessage.type}`);
+      return;
+    }
+
+    registerManualTakeover(canonicalChatId, {
+      reason: 'manual_outbound_message',
+      source: 'manual_outbound_message',
+      blockedHours: env.humanBlockHours,
+    });
+    buffer.clear(canonicalChatId);
+
+    const preview = String(effectiveText || '[sem texto]').slice(0, 120);
+    console.log(`[HANDOFF] mensagem manual detectada em ${canonicalChatId} | origem=${source} | texto=${preview}`);
+  };
+
   const onMessage = async ({ from, text, raw, source = 'event' }) => {
     const interactiveId = extractInteractiveId(raw);
     const effectiveText = interactiveId || String(text || '').trim() || mediaMarker(raw);
@@ -334,7 +374,13 @@ async function main() {
       return;
     }
 
-    // Primeira mensagem depois de um reinício também confere a lista da sessão ativa.
+    const guardBeforeBuffer = await getAutomationBlock(channel, canonicalChatId);
+    if (guardBeforeBuffer.blocked) {
+      console.log(`[HANDOFF] mensagem ignorada (${source}) em ${canonicalChatId} | motivo=${guardBeforeBuffer.reason} | vendedor=${guardBeforeBuffer.seller || '-'} | etiqueta=${guardBeforeBuffer.labelName || '-'}`);
+      buffer.clear(canonicalChatId);
+      return;
+    }
+
     await repairSessionServiceLabel(channel, canonicalChatId, repairedServiceLabels, 'primeira mensagem');
 
     const key = messageKey(raw || { from: canonicalChatId, text: effectiveText });
@@ -364,7 +410,7 @@ async function main() {
     return;
   }
 
-  channel = await createWppChannel({ onMessage });
+  channel = await createWppChannel({ onMessage, onOutgoingMessage });
   blockPdfSending(channel);
   installMessageExperience(channel);
   await initializeServiceLabels(channel).catch((err) => {
