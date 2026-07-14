@@ -55,6 +55,11 @@ const env = {
   flowSessionTtlHours,
   completedSessionTtlHours: Math.max(1, num('COMPLETED_SESSION_TTL_HOURS', flowSessionTtlHours)),
 
+  // Controle global de concorrência para evitar excesso de processamento simultâneo.
+  maxConcurrentChats: Math.max(1, num('MAX_CONCURRENT_CHATS', 2)),
+  maxQueueSize: Math.max(1, num('MAX_QUEUE_SIZE', 40)),
+  chatProcessTimeoutMs: Math.max(5000, num('CHAT_PROCESS_TIMEOUT_MS', 45000)),
+
   // Entrada do cliente. O buffer curto atende respostas simples; o longo é usado
   // em medidas, arte, endereço, Pantone e observações com várias mensagens.
   bufferMs: Math.max(800, num('BUFFER_MS', 4500)),
