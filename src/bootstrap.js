@@ -12,32 +12,20 @@ const {
   repairDuplicateLabels,
 } = require('./core/startupLabelAudit');
 
-const PRECHECK_ALLOWED_COMMANDS = new Set(['/reset', '/reiniciar', '/resetarsys']);
-
-function boolEnv(name, fallback = false) {
-  const raw = process.env[name];
+function boolEnv(name, fallback = false, legacyName = null) {
+  const raw = process.env[name] ?? (legacyName ? process.env[legacyName] : undefined);
   if (raw === undefined || raw === null || raw === '') return fallback;
   return ['1', 'true', 'yes', 'sim', 'on'].includes(String(raw).trim().toLowerCase());
 }
 
-function numEnv(name, fallback) {
-  const value = Number(process.env[name]);
+function numEnv(name, fallback, legacyName = null) {
+  const raw = process.env[name] ?? (legacyName ? process.env[legacyName] : undefined);
+  const value = Number(raw);
   return Number.isFinite(value) ? value : fallback;
 }
 
 function wait(ms) {
   return new Promise((resolve) => setTimeout(resolve, Math.max(0, Number(ms || 0))));
-}
-
-function extractCommand(payload = {}) {
-  const text = String(
-    payload?.text
-    || payload?.raw?.body
-    || payload?.raw?.caption
-    || payload?.raw?.text
-    || '',
-  ).trim();
-  return text.split(/\r?\n/)[0].trim().toLowerCase();
 }
 
 let sessionAccessChild = null;
@@ -75,115 +63,124 @@ function stopWindowsSessionAccess() {
   try { sessionAccessChild.kill(); } catch (_) {}
 }
 
-async function runLabelPreflight(channel) {
-  const attempts = Math.max(1, numEnv('LABEL_STARTUP_CHECK_ATTEMPTS', 5));
-  const delayMs = Math.max(500, numEnv('LABEL_STARTUP_CHECK_DELAY_MS', 1800));
-  const requireColor = boolEnv('LABEL_STARTUP_REQUIRE_COLOR', true);
-  const autoRemoveDuplicates = boolEnv('LABEL_STARTUP_AUTO_REMOVE_DUPLICATES', true);
+async function runLabelMaintenanceCycle(channel) {
+  const attempts = Math.max(1, numEnv(
+    'LABEL_MAINTENANCE_CHECK_ATTEMPTS',
+    3,
+    'LABEL_STARTUP_CHECK_ATTEMPTS',
+  ));
+  const delayMs = Math.max(500, numEnv(
+    'LABEL_MAINTENANCE_CHECK_DELAY_MS',
+    1800,
+    'LABEL_STARTUP_CHECK_DELAY_MS',
+  ));
+  const requireColor = boolEnv(
+    'LABEL_MAINTENANCE_REQUIRE_COLOR',
+    true,
+    'LABEL_STARTUP_REQUIRE_COLOR',
+  );
+  const autoRemoveDuplicates = boolEnv(
+    'LABEL_MAINTENANCE_AUTO_REMOVE_DUPLICATES',
+    true,
+    'LABEL_STARTUP_AUTO_REMOVE_DUPLICATES',
+  );
 
-  const created = await initializeServiceLabels(channel);
-  if (!created) {
-    console.error('[LISTAS][PRECHECK] não foi possível preparar todas as listas de serviço.');
+  try {
+    const prepared = await initializeServiceLabels(channel);
+    if (!prepared) {
+      console.warn('[LISTAS][SETOR] nem todas as etiquetas de serviço puderam ser preparadas nesta tentativa.');
+    }
+  } catch (err) {
+    console.warn('[LISTAS][SETOR] preparação falhou sem interromper o atendimento:', err?.message || err);
   }
 
   let report = null;
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
-    report = await auditStartupLabels(channel, { requireColor });
+    try {
+      report = await auditStartupLabels(channel, { requireColor });
 
-    const hasDuplicates = (report?.issues || []).some((item) => item.code === 'duplicate');
-    if (hasDuplicates && autoRemoveDuplicates) {
-      const repair = await repairDuplicateLabels(channel, report.snapshot);
-      if (repair.deletedIds?.length) {
-        console.log(`[LISTAS][REPARO] duplicatas removidas: ${repair.deletedIds.join(', ')}`);
-        await wait(1200);
-        report = await auditStartupLabels(channel, { requireColor });
+      const hasDuplicates = (report?.issues || []).some((item) => item.code === 'duplicate');
+      if (hasDuplicates && autoRemoveDuplicates) {
+        const repair = await repairDuplicateLabels(channel, report.snapshot);
+        if (repair.deletedIds?.length) {
+          console.log(`[LISTAS][REPARO] duplicatas removidas: ${repair.deletedIds.join(', ')}`);
+          await wait(1200);
+          report = await auditStartupLabels(channel, { requireColor });
+        }
       }
+
+      if (report?.ready) break;
+    } catch (err) {
+      console.warn('[LISTAS][SETOR] auditoria falhou sem interromper o atendimento:', err?.message || err);
     }
 
-    if (report?.ready) break;
-    console.warn(`[LISTAS][PRECHECK] tentativa ${attempt}/${attempts} ainda não liberou o atendimento.`);
     if (attempt < attempts) await wait(delayMs);
   }
 
-  logAuditReport(report);
+  logAuditReport(report, '[LISTAS][SETOR]');
   return report;
 }
 
-const originalCreateWppChannel = WppClient.createWppChannel;
-WppClient.createWppChannel = async function createGuardedWppChannel(options = {}) {
-  const strict = boolEnv('LABEL_STARTUP_STRICT', true);
-  const retryMs = Math.max(3000, numEnv('LABEL_STARTUP_RETRY_MS', 15000));
-  let ready = !strict;
-  let checking = false;
-  let retryTimer = null;
-  const originalOnMessage = options.onMessage;
+function startLabelMaintenanceSupervisor(channel) {
+  if (!boolEnv('LABEL_MAINTENANCE_ENABLED', true)) {
+    console.log('[LISTAS][SETOR] manutenção automática desativada no .env.');
+    return;
+  }
 
-  const guardedOnMessage = async (payload) => {
-    if (!ready) {
-      const command = extractCommand(payload);
-      if (PRECHECK_ALLOWED_COMMANDS.has(command)) {
-        console.log(`[LISTAS][PRECHECK] comando permitido durante bloqueio: ${command}`);
-        return originalOnMessage?.(payload);
-      }
+  const retryMs = Math.max(5000, numEnv(
+    'LABEL_MAINTENANCE_RETRY_MS',
+    15000,
+    'LABEL_STARTUP_RETRY_MS',
+  ));
+  let running = false;
+  let timer = null;
 
-      const chatId = payload?.from || payload?.raw?.from || '-';
-      console.warn(`[LISTAS][PRECHECK] mensagem ignorada enquanto o sistema valida listas: ${chatId}`);
-      await payload?.channel?.markUnread?.(chatId).catch(() => false);
+  const schedule = (delay = retryMs) => {
+    if (timer) return;
+    timer = setTimeout(async () => {
+      timer = null;
+      await run();
+    }, delay);
+    timer.unref?.();
+  };
+
+  const run = async () => {
+    if (running) {
+      schedule(retryMs);
       return;
     }
-    return originalOnMessage?.(payload);
-  };
 
-  const channel = await originalCreateWppChannel({
-    ...options,
-    onMessage: guardedOnMessage,
-  });
-
-  const scheduleRetry = (delay = retryMs) => {
-    if (ready || retryTimer) return;
-    retryTimer = setTimeout(async () => {
-      retryTimer = null;
-      await checkNow();
-      if (!ready) scheduleRetry(retryMs);
-    }, delay);
-    retryTimer.unref?.();
-  };
-
-  const checkNow = async () => {
-    if (checking) return;
-    checking = true;
+    running = true;
     try {
-      const report = await runLabelPreflight(channel);
-      if (report?.ready || !strict) {
-        ready = true;
-        if (retryTimer) {
-          clearTimeout(retryTimer);
-          retryTimer = null;
-        }
-        console.log('[LISTAS][PRECHECK] atendimento liberado.');
-      } else {
-        ready = false;
-        console.warn(
-          `[LISTAS][PRECHECK] atendimento segue bloqueado, mas o sistema permanece ligado. `
-          + `Nova tentativa em ${retryMs}ms. /resetarsys continua disponível.`,
-        );
+      const report = await runLabelMaintenanceCycle(channel);
+      if (report?.ready) {
+        console.log('[LISTAS][SETOR] etiquetas prontas. Pré-atendimento permaneceu ativo durante a checagem.');
+        return;
       }
+
+      console.warn(
+        `[LISTAS][SETOR] etiquetas ainda precisam de atenção. `
+        + `O pré-atendimento continua ativo; nova tentativa em ${retryMs}ms.`,
+      );
+      schedule(retryMs);
     } catch (err) {
-      ready = !strict;
-      console.error('[LISTAS][PRECHECK] falha inesperada na validação:', err?.message || err);
+      console.error(
+        '[LISTAS][SETOR] falha isolada na manutenção de etiquetas; o pré-atendimento continua ativo:',
+        err?.message || err,
+      );
+      schedule(retryMs);
     } finally {
-      checking = false;
+      running = false;
     }
   };
 
-  if (strict) {
-    console.log('[LISTAS][PRECHECK] atendimento bloqueado até concluir validação e reparo automático.');
-  }
-  setImmediate(async () => {
-    await checkNow();
-    if (!ready) scheduleRetry(retryMs);
-  });
+  setImmediate(run);
+}
 
+const originalCreateWppChannel = WppClient.createWppChannel;
+WppClient.createWppChannel = async function createChannelWithIsolatedSectors(options = {}) {
+  const channel = await originalCreateWppChannel(options);
+  startLabelMaintenanceSupervisor(channel);
   return channel;
 };
 
