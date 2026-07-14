@@ -60,6 +60,11 @@ const env = {
   maxQueueSize: Math.max(1, num('MAX_QUEUE_SIZE', 40)),
   chatProcessTimeoutMs: Math.max(5000, num('CHAT_PROCESS_TIMEOUT_MS', 45000)),
 
+  // Handoff humano / vendedores.
+  sellerLabelBlockingEnabled: bool('SELLER_LABEL_BLOCKING_ENABLED', true),
+  sellerLabelRules: mapList('SELLER_LABEL_RULES'),
+  humanBlockHours: Math.max(1, num('HUMAN_BLOCK_HOURS', 24)),
+
   // Entrada do cliente. O buffer curto atende respostas simples; o longo é usado
   // em medidas, arte, endereço, Pantone e observações com várias mensagens.
   bufferMs: Math.max(800, num('BUFFER_MS', 4500)),
