@@ -2,6 +2,7 @@
 
 const ServiceLabels = require('./serviceLabels');
 const Identity = require('../services/contactIdentity');
+const Store = require('../services/leadStore');
 
 const confirmed = new Set();
 const inFlight = new Map();
@@ -20,6 +21,33 @@ function operationKey(clientId, service) {
 
 function isApplied(result) {
   return result === true || result?.applied === true;
+}
+
+function clearServiceLabelCache(clientId = '') {
+  const contactKey = normalizedContactKey(clientId);
+  if (!contactKey) {
+    confirmed.clear();
+    inFlight.clear();
+    return;
+  }
+
+  const prefix = `${contactKey}:`;
+  for (const key of confirmed) {
+    if (key.startsWith(prefix)) confirmed.delete(key);
+  }
+  for (const key of inFlight.keys()) {
+    if (key.startsWith(prefix)) inFlight.delete(key);
+  }
+}
+
+function installResetCacheCleanup() {
+  if (Store.__serviceLabelCacheResetInstalled || typeof Store.resetSystem !== 'function') return;
+  const originalResetSystem = Store.resetSystem.bind(Store);
+  Store.resetSystem = function resetSystemAndClearServiceLabelCache(...args) {
+    clearServiceLabelCache();
+    return originalResetSystem(...args);
+  };
+  Store.__serviceLabelCacheResetInstalled = true;
 }
 
 function installIdempotentServiceLabels() {
@@ -55,25 +83,9 @@ function installIdempotentServiceLabels() {
     return task;
   };
 
+  installResetCacheCleanup();
   ServiceLabels.__idempotentServiceLabelsInstalled = true;
   return ServiceLabels;
-}
-
-function clearServiceLabelCache(clientId = '') {
-  const contactKey = normalizedContactKey(clientId);
-  if (!contactKey) {
-    confirmed.clear();
-    inFlight.clear();
-    return;
-  }
-
-  const prefix = `${contactKey}:`;
-  for (const key of confirmed) {
-    if (key.startsWith(prefix)) confirmed.delete(key);
-  }
-  for (const key of inFlight.keys()) {
-    if (key.startsWith(prefix)) inFlight.delete(key);
-  }
 }
 
 module.exports = {
