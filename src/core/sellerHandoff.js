@@ -16,6 +16,43 @@ const COLOR_HEX = Object.freeze({
   pink: '#ff7eb6',
 });
 
+function hexToRgb(hex) {
+  const clean = String(hex || '').replace('#', '').trim();
+  if (!/^[0-9a-f]{6}$/i.test(clean)) return null;
+  return [
+    parseInt(clean.slice(0, 2), 16),
+    parseInt(clean.slice(2, 4), 16),
+    parseInt(clean.slice(4, 6), 16),
+  ];
+}
+
+function candidateHexFromPalette(entry) {
+  return typeof entry === 'string'
+    ? entry
+    : (entry?.hex || entry?.hexColor || entry?.color || entry?.value || '');
+}
+
+function nearestPaletteIndex(palette, requestedHex) {
+  const wanted = hexToRgb(requestedHex);
+  if (!wanted || !Array.isArray(palette) || !palette.length) return null;
+
+  let bestIndex = null;
+  let bestDistance = Number.POSITIVE_INFINITY;
+  palette.forEach((entry, index) => {
+    const candidate = hexToRgb(candidateHexFromPalette(entry));
+    if (!candidate) return;
+    const distance = ((candidate[0] - wanted[0]) ** 2)
+      + ((candidate[1] - wanted[1]) ** 2)
+      + ((candidate[2] - wanted[2]) ** 2);
+    if (distance < bestDistance) {
+      bestDistance = distance;
+      bestIndex = index;
+    }
+  });
+
+  return Number.isInteger(bestIndex) ? bestIndex : null;
+}
+
 function normalizeName(value) {
   return String(value || '')
     .normalize('NFD')
@@ -74,6 +111,13 @@ async function inspectChatLabels(client, chatId) {
         }
       } catch (_) {}
 
+      let palette = [];
+      try {
+        if (WPP?.labels?.getLabelColorPalette) {
+          palette = await WPP.labels.getLabelColorPalette();
+        }
+      } catch (_) {}
+
       const labelStore = Store?.Label || Store?.Labels || null;
       if (typeof labelStore?.getLabelsForModel !== 'function') {
         return { available: false, chatFound: true, items: [] };
@@ -88,12 +132,14 @@ async function inspectChatLabels(client, chatId) {
       const items = attached.map((entry) => {
         const id = String(entry?.id?._serialized || entry?.id || entry?.labelId || entry || '');
         const known = all.find((item) => String(item?.id || item?.labelId || '') === id) || null;
+        const colorIndex = entry?.colorIndex ?? entry?.colorId ?? entry?.color
+          ?? known?.colorIndex ?? known?.colorId ?? known?.color ?? null;
+        const paletteEntry = Number.isInteger(Number(colorIndex)) ? palette[Number(colorIndex)] : null;
         return {
           id,
           name: String(entry?.name || entry?.label || known?.name || known?.label || ''),
-          colorIndex: entry?.colorIndex ?? entry?.colorId ?? entry?.color
-            ?? known?.colorIndex ?? known?.colorId ?? known?.color ?? null,
-          hexColor: String(entry?.hexColor || known?.hexColor || ''),
+          colorIndex,
+          hexColor: String(entry?.hexColor || known?.hexColor || paletteEntry?.hex || paletteEntry?.hexColor || paletteEntry?.color || paletteEntry?.value || ''),
         };
       }).filter((item) => item.id || item.name);
 
@@ -119,6 +165,7 @@ function findSellerLabelMatch(items = []) {
       const normalizedSeller = normalizeName(sellerKey);
       const wantedHex = desiredHex(sellerColor);
       const labelHex = String(item?.hexColor || '').trim().toLowerCase();
+      const labelColorIndex = Number.isFinite(Number(item?.colorIndex)) ? Number(item.colorIndex) : null;
       const byName = normalizedSeller && normalizedLabelName.includes(normalizedSeller);
       const byHex = Boolean(wantedHex && labelHex && wantedHex === labelHex);
 
@@ -130,7 +177,7 @@ function findSellerLabelMatch(items = []) {
           labelName,
           labelId: String(item?.id || ''),
           labelHex: labelHex || null,
-          labelColorIndex: Number.isFinite(Number(item?.colorIndex)) ? Number(item.colorIndex) : null,
+          labelColorIndex,
           matchMode: byName ? 'name' : 'hex',
         };
       }
