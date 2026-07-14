@@ -171,10 +171,6 @@ function compareIds(a, b) {
 
 function chooseCanonicalMatch(snapshot, target, matches = []) {
   return [...matches].sort((a, b) => {
-    const colorA = itemColorStatus(snapshot, a, target).matches === true ? 1 : 0;
-    const colorB = itemColorStatus(snapshot, b, target).matches === true ? 1 : 0;
-    if (colorA !== colorB) return colorB - colorA;
-
     const exactA = String(a?.name || '').trim() === String(target?.name || '').trim() ? 1 : 0;
     const exactB = String(b?.name || '').trim() === String(target?.name || '').trim() ? 1 : 0;
     if (exactA !== exactB) return exactB - exactA;
@@ -187,39 +183,145 @@ function chooseCanonicalMatch(snapshot, target, matches = []) {
 
 async function deleteManagedLabels(channel, ids = []) {
   const cleanIds = [...new Set(ids.map((id) => String(id || '').trim()).filter(Boolean))];
-  if (!cleanIds.length) return { ok: true, deletedIds: [] };
+  if (!cleanIds.length) return { ok: true, deletedIds: [], failures: [] };
+
   const client = channel?.client;
-  if (!client?.page?.evaluate) return { ok: false, deletedIds: [], reason: 'page_unavailable' };
-
-  try {
-    const result = await client.page.evaluate(async ({ ids }) => {
-      const WPP = window.WPP || null;
-      if (!WPP?.labels?.deleteLabel) {
-        return { ok: false, deletedIds: [], reason: 'delete_api_unavailable' };
-      }
-
-      const raw = await WPP.labels.deleteLabel(ids.length === 1 ? ids[0] : ids);
-      const values = Array.isArray(raw) ? raw : [raw];
-      const deletedIds = values
-        .filter((item) => item?.deleteLabelResult === true)
-        .map((item) => String(item?.id || ''));
-      return {
-        ok: deletedIds.length === ids.length,
-        deletedIds,
-        reason: deletedIds.length === ids.length ? null : 'partial_delete',
-      };
-    }, { ids: cleanIds });
-
-    return result || { ok: false, deletedIds: [], reason: 'empty_delete_result' };
-  } catch (err) {
-    return { ok: false, deletedIds: [], reason: String(err?.message || err || 'delete_error') };
+  if (!client?.page?.evaluate) {
+    return {
+      ok: false,
+      deletedIds: [],
+      failures: cleanIds.map((id) => ({ id, reason: 'page_unavailable' })),
+      reason: 'page_unavailable',
+    };
   }
+
+  const deletedIds = [];
+  const failures = [];
+
+  for (const id of cleanIds) {
+    let browserResult = null;
+    try {
+      browserResult = await client.page.evaluate(async ({ id: rawId }) => {
+        const WPP = window.WPP || null;
+        const id = String(rawId || '').trim();
+        const errorText = (err) => {
+          if (typeof err === 'string') return err;
+          if (err?.message) return String(err.message);
+          if (err?.text) return String(err.text);
+          try {
+            const serialized = JSON.stringify(err);
+            if (serialized && serialized !== '{}') return serialized;
+          } catch (_) {}
+          return String(err || 'erro desconhecido');
+        };
+        const getLabels = async () => {
+          const value = await WPP.labels.getAllLabels();
+          return Array.isArray(value) ? value : Object.values(value || {});
+        };
+        const labelId = (item) => String(item?.id?._serialized || item?.id || item?.labelId || '');
+        const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+        if (!WPP?.labels?.getAllLabels) {
+          return { submitted: false, deleted: false, reason: 'labels_api_unavailable' };
+        }
+
+        const before = await getLabels();
+        const original = before.find((item) => labelId(item) === id) || null;
+        if (!original) {
+          return { submitted: true, deleted: true, alreadyAbsent: true, id };
+        }
+
+        const errors = [];
+        let submitted = false;
+
+        if (typeof WPP.labels.deleteLabel === 'function') {
+          try {
+            await WPP.labels.deleteLabel([id]);
+            submitted = true;
+          } catch (err) {
+            errors.push(`public:${errorText(err)}`);
+          }
+        } else {
+          errors.push('public:delete_api_unavailable');
+        }
+
+        await sleep(700);
+        let after = await getLabels();
+        if (!after.some((item) => labelId(item) === id)) {
+          return { submitted: true, deleted: true, id, errors };
+        }
+
+        const labelStore = WPP?.whatsapp?.LabelStore
+          || window.Store?.Label
+          || window.Store?.Labels
+          || null;
+        const deleteAction = WPP?.whatsapp?.functions?.labelDeleteAction || null;
+        const label = labelStore?.get?.(id) || original;
+
+        if (typeof deleteAction === 'function' && label) {
+          try {
+            await deleteAction(
+              id,
+              String(label?.name || label?.label || ''),
+              Number(label?.colorIndex ?? label?.colorId ?? label?.color ?? 0),
+            );
+            submitted = true;
+          } catch (err) {
+            errors.push(`fallback:${errorText(err)}`);
+          }
+        } else {
+          errors.push('fallback:internal_delete_unavailable');
+        }
+
+        await sleep(700);
+        after = await getLabels();
+        const deleted = !after.some((item) => labelId(item) === id);
+        return {
+          submitted,
+          deleted,
+          id,
+          errors,
+          reason: deleted ? null : errors.join(' | ') || 'label_still_exists',
+        };
+      }, { id });
+    } catch (err) {
+      browserResult = {
+        submitted: false,
+        deleted: false,
+        reason: err?.stack || err?.message || String(err || 'delete_evaluate_error'),
+      };
+    }
+
+    await wait(350);
+    const verified = await readLabelSnapshot(channel);
+    const stillExists = verified.available
+      ? verified.items.some((item) => String(item.id) === id)
+      : !browserResult?.deleted;
+
+    if (!stillExists) {
+      deletedIds.push(id);
+      console.log(`[LISTAS][REPARO] etiqueta duplicada removida | ID=${id}`);
+    } else {
+      const reason = browserResult?.reason
+        || browserResult?.errors?.join(' | ')
+        || 'etiqueta continua existindo após a exclusão';
+      failures.push({ id, reason });
+      console.warn(`[LISTAS][REPARO] exclusão não confirmada | ID=${id} | motivo=${reason}`);
+    }
+  }
+
+  return {
+    ok: failures.length === 0,
+    deletedIds,
+    failures,
+    reason: failures.length ? 'partial_delete' : null,
+  };
 }
 
 async function repairDuplicateLabels(channel, snapshot = null) {
   const current = snapshot || await readLabelSnapshot(channel);
   if (!current.available) {
-    return { ok: false, repaired: 0, deletedIds: [], reason: current.reason || 'snapshot_unavailable' };
+    return { ok: false, repaired: 0, deletedIds: [], failures: [], reason: current.reason || 'snapshot_unavailable' };
   }
 
   let repaired = 0;
@@ -236,20 +338,21 @@ async function repairDuplicateLabels(channel, snapshot = null) {
     if (!canonical || !ids.length) continue;
 
     console.warn(
-      `[LISTAS][REPARO] ${target.type} "${target.name}" duplicada. `
-      + `Mantendo ID=${canonical.id} e removendo IDs=${ids.join(', ')}`,
+      `[LISTAS][REPARO] duplicata encontrada | tipo=${target.type} | nome="${target.name}" `
+      + `| manter=${canonical.id} | remover=${ids.join(',')}`,
     );
 
     const result = await deleteManagedLabels(channel, ids);
-    if (result.ok) {
+    if (result.deletedIds?.length) {
       repaired += 1;
       deletedIds.push(...result.deletedIds);
-      await wait(900);
-    } else {
-      failures.push({ target, ids, reason: result.reason || 'delete_failed' });
-      console.error(
-        `[LISTAS][REPARO] falha ao remover duplicatas de "${target.name}": ${result.reason || 'erro desconhecido'}`,
-      );
+    }
+    if (result.failures?.length) {
+      failures.push({
+        target,
+        ids: result.failures.map((item) => item.id),
+        reason: result.failures.map((item) => `${item.id}:${item.reason}`).join(' | '),
+      });
     }
   }
 
@@ -364,12 +467,12 @@ function logAuditReport(report, prefix = '[LISTAS][PRECHECK]') {
     }
   }
   for (const issue of report.issues || []) {
-    console.error(`${prefix} BLOQUEIO: ${issue.message}`);
+    console.warn(`${prefix} ATENÇÃO: ${issue.message}`);
     if (issue.matches?.length) {
-      console.error(`${prefix} IDs encontrados: ${issue.matches.map((item) => item.id || '-').join(', ')}`);
+      console.warn(`${prefix} IDs encontrados: ${issue.matches.map((item) => item.id || '-').join(', ')}`);
     }
   }
-  console.log(`${prefix} resultado: ${report.ready ? 'PRONTO PARA ATENDER' : 'ATENDIMENTO BLOQUEADO'}`);
+  console.log(`${prefix} resultado: ${report.ready ? 'ETIQUETAS OK' : 'ETIQUETAS COM PENDÊNCIA — atendimento continua ativo'}`);
 }
 
 module.exports = {
