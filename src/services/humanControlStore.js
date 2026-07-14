@@ -21,10 +21,45 @@ function readJson(filePath, fallback) {
   }
 }
 
+function sleepSync(ms) {
+  if (!Number.isFinite(ms) || ms <= 0) return;
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, Math.max(1, Math.floor(ms)));
+}
+
 function writeJson(filePath, data) {
   ensureDataDir();
-  fs.writeFileSync(`${filePath}.tmp`, JSON.stringify(data, null, 2), 'utf8');
-  fs.renameSync(`${filePath}.tmp`, filePath);
+  const serialized = JSON.stringify(data, null, 2);
+  const tempPath = `${filePath}.${process.pid}.tmp`;
+  fs.writeFileSync(tempPath, serialized, 'utf8');
+
+  let renamed = false;
+  let lastError = null;
+  for (let attempt = 1; attempt <= 5; attempt += 1) {
+    try {
+      fs.renameSync(tempPath, filePath);
+      renamed = true;
+      break;
+    } catch (err) {
+      lastError = err;
+      if (!['EPERM', 'EBUSY', 'EACCES'].includes(err?.code)) break;
+      sleepSync(40 * attempt);
+    }
+  }
+
+  if (!renamed) {
+    try {
+      fs.writeFileSync(filePath, serialized, 'utf8');
+      renamed = true;
+    } catch (err) {
+      lastError = err;
+    }
+  }
+
+  try {
+    if (fs.existsSync(tempPath)) fs.unlinkSync(tempPath);
+  } catch (_) {}
+
+  if (!renamed && lastError) throw lastError;
 }
 
 function nowIso() {
