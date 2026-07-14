@@ -2,8 +2,10 @@
 
 const serviceLabels = require('./core/serviceLabels');
 const { ensureRequiredLabelsOnce } = require('./core/requiredLabelsStartup');
+const { installIdempotentServiceLabels } = require('./core/idempotentServiceLabels');
 
 serviceLabels.initializeServiceLabels = ensureRequiredLabelsOnce;
+installIdempotentServiceLabels();
 
 require('./core/handoffPreload');
 require('./bootstrap');
