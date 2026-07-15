@@ -15,4 +15,5 @@ require('./core/customerFlowFixPreload');
 require('./core/preferredSellerNotePreload');
 require('./core/completedFlowSilencePreload');
 require('./core/runtimeReliabilityPreload');
+require('./core/supportAndServicesPreload');
 require('./bootstrap');
