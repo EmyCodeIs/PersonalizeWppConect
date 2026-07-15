@@ -119,7 +119,7 @@ async function run() {
     askOtherDescricao: 'Me conta qual serviço ou produto você precisa. Você também pode enviar uma imagem ou arquivo de referência.',
     askOtherReferencia: 'Você tem alguma medida, foto, referência ou detalhe importante? Pode enviar por texto ou como anexo.',
     askOtherPrazo: 'Tem algum prazo ou urgência para esse pedido?',
-    completedContactNote: 'Certo! Encaminhei seu pedido para nossos vendedores e, em breve, alguém da equipe continuará o atendimento por aqui. 😊\n\nSe quiser acrescentar alguma informação ou tiver alguma dúvida, fique à vontade para enviar uma mensagem.',
+    completedContactNote: 'Certo! Seu pedido foi registrado e encaminhado para nossa equipe. Em breve, um vendedor continuará o atendimento por aqui. 😊',
     supportAsk: 'Certo, me explique sua demanda para que eu encaminhe ao nosso suporte.',
     supportForwarded: 'Certo, encaminhei sua mensagem para nossa equipe que em breve assumirá o atendimento. Aguarde por aqui. 🙂',
     supportNeedDetails: 'Pode me explicar o que aconteceu ou qual ajuda você precisa? Você também pode enviar imagem ou arquivo.',
@@ -142,10 +142,10 @@ async function run() {
     pickupAddress: 'Combinado! Você poderá retirar na empresa.\n\n📍 Nós estamos localizados na Rua Selênio 226, Bairro Prado.',
     installationNote: 'Para instalação, a equipe precisa analisar o endereço e os detalhes informados antes da confirmação final.',
     askObservation: '📝\nGostaria de anexar alguma informação sobre o letreiro? Pode ser quantidade, detalhe de logo, observação de instalação, acabamento ou qualquer ponto importante.',
-    askObservationText: 'Perfeito! Me envie a observação em uma ou mais mensagens. Quando você parar por alguns segundos, vou juntar tudo e finalizar o cadastro.',
-    askObservationWrite: 'Perfeito! Me envie a observação em uma ou mais mensagens. Quando você parar por alguns segundos, vou juntar tudo e finalizar o cadastro.',
+    askObservationText: 'Perfeito! Pode me contar o que gostaria de acrescentar?',
+    askObservationWrite: 'Perfeito! Pode me contar o que gostaria de acrescentar?',
     askGeneralObservation: '📝\nGostaria de acrescentar alguma observação ou detalhe importante sobre o pedido?',
-    askGeneralObservationText: 'Perfeito! Pode enviar a observação em uma ou mais mensagens. Vou juntar tudo antes de finalizar.',
+    askGeneralObservationText: 'Perfeito! Pode me contar o que gostaria de acrescentar?',
     fallback: 'Não consegui entender direitinho. Vou reenviar a etapa atual para você escolher novamente.',
   };
 
@@ -205,6 +205,14 @@ async function run() {
   assert.equal(readiness.findExactSellerLabel([{ name: 'C. Eduardo' }]).seller, 'c. eduardo');
   assert.equal(readiness.findExactSellerLabel([{ name: 'Adriano Silva' }]), null);
   assert.equal(readiness.findExactSellerLabel([{ name: 'Acompanhar' }]), null);
+  assert.equal(
+    readiness.findExactSellerLabel([
+      { name: 'fornecedor', hexColor: '#feb100' },
+      { name: 'C. Eduardo', hexColor: '#feb100' },
+    ]).seller,
+    'c. eduardo',
+    'cor igual em etiqueta manual não pode impedir a detecção do vendedor pelo nome exato',
+  );
 
   const now = Date.now();
   assert.equal(readiness.isUnreadWithinAge({ raw: { timestamp: Math.floor((now - 3600000) / 1000) } }, { now, maxAgeHours: 24 }), true);
