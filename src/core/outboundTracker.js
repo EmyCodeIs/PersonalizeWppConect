@@ -56,6 +56,26 @@ function extractType(message = {}) {
   ).trim().toLowerCase() || 'text';
 }
 
+function extractFilename(message = {}) {
+  return normalizeText(
+    message?.filename
+    || message?.fileName
+    || message?.document?.filename
+    || message?.document?.fileName
+    || ''
+  );
+}
+
+function isMediaType(type = '') {
+  return /image|video|document|pdf|application|audio|ptt|sticker/.test(String(type || '').toLowerCase());
+}
+
+function looksLikeEncodedMedia(value = '') {
+  const compact = String(value || '').replace(/\s+/g, '');
+  if (compact.length < 256) return false;
+  return /^(?:data:[^;]+;base64,)?[A-Za-z0-9+/]+={0,2}$/.test(compact);
+}
+
 class OutboundTracker {
   constructor({ ttlMs = 120000, recentMatchWindowMs = 30000 } = {}) {
     this.ttlMs = Math.max(10000, Number(ttlMs || 0));
@@ -124,6 +144,7 @@ class OutboundTracker {
     const messageId = extractMessageId(message);
     const text = extractText(message);
     const type = extractType(message);
+    const filename = extractFilename(message);
     const now = Date.now();
 
     const match = list.find((item) => {
@@ -141,6 +162,14 @@ class OutboundTracker {
         || (item.type === 'document' && ['document', 'chat'].includes(type));
 
       if (!sameType) return false;
+
+      const media = isMediaType(item.type) || isMediaType(type);
+      if (media) {
+        if (item.filename && filename && item.filename === filename) return true;
+        if (looksLikeEncodedMedia(text)) return true;
+        if (!text && (!item.text || !filename || !item.filename)) return true;
+      }
+
       if (item.text && text) {
         return item.text === text || text.includes(item.text) || item.text.includes(text);
       }
@@ -167,9 +196,12 @@ module.exports = {
   OutboundTracker,
   _test: {
     extractChatId,
+    extractFilename,
     extractMessageId,
     extractText,
     extractType,
+    isMediaType,
+    looksLikeEncodedMedia,
     normalizeChatId,
     normalizeText,
   },
