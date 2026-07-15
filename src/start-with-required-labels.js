@@ -67,5 +67,10 @@ require('./core/runtimeReliabilityPreload');
 require('./core/supportAndServicesPreload');
 require('./core/exactAcknowledgementPreload');
 require('./core/bufferStagePolicyPreload');
+
+// Primeiro instala as proteções gerais da VPS e, em seguida, amplia a leitura
+// exata do vendedor para os aliases @lid e @c.us do mesmo contato.
 require('./core/vpsReadinessPreload');
+require('./core/sellerAliasHandoffPreload');
+
 require('./bootstrap');
