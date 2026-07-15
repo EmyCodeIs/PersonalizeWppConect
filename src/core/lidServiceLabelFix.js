@@ -27,6 +27,24 @@ function rememberResolution(lid, cUsId) {
   });
 }
 
+function markInternalAliases(channel, ...ids) {
+  const mark = channel?.__markInternalLabelOperation;
+  if (typeof mark !== 'function') return;
+
+  const candidates = [];
+  for (const id of ids) {
+    const normalized = normalizeChatId(id);
+    if (normalized) candidates.push(normalized);
+    try {
+      candidates.push(...Identity.getLabelCandidateIds(id).map(normalizeChatId));
+    } catch (_) {}
+  }
+
+  for (const candidate of [...new Set(candidates.filter(Boolean))]) {
+    try { mark(candidate); } catch (_) {}
+  }
+}
+
 async function resolvePhoneJid(channel, clientId) {
   const direct = normalizeChatId(clientId);
   if (!direct || !direct.endsWith('@lid')) return direct || null;
@@ -123,13 +141,25 @@ function installLidServiceLabelFix() {
   const originalApplyNamedLabel = ServiceLabels.applyNamedLabel.bind(ServiceLabels);
 
   ServiceLabels.replaceServiceLabel = async function replaceServiceLabelWithResolvedId(channel, clientId, service) {
+    markInternalAliases(channel, clientId);
     const resolvedClientId = await resolvePhoneJid(channel, clientId);
-    return originalReplaceServiceLabel(channel, resolvedClientId || clientId, service);
+    markInternalAliases(channel, clientId, resolvedClientId);
+    try {
+      return await originalReplaceServiceLabel(channel, resolvedClientId || clientId, service);
+    } finally {
+      markInternalAliases(channel, clientId, resolvedClientId);
+    }
   };
 
   ServiceLabels.applyNamedLabel = async function applyNamedLabelWithResolvedId(channel, clientId, target) {
+    markInternalAliases(channel, clientId);
     const resolvedClientId = await resolvePhoneJid(channel, clientId);
-    return originalApplyNamedLabel(channel, resolvedClientId || clientId, target);
+    markInternalAliases(channel, clientId, resolvedClientId);
+    try {
+      return await originalApplyNamedLabel(channel, resolvedClientId || clientId, target);
+    } finally {
+      markInternalAliases(channel, clientId, resolvedClientId);
+    }
   };
 
   ServiceLabels.__lidServiceLabelFixInstalled = true;
@@ -140,6 +170,7 @@ module.exports = {
   installLidServiceLabelFix,
   resolvePhoneJid,
   _test: {
+    markInternalAliases,
     resolutionCache,
   },
 };
