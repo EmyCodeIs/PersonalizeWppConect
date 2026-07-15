@@ -21,7 +21,7 @@ function safeText(value, maxLength = 700) {
     .map((line) => line.trim())
     .filter(Boolean)
     .filter((line) => !looksLikeEncodedMedia(line))
-    .filter((line) => !/^\[(imagem|arquivo|documento|video|vídeo) enviad[oa]\]/i.test(line));
+    .filter((line) => !/^\[(imagem|arquivo|documento|video|vídeo|audio|áudio) enviad[oa]/i.test(line));
 
   const text = lines.join(' | ').replace(/\s{2,}/g, ' ').trim();
   return text ? text.slice(0, maxLength) : '';
@@ -77,6 +77,10 @@ function serviceHeader(flow) {
   return `${colorCircle(serviceLabelColor(flow))} PRÉ ATENDIDO ${serviceTitle(flow)}`;
 }
 
+function supportHeader() {
+  return `${colorCircle(env.supportLabelColor)} SUPORTE SOLICITADO`;
+}
+
 function formatCity(value) {
   const city = clean(value).replace(/\s*\/\s*/g, '/');
   if (/^bh$/i.test(city)) return 'Belo Horizonte/MG';
@@ -115,19 +119,21 @@ function formatThickness(data = {}) {
 }
 
 function formatMediaCount(items = []) {
-  const counts = { image: 0, document: 0, video: 0 };
+  const counts = { image: 0, document: 0, video: 0, audio: 0 };
 
   for (const item of items || []) {
     const type = String(item?.type || '').toLowerCase();
     if (type === 'image') counts.image += 1;
     else if (type === 'document') counts.document += 1;
     else if (type === 'video') counts.video += 1;
+    else if (type === 'audio') counts.audio += 1;
   }
 
   const parts = [];
   if (counts.image) parts.push(`${counts.image} ${counts.image === 1 ? 'imagem recebida' : 'imagens recebidas'}`);
   if (counts.document) parts.push(`${counts.document} ${counts.document === 1 ? 'arquivo recebido' : 'arquivos recebidos'}`);
   if (counts.video) parts.push(`${counts.video} ${counts.video === 1 ? 'vídeo recebido' : 'vídeos recebidos'}`);
+  if (counts.audio) parts.push(`${counts.audio} ${counts.audio === 1 ? 'áudio recebido' : 'áudios recebidos'}`);
   return parts.join(', ');
 }
 
@@ -188,13 +194,49 @@ function buildOtherServiceLines(data = {}) {
   if (demand.medida) lines.push(`Medida: ${safeText(demand.medida, 250)}`);
   if (demand.local) lines.push(`Local de aplicação: ${safeText(demand.local, 300)}`);
   if (demand.referencia) lines.push(`Referências/detalhes: ${safeText(demand.referencia, 500)}`);
-  if (demand.prazo) lines.push(`Prazo: ${safeText(demand.prazo, 250)}`);
 
+  const media = formatMediaCount(demand.medias);
+  if (media) lines.push(`Referências/arquivos: ${media}`);
+
+  if (demand.prazo) lines.push(`Prazo: ${safeText(demand.prazo, 250)}`);
   return lines;
+}
+
+function buildSupportNote(session = {}) {
+  const data = session.dados || {};
+  const support = data.support || {};
+  const contextLines = data.flow === 'letreiro'
+    ? buildLetreiroLines(data)
+    : (data.flow ? buildOtherServiceLines(data) : []);
+  const supportText = safeText(support.text, 1200) || 'Cliente enviou somente anexo(s).';
+  const media = formatMediaCount(support.medias) || 'Não recebeu arquivo';
+
+  return [
+    supportHeader(),
+    '',
+    '👤',
+    'CLIENTE',
+    `Nome: ${safeText(data.nome, 100) || 'Não informado'}`,
+    `Cidade: ${formatCity(data.cidade)}`,
+    originLine(data.origem),
+    ...(contextLines.length ? ['', '📋', 'CONTEXTO DO PEDIDO', ...contextLines] : []),
+    '',
+    '🛟',
+    'SUPORTE',
+    `Motivo: ${supportText}`,
+    `Arquivos: ${media}`,
+    'Status: Aguardando atendimento da equipe',
+    '',
+    `Solicitado em: ${formatAttendedAt(support.forwardedAt || support.requestedAt)}`,
+  ].join('\n');
 }
 
 function buildPreferredSellerNote(session = {}) {
   const data = session.dados || {};
+  if (data.support?.status === 'forwarded' || data.support?.forwardedAt) {
+    return buildSupportNote(session);
+  }
+
   const requestLines = data.flow === 'letreiro'
     ? buildLetreiroLines(data)
     : buildOtherServiceLines(data);
@@ -240,6 +282,8 @@ CustomerFlow.processCustomerMessage = async function processCustomerMessageWithP
 
 module.exports = {
   buildPreferredSellerNote,
+  buildSupportNote,
+  installPreferredSellerNoteFormatter,
   _test: {
     colorCircle,
     formatAttendedAt,
@@ -251,5 +295,6 @@ module.exports = {
     safeText,
     serviceHeader,
     serviceLabelColor,
+    supportHeader,
   },
 };
