@@ -9,6 +9,7 @@ if (!BufferManager.prototype.__stagePolicyInstalled) {
 
   BufferManager.prototype.push = function pushWithStagePolicy(clientId, message, options = {}) {
     const stage = String(Store.getSession(clientId)?.etapa || '').trim();
+    const requestedDelay = Number(options.delayMs);
     let delayMs = options.delayMs;
 
     if (stage === 'suporte_coleta') {
@@ -17,6 +18,10 @@ if (!BufferManager.prototype.__stagePolicyInstalled) {
       delayMs = env.cityBufferMs;
     } else if (stage === 'plotagem_observacao_coleta' || stage === 'outros_observacao_coleta') {
       delayMs = env.observationBufferMs;
+    }
+
+    if (Number.isFinite(Number(delayMs)) && Number(delayMs) !== requestedDelay) {
+      console.log(`[BUFFER] espera efetiva ajustada | cliente=${clientId} | etapa=${stage || '-'} | espera=${Number(delayMs)}ms`);
     }
 
     return originalPush.call(this, clientId, message, { ...options, delayMs });
