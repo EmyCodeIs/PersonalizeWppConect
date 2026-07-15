@@ -40,9 +40,18 @@ function classifyAttachedLabels(items = [], targetName = '', explicitTargetId = 
   })).filter((item) => item.id || item.name);
 
   const targetItems = normalized.filter((item) => normalizeName(item.name) === wantedName);
+  if (!targetItems.length) {
+    return {
+      targetPresent: false,
+      preferredTargetId: '',
+      remove: [],
+      preserve: normalized,
+    };
+  }
+
   const preferredTargetId = targetItems.some((item) => item.id === explicitId)
     ? explicitId
-    : (targetItems[0]?.id || explicitId || '');
+    : targetItems[0].id;
 
   const remove = [];
   const preserve = [];
@@ -50,14 +59,14 @@ function classifyAttachedLabels(items = [], targetName = '', explicitTargetId = 
   for (const item of normalized) {
     const itemName = normalizeName(item.name);
     const isOperational = managed.has(itemName);
-    const isPreferredTarget = itemName === wantedName
-      && (!preferredTargetId || item.id === preferredTargetId);
+    const isPreferredTarget = itemName === wantedName && item.id === preferredTargetId;
 
     if (isOperational && !isPreferredTarget) remove.push(item);
     else preserve.push(item);
   }
 
   return {
+    targetPresent: true,
     preferredTargetId,
     remove,
     preserve,
@@ -142,16 +151,31 @@ async function enforceExclusiveOperationalLabel(channel, clientId, targetName, e
 
         const before = readAttached();
         const exactTargets = before.filter((item) => normalize(item.name) === wanted);
-        let preferredTargetId = String(explicitTargetId || '').trim();
 
+        // Nunca remove a etiqueta operacional anterior sem antes confirmar que a
+        // nova realmente apareceu no contato. Isso evita deixar o cliente sem setor.
+        if (!exactTargets.length) {
+          output.push({
+            chatId,
+            enforced: false,
+            targetPresent: false,
+            reason: 'TARGET_NOT_CONFIRMED',
+            removed: [],
+            preserved: before.map((item) => item.name),
+            operational: before.filter((item) => managed.has(normalize(item.name))).map((item) => item.name),
+          });
+          continue;
+        }
+
+        let preferredTargetId = String(explicitTargetId || '').trim();
         if (!exactTargets.some((item) => item.id === preferredTargetId)) {
-          preferredTargetId = exactTargets[0]?.id || preferredTargetId;
+          preferredTargetId = exactTargets[0].id;
         }
 
         const remove = before.filter((item) => {
           const itemName = normalize(item.name);
           if (!managed.has(itemName)) return false;
-          return !(itemName === wanted && (!preferredTargetId || item.id === preferredTargetId));
+          return !(itemName === wanted && item.id === preferredTargetId);
         });
 
         if (remove.length) {
@@ -178,7 +202,7 @@ async function enforceExclusiveOperationalLabel(channel, clientId, targetName, e
         const targetPresent = remainingOperational.some((item) => normalize(item.name) === wanted);
         const wrongOperational = remainingOperational.filter((item) => {
           if (normalize(item.name) !== wanted) return true;
-          return Boolean(preferredTargetId && item.id !== preferredTargetId);
+          return item.id !== preferredTargetId;
         });
 
         output.push({
