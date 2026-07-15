@@ -71,7 +71,9 @@ const env = {
   bufferMs: Math.max(800, num('BUFFER_MS', 4500)),
   multiMessageBufferMs: Math.max(2500, num('MULTI_MESSAGE_BUFFER_MS', 8000)),
   measureBufferMs: Math.max(2500, num('MEASURE_BUFFER_MS', 8000)),
-  artBufferMs: Math.max(2500, num('ART_BUFFER_MS', 8000)),
+  // Arte precisa de mais tempo porque imagem, legenda e referência podem chegar separadas.
+  // O mínimo de 12s prevalece mesmo quando um .env antigo ainda possui 8000.
+  artBufferMs: Math.max(12000, num('ART_BUFFER_MS', 12000)),
   addressBufferMs: Math.max(2500, num('ADDRESS_BUFFER_MS', 8000)),
   pantoneBufferMs: Math.max(2500, num('PANTONE_BUFFER_MS', 8000)),
   observationBufferMs: Math.max(2500, num('OBSERVATION_BUFFER_MS', 9000)),
@@ -103,8 +105,11 @@ const env = {
   serviceLabelReplaceGroup: list('SERVICE_LABEL_REPLACE_GROUP', [serviceLabelLetreiro, serviceLabelPlotagem, serviceLabelOutros]),
   enableUnreadBootstrap: bool('ENABLE_UNREAD_BOOTSTRAP', true),
   unreadBootstrapDelayMs: Math.max(1000, num('UNREAD_BOOTSTRAP_DELAY_MS', 6000)),
+  unreadBootstrapAttempts: Math.max(1, num('UNREAD_BOOTSTRAP_ATTEMPTS', 3)),
+  unreadBootstrapRetryDelayMs: Math.max(500, num('UNREAD_BOOTSTRAP_RETRY_DELAY_MS', 2500)),
   unreadBootstrapMaxChats: Math.max(1, num('UNREAD_BOOTSTRAP_MAX_CHATS', 30)),
   unreadBootstrapMaxMessagesPerChat: Math.max(1, num('UNREAD_BOOTSTRAP_MAX_MESSAGES_PER_CHAT', 8)),
+  unreadRecoveryHistoryLimit: Math.max(20, num('UNREAD_RECOVERY_HISTORY_LIMIT', 120)),
   allowedClientNumbers: list('ALLOWED_CLIENT_NUMBERS', []),
   allowedChatIds: list('ALLOWED_CHAT_IDS', []),
   lidNumberMap: mapList('LID_NUMBER_MAP'),
