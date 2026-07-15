@@ -1,10 +1,16 @@
 'use strict';
 
 class ChatTaskQueue {
-  constructor({ maxUnits = 2, maxQueueSize = 40, taskTimeoutMs = 45000 } = {}) {
+  constructor({
+    maxUnits = 2,
+    maxConcurrentChats = maxUnits,
+    maxQueueSize = 40,
+    taskTimeoutMs = 45000,
+  } = {}) {
     this.maxUnits = Math.max(1, Number(maxUnits || 1));
+    this.maxConcurrentChats = Math.max(1, Number(maxConcurrentChats || 1));
     this.maxQueueSize = Math.max(1, Number(maxQueueSize || 1));
-    this.taskTimeoutMs = Math.max(5000, Number(taskTimeoutMs || 0));
+    this.taskTimeoutMs = Math.max(10, Number(taskTimeoutMs || 0));
     this.runningUnits = 0;
     this.queue = [];
     this.runningChats = new Set();
@@ -14,8 +20,10 @@ class ChatTaskQueue {
   stats() {
     return {
       runningUnits: this.runningUnits,
+      activeChats: this.runningChats.size,
       queued: this.queue.length,
       limit: this.maxUnits,
+      maxConcurrentChats: this.maxConcurrentChats,
       maxQueueSize: this.maxQueueSize,
     };
   }
@@ -35,7 +43,7 @@ class ChatTaskQueue {
       return Promise.reject(error);
     }
 
-    const timeoutMs = Math.max(5000, Number(options.timeoutMs || this.taskTimeoutMs));
+    const timeoutMs = Math.max(10, Number(options.timeoutMs || this.taskTimeoutMs));
     const units = Math.max(0, Math.min(this.maxUnits, Number(options.units ?? 1)));
 
     return new Promise((resolve, reject) => {
@@ -53,7 +61,7 @@ class ChatTaskQueue {
   }
 
   processNext() {
-    while (true) {
+    while (this.runningChats.size < this.maxConcurrentChats) {
       const index = this.queue.findIndex((item) => (
         !this.runningChats.has(item.chatId)
         && (this.runningUnits + item.units) <= this.maxUnits
@@ -66,44 +74,56 @@ class ChatTaskQueue {
 
       this.runItem(item)
         .then((result) => {
-          this.runningUnits -= item.units;
-          this.runningChats.delete(item.chatId);
+          this.release(item);
           item.resolve(result);
           this.processNext();
         })
         .catch((error) => {
-          this.runningUnits -= item.units;
-          this.runningChats.delete(item.chatId);
+          this.release(item);
           item.reject(error);
           this.processNext();
         });
     }
   }
 
+  release(item) {
+    this.runningUnits = Math.max(0, this.runningUnits - item.units);
+    this.runningChats.delete(item.chatId);
+  }
+
   runItem(item) {
-    const taskPromise = Promise.resolve().then(() => item.task());
-    if (!item.timeoutMs) return taskPromise;
+    let timedOut = false;
+    let timeoutError = null;
+    let timeoutHandle = null;
 
-    return new Promise((resolve, reject) => {
-      const timeoutHandle = setTimeout(() => {
-        const error = new Error(`Timeout ao processar o chat ${item.chatId}.`);
-        error.code = 'QUEUE_TIMEOUT';
-        error.chatId = item.chatId;
-        reject(error);
+    if (item.timeoutMs) {
+      timeoutHandle = setTimeout(() => {
+        timedOut = true;
+        timeoutError = new Error(`Timeout ao processar o chat ${item.chatId}.`);
+        timeoutError.code = 'QUEUE_TIMEOUT';
+        timeoutError.chatId = item.chatId;
       }, item.timeoutMs);
-
       if (typeof timeoutHandle.unref === 'function') timeoutHandle.unref();
+    }
 
-      taskPromise
-        .then((result) => {
-          clearTimeout(timeoutHandle);
-          resolve(result);
-        })
-        .catch((error) => {
-          clearTimeout(timeoutHandle);
-          reject(error);
-        });
-    });
+    // O lock do chat permanece até a tarefa real terminar. JavaScript não consegue
+    // cancelar uma Promise arbitrária; liberar o chat no instante do timeout faria
+    // duas tarefas do mesmo cliente alterarem a sessão ao mesmo tempo.
+    return Promise.resolve()
+      .then(() => item.task())
+      .then((result) => {
+        if (timeoutHandle) clearTimeout(timeoutHandle);
+        if (timedOut) throw timeoutError;
+        return result;
+      })
+      .catch((error) => {
+        if (timeoutHandle) clearTimeout(timeoutHandle);
+        if (timedOut && timeoutError) {
+          timeoutError.cause = error;
+          throw timeoutError;
+        }
+        throw error;
+      });
   }
 }
 
