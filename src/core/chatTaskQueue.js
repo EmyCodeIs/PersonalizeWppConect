@@ -1,8 +1,12 @@
 'use strict';
 
 function configuredConcurrentChats(fallback) {
-  const value = Number(process.env.MAX_CONCURRENT_CHATS);
-  return Number.isFinite(value) && value > 0 ? value : fallback;
+  try {
+    const { env } = require('../config/env');
+    const value = Number(env?.maxConcurrentChats);
+    if (Number.isFinite(value) && value > 0) return value;
+  } catch (_) {}
+  return fallback;
 }
 
 class ChatTaskQueue {
@@ -15,7 +19,7 @@ class ChatTaskQueue {
     this.maxUnits = Math.max(1, Number(maxUnits || 1));
     this.maxConcurrentChats = Math.max(
       1,
-      Number(maxConcurrentChats || configuredConcurrentChats(this.maxUnits)),
+      Number(maxConcurrentChats || configuredConcurrentChats(2)),
     );
     this.maxQueueSize = Math.max(1, Number(maxQueueSize || 1));
     this.taskTimeoutMs = Math.max(10, Number(taskTimeoutMs || 0));
