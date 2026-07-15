@@ -79,11 +79,6 @@ function send(response, statusCode, contentType, body, extraHeaders = {}) {
   response.end(content);
 }
 
-function redirect(response, location) {
-  response.writeHead(302, { Location: location, 'Cache-Control': 'no-store' });
-  response.end();
-}
-
 function loginPage(error = '') {
   const warning = error ? `<p class="error">${escapeHtml(error)}</p>` : '';
   return `<!doctype html>
@@ -245,8 +240,12 @@ const server = http.createServer(async (request, response) => {
         return;
       }
 
-      redirect(response, '/');
-      response.setHeader?.('Set-Cookie', '');
+      response.writeHead(302, {
+        Location: '/',
+        'Set-Cookie': `personalize_session_access=${expectedToken}; Path=/; HttpOnly; SameSite=Strict`,
+        'Cache-Control': 'no-store',
+      });
+      response.end();
       return;
     } catch (error) {
       send(response, 400, 'text/html; charset=utf-8', loginPage(error?.message || 'Não foi possível entrar.'));
