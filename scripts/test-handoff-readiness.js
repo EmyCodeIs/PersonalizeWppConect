@@ -17,6 +17,12 @@ async function run() {
   const SellerHandoff = require('../src/core/sellerHandoff');
   const HumanControl = require('../src/services/humanControlStore');
 
+  // A regra-base também precisa ser segura sem depender da ordem dos preloads.
+  assert.equal(SellerHandoff._test.findSellerLabelMatch([{ name: 'Ana' }]).seller, 'ana');
+  assert.equal(SellerHandoff._test.findSellerLabelMatch([{ name: 'Aninha', hexColor: '#00a4f2' }]), null);
+  assert.equal(SellerHandoff._test.findSellerLabelMatch([{ name: 'Adriano Silva', hexColor: '#8fd0a8' }]), null);
+  assert.equal(SellerHandoff._test.findSellerLabelMatch([{ name: 'Fornecedor', hexColor: '#feb100' }]), null);
+
   let attachedLabels = [{ id: 'seller-ana', name: 'Ana', hexColor: '#00a4f2' }];
   SellerHandoff._test.inspectChatLabels = async () => ({
     available: true,
