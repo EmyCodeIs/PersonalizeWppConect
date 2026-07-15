@@ -4,6 +4,19 @@
 // Na VPS, `npm run vps:start` cria uma área de trabalho virtual, publica essa
 // mesma tela pelo noVNC e inicia o WPPConnect dentro dela.
 
+const duplicateRemovalRequested = ['1', 'true', 'yes', 'sim', 'on']
+  .includes(String(process.env.LABEL_MAINTENANCE_AUTO_REMOVE_DUPLICATES || '').trim().toLowerCase());
+const duplicateRemovalConfirmed = String(process.env.LABEL_MAINTENANCE_CONFIRM_DELETE || '').trim()
+  === 'CONFIRMAR_EXCLUSAO';
+
+if (duplicateRemovalRequested && !duplicateRemovalConfirmed) {
+  process.env.LABEL_MAINTENANCE_AUTO_REMOVE_DUPLICATES = 'false';
+  console.warn(
+    '[LISTAS][SEGURANÇA] remoção automática solicitada, mas não confirmada; '
+    + 'as duplicatas serão somente auditadas.',
+  );
+}
+
 const serviceLabels = require('./core/serviceLabels');
 const { ensureRequiredLabelsOnce } = require('./core/requiredLabelsStartup');
 const { installIdempotentServiceLabels } = require('./core/idempotentServiceLabels');
