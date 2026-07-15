@@ -21,7 +21,11 @@ const VNC_PORT = Number(process.env.SESSION_VNC_PORT || 5900);
 const VNC_PASSWORD = String(process.env.SESSION_VNC_PASSWORD || ACCESS_PASSWORD);
 const SESSION_COOKIE = 'personalize_session_access';
 const SESSION_TTL_MS = Math.max(15 * 60 * 1000, Number(process.env.SESSION_ACCESS_TTL_MS || 12 * 60 * 60 * 1000));
-const NOVNC_ROOT = path.dirname(require.resolve('@novnc/novnc/package.json'));
+
+// @novnc/novnc exporta diretamente core/rfb.js. O package.json e o antigo
+// vnc.html não fazem parte dos exports/arquivos publicados nas versões atuais.
+const NOVNC_ENTRY = require.resolve('@novnc/novnc');
+const NOVNC_ROOT = path.resolve(path.dirname(NOVNC_ENTRY), '..');
 const activeTokens = new Map();
 
 function now() { return Date.now(); }
@@ -157,9 +161,9 @@ function unavailablePage(error) {
   );
 }
 
-function viewerRedirectPage() {
-  const url = `/novnc/vnc.html?autoconnect=1&resize=remote&show_dot=1&path=websockify&password=${encodeURIComponent(VNC_PASSWORD)}`;
-  return `<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><meta http-equiv="refresh" content="0; url=${url}"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Abrindo WhatsApp Web</title></head><body><a href="${url}">Abrir WhatsApp Web</a></body></html>`;
+function viewerPage() {
+  const passwordLiteral = JSON.stringify(VNC_PASSWORD);
+  return `<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>WhatsApp Web compartilhado</title><style>html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#05070b;color:#fff;font-family:Arial,sans-serif}#screen{width:100%;height:100%}#status{position:fixed;z-index:10;left:16px;top:14px;padding:9px 12px;border-radius:10px;background:rgba(9,13,20,.88);border:1px solid #334155;font-size:13px}#back{position:fixed;z-index:10;right:16px;top:14px;padding:9px 12px;border-radius:10px;background:rgba(9,13,20,.88);border:1px solid #334155;color:#fff;text-decoration:none;font-size:13px}</style></head><body><div id="status">Conectando à tela do WhatsApp…</div><a id="back" href="/">Voltar</a><div id="screen"></div><script type="module">import RFB from '/novnc/core/rfb.js';const status=document.getElementById('status');const scheme=location.protocol==='https:'?'wss':'ws';const url=scheme+'://'+location.host+'/websockify';const rfb=new RFB(document.getElementById('screen'),url,{credentials:{password:${passwordLiteral}}});rfb.scaleViewport=true;rfb.resizeSession=true;rfb.showDotCursor=true;rfb.focusOnClick=true;rfb.addEventListener('connect',()=>{status.textContent='Tela conectada';setTimeout(()=>status.style.display='none',1800)});rfb.addEventListener('disconnect',(event)=>{status.style.display='block';status.textContent=event.detail.clean?'Sessão encerrada':'Conexão com a tela perdida'});rfb.addEventListener('credentialsrequired',()=>rfb.sendCredentials({password:${passwordLiteral}}));</script></body></html>`;
 }
 
 function readBody(req) {
@@ -181,18 +185,26 @@ function readBody(req) {
 function contentTypeFor(filePath) {
   const ext = path.extname(filePath).toLowerCase();
   return {
-    '.html': 'text/html; charset=utf-8', '.js': 'application/javascript; charset=utf-8',
-    '.css': 'text/css; charset=utf-8', '.json': 'application/json; charset=utf-8',
-    '.svg': 'image/svg+xml', '.png': 'image/png', '.jpg': 'image/jpeg',
-    '.jpeg': 'image/jpeg', '.webp': 'image/webp', '.woff': 'font/woff',
-    '.woff2': 'font/woff2', '.map': 'application/json; charset=utf-8',
+    '.html': 'text/html; charset=utf-8',
+    '.js': 'application/javascript; charset=utf-8',
+    '.css': 'text/css; charset=utf-8',
+    '.json': 'application/json; charset=utf-8',
+    '.svg': 'image/svg+xml',
+    '.png': 'image/png',
+    '.jpg': 'image/jpeg',
+    '.jpeg': 'image/jpeg',
+    '.webp': 'image/webp',
+    '.woff': 'font/woff',
+    '.woff2': 'font/woff2',
+    '.map': 'application/json; charset=utf-8',
   }[ext] || 'application/octet-stream';
 }
 
 function resolveNoVncPath(pathname) {
   const relative = pathname.replace(/^\/novnc\/?/, '');
-  const resolved = path.resolve(NOVNC_ROOT, relative || 'vnc.html');
-  return resolved.startsWith(NOVNC_ROOT) ? resolved : null;
+  const resolved = path.resolve(NOVNC_ROOT, relative);
+  const rootWithSeparator = `${NOVNC_ROOT}${path.sep}`;
+  return resolved === NOVNC_ROOT || resolved.startsWith(rootWithSeparator) ? resolved : null;
 }
 
 function ensureVncAvailable(timeoutMs = 1800) {
@@ -272,7 +284,7 @@ const server = http.createServer(async (req, res) => {
   if (pathname === '/viewer') {
     try {
       await ensureVncAvailable();
-      return send(req, res, 200, viewerRedirectPage());
+      return send(req, res, 200, viewerPage());
     } catch (err) {
       return send(req, res, 503, unavailablePage(err));
     }
