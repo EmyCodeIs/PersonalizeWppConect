@@ -2,6 +2,7 @@
 
 const WppClient = require('../services/wppconnectClient');
 const Mostruario = require('./mostruario');
+const { messages } = require('./messages');
 
 const DEFAULT_CATALOG_NAME = 'Mostruário Letreiros';
 
@@ -95,8 +96,31 @@ function wrapChannelFactory(name) {
   WppClient[name] = wrapped;
 }
 
+async function sendBudgetIntro(channel, clientId) {
+  const text = String(messages.letteringBudgetIntro || '').trim();
+  if (!text) {
+    console.warn('[FLUXO][LETREIRO] explicação do orçamento ausente em messages.letteringBudgetIntro.');
+    return false;
+  }
+
+  if (typeof channel?.sendText === 'function') {
+    await channel.sendText(clientId, text, { noDelay: true, noTyping: true });
+    return true;
+  }
+
+  const chatId = normalizeChatId(clientId);
+  if (chatId && typeof channel?.client?.sendText === 'function') {
+    await channel.client.sendText(chatId, text);
+    return true;
+  }
+
+  console.warn(`[FLUXO][LETREIRO] não foi possível enviar a explicação do orçamento | cliente=${clientId}`);
+  return false;
+}
+
 async function sendMostruarioCatalog(channel, clientId) {
   const title = getCatalogName();
+  let catalogSent = false;
 
   if (typeof channel?.sendCatalog === 'function') {
     const sent = await channel.sendCatalog(clientId, {
@@ -108,25 +132,37 @@ async function sendMostruarioCatalog(channel, clientId) {
       noTyping: true,
     });
 
-    if (sent !== false) return true;
+    catalogSent = sent !== false;
   }
 
-  // Contingência sem a imagem antiga: envia somente o link já configurado.
-  const fallbackLink = Mostruario.getMostruarioLink();
-  console.warn('[CATÁLOGO] envio nativo indisponível; usando link simples como contingência.');
+  if (!catalogSent) {
+    // Contingência sem a imagem antiga: envia somente o link já configurado.
+    const fallbackLink = Mostruario.getMostruarioLink();
+    console.warn('[CATÁLOGO] envio nativo indisponível; usando link simples como contingência.');
 
-  if (typeof channel?.sendText === 'function') {
-    await channel.sendText(clientId, fallbackLink, { noDelay: true, noTyping: true });
-    return true;
+    if (typeof channel?.sendText === 'function') {
+      await channel.sendText(clientId, fallbackLink, { noDelay: true, noTyping: true });
+      catalogSent = true;
+    } else {
+      const chatId = normalizeChatId(clientId);
+      if (chatId && typeof channel?.client?.sendText === 'function') {
+        await channel.client.sendText(chatId, fallbackLink);
+        catalogSent = true;
+      }
+    }
   }
 
-  const chatId = normalizeChatId(clientId);
-  if (typeof channel?.client?.sendText === 'function') {
-    await channel.client.sendText(chatId, fallbackLink);
-    return true;
+  if (!catalogSent) return false;
+
+  const introSent = await sendBudgetIntro(channel, clientId);
+  if (introSent) {
+    console.log(
+      `[FLUXO][LETREIRO] catálogo e explicação enviados | cliente=${clientId} `
+      + '| próximaEtapa=tipo_acrilico',
+    );
   }
 
-  return false;
+  return true;
 }
 
 function installCatalogMostruario() {
@@ -143,5 +179,6 @@ module.exports = {
   getCatalogName,
   installCatalogMostruario,
   normalizeChatId,
+  sendBudgetIntro,
   sendMostruarioCatalog,
 };
