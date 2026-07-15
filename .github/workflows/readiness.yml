@@ -10,6 +10,8 @@ jobs:
   readiness:
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    env:
+      PUPPETEER_SKIP_DOWNLOAD: 'true'
     steps:
       - name: Baixar projeto
         uses: actions/checkout@v4
@@ -22,6 +24,14 @@ jobs:
 
       - name: Instalar dependencias
         run: npm ci
+
+      - name: Verificar scripts da VPS
+        run: |
+          bash -n scripts/start-session-access.sh
+          bash -n scripts/stop-session-access.sh
+          bash -n scripts/start-vps-whatsapp.sh
+          bash -n scripts/install-session-access-ubuntu.sh
+          node --check ecosystem.config.cjs
 
       - name: Verificar sintaxe e regressoes
         run: npm test
