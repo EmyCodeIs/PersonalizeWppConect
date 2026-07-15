@@ -21,6 +21,7 @@ SESSION_ACCESS_PASSWORD="${SESSION_ACCESS_PASSWORD:-troque-esta-senha}"
 SESSION_NOVNC_WEB="${SESSION_NOVNC_WEB:-/usr/share/novnc}"
 SESSION_VNC_PASSWORD_FILE="${SESSION_VNC_PASSWORD_FILE:-$DATA_DIR/session-access.vncpass}"
 SESSION_ACCESS_PUBLIC_URL="${SESSION_ACCESS_PUBLIC_URL:-}"
+SESSION_ACCESS_ALLOW_PUBLIC_BIND="${SESSION_ACCESS_ALLOW_PUBLIC_BIND:-false}"
 
 XVFB_PID_FILE="$PID_DIR/xvfb.pid"
 OPENBOX_PID_FILE="$PID_DIR/openbox.pid"
@@ -54,6 +55,22 @@ cleanup_stale_pid() {
   fi
 }
 
+require_running() {
+  local name="$1"
+  local file="$2"
+  if ! pid_is_running "$file"; then
+    echo "[session-access] $name não permaneceu ativo; consulte os logs em $DATA_DIR" >&2
+    exit 1
+  fi
+}
+
+is_true() {
+  case "${1,,}" in
+    1|true|yes|sim|on) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 need_cmd Xvfb
 need_cmd openbox-session
 need_cmd x11vnc
@@ -65,8 +82,24 @@ if [[ ! -d "$SESSION_NOVNC_WEB" ]]; then
   exit 1
 fi
 
-if [[ "$SESSION_ACCESS_PASSWORD" == "troque-esta-senha" ]]; then
-  echo "[session-access] defina uma senha forte em SESSION_ACCESS_PASSWORD no .env" >&2
+if [[ "$SESSION_ACCESS_HOST" != "127.0.0.1" && "$SESSION_ACCESS_HOST" != "localhost" ]]; then
+  if ! is_true "$SESSION_ACCESS_ALLOW_PUBLIC_BIND"; then
+    echo "[session-access] SESSION_ACCESS_HOST deve ser 127.0.0.1 na VPS" >&2
+    echo "[session-access] publique o acesso somente pelo Nginx com HTTPS" >&2
+    exit 1
+  fi
+  echo "[session-access] AVISO: bind público autorizado explicitamente" >&2
+fi
+
+case "$SESSION_ACCESS_PASSWORD" in
+  ""|troque-esta-senha|COLOQUE_UMA_SENHA_FORTE_AQUI|2580)
+    echo "[session-access] defina uma senha VNC exclusiva em SESSION_ACCESS_PASSWORD" >&2
+    exit 1
+    ;;
+esac
+
+if (( ${#SESSION_ACCESS_PASSWORD} < 8 )); then
+  echo "[session-access] SESSION_ACCESS_PASSWORD precisa ter pelo menos 8 caracteres" >&2
   exit 1
 fi
 
@@ -83,6 +116,7 @@ if ! pid_is_running "$XVFB_PID_FILE"; then
     >"$XVFB_LOG" 2>&1 &
   echo $! > "$XVFB_PID_FILE"
   sleep 1
+  require_running "desktop virtual" "$XVFB_PID_FILE"
   echo "[session-access] desktop virtual iniciado em $DISPLAY_VALUE"
 else
   echo "[session-access] desktop virtual já está ativo"
@@ -92,6 +126,7 @@ if ! pid_is_running "$OPENBOX_PID_FILE"; then
   DISPLAY="$DISPLAY_VALUE" nohup openbox-session >"$OPENBOX_LOG" 2>&1 &
   echo $! > "$OPENBOX_PID_FILE"
   sleep 1
+  require_running "Openbox" "$OPENBOX_PID_FILE"
   echo "[session-access] gerenciador de janelas iniciado"
 else
   echo "[session-access] gerenciador de janelas já está ativo"
@@ -101,6 +136,7 @@ if ! x11vnc -storepasswd "$SESSION_ACCESS_PASSWORD" "$SESSION_VNC_PASSWORD_FILE"
   echo "[session-access] não foi possível gravar a senha VNC" >&2
   exit 1
 fi
+chmod 600 "$SESSION_VNC_PASSWORD_FILE"
 
 if ! pid_is_running "$X11VNC_PID_FILE"; then
   nohup x11vnc \
@@ -115,6 +151,7 @@ if ! pid_is_running "$X11VNC_PID_FILE"; then
     >"$X11VNC_LOG" 2>&1 &
   echo $! > "$X11VNC_PID_FILE"
   sleep 1
+  require_running "x11vnc" "$X11VNC_PID_FILE"
   echo "[session-access] compartilhamento da tela iniciado"
 else
   echo "[session-access] compartilhamento da tela já está ativo"
@@ -135,6 +172,7 @@ if ! pid_is_running "$NOVNC_PID_FILE"; then
   nohup "${NOVNC_CMD[@]}" >"$NOVNC_LOG" 2>&1 &
   echo $! > "$NOVNC_PID_FILE"
   sleep 1
+  require_running "noVNC" "$NOVNC_PID_FILE"
   echo "[session-access] acesso pelo navegador iniciado"
 else
   echo "[session-access] acesso pelo navegador já está ativo"
