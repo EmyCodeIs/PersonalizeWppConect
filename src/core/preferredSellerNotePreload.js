@@ -1,6 +1,7 @@
 'use strict';
 
 const Store = require('../services/leadStore');
+const { env } = require('../config/env');
 const { normalizeText } = require('./parsers');
 
 function clean(value) {
@@ -36,6 +37,44 @@ function serviceName(flow) {
   if (flow === 'letreiro') return 'Letreiro de acrílico';
   if (flow === 'plotagem') return 'Plotagem';
   return 'Outro serviço/produto';
+}
+
+function serviceLabelColor(flow) {
+  if (flow === 'letreiro') return env.serviceLabelLetreiroColor;
+  if (flow === 'plotagem') return env.serviceLabelPlotagemColor;
+  return env.serviceLabelOutrosColor;
+}
+
+function colorCircle(value) {
+  const color = normalizeText(value);
+  const circles = {
+    purple: '🟣',
+    roxo: '🟣',
+    green: '🟢',
+    verde: '🟢',
+    red: '🔴',
+    vermelho: '🔴',
+    blue: '🔵',
+    azul: '🔵',
+    yellow: '🟡',
+    amarelo: '🟡',
+    orange: '🟠',
+    laranja: '🟠',
+    black: '⚫',
+    preto: '⚫',
+    gray: '⚪',
+    grey: '⚪',
+    cinza: '⚪',
+    white: '⚪',
+    branco: '⚪',
+    pink: '🩷',
+    rosa: '🩷',
+  };
+  return circles[color] || '⚪';
+}
+
+function serviceHeader(flow) {
+  return `${colorCircle(serviceLabelColor(flow))} PRÉ ATENDIDO ${serviceTitle(flow)}`;
 }
 
 function formatCity(value) {
@@ -162,7 +201,7 @@ function buildPreferredSellerNote(session = {}) {
   const observation = safeText(data.observacaoPedido, 700) || 'Não teve';
 
   return [
-    `🟣 PRÉ ATENDIDO ${serviceTitle(data.flow)}`,
+    serviceHeader(data.flow),
     '',
     '👤',
     'CLIENTE',
@@ -202,6 +241,7 @@ CustomerFlow.processCustomerMessage = async function processCustomerMessageWithP
 module.exports = {
   buildPreferredSellerNote,
   _test: {
+    colorCircle,
     formatAttendedAt,
     formatCity,
     formatMediaCount,
@@ -209,5 +249,7 @@ module.exports = {
     formatThickness,
     originLine,
     safeText,
+    serviceHeader,
+    serviceLabelColor,
   },
 };
