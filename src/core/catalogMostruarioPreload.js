@@ -1,10 +1,10 @@
 'use strict';
 
 const WppClient = require('../services/wppconnectClient');
-const Mostruario = require('./mostruario');
-const { messages } = require('./messages');
+const { env } = require('../config/env');
 
 const DEFAULT_CATALOG_NAME = 'Mostruário Letreiros';
+const DEFAULT_FALLBACK_LINK = 'https://personalizeseuambiente.com.br/mostruario-letreiros';
 
 function normalizeChatId(value) {
   const raw = String(value || '').trim();
@@ -15,14 +15,19 @@ function normalizeChatId(value) {
 }
 
 function getCatalogName() {
-  return String(process.env.MOSTRUARIO_CATALOG_NAME || DEFAULT_CATALOG_NAME).trim()
+  return String(process.env.MOSTRUARIO_CATALOG_NAME || env.mostruarioCatalogName || DEFAULT_CATALOG_NAME).trim()
     || DEFAULT_CATALOG_NAME;
+}
+
+function getFallbackLink() {
+  const value = String(env.mostruarioLinkUrl || process.env.MOSTRUARIO_LINK_URL || '').trim();
+  return /^https?:\/\/[^\s]+$/i.test(value) ? value : DEFAULT_FALLBACK_LINK;
 }
 
 function attachCatalogSender(channel) {
   if (!channel || channel.__catalogSenderInstalled) return channel;
 
-  channel.sendCatalog = async function sendCatalog(clientId, payload = {}, options = {}) {
+  channel.sendCatalog = async function sendCatalog(clientId, payload = {}) {
     const chatId = normalizeChatId(clientId);
     const title = String(payload.title || getCatalogName()).trim() || getCatalogName();
     const description = String(payload.description || title).trim() || title;
@@ -41,7 +46,6 @@ function attachCatalogSender(channel) {
     }
 
     const pending = channel?.outboundTracker?.register?.(chatId, {
-      // O catálogo é emitido pelo WhatsApp como uma mensagem de chat com link rico.
       type: 'text',
       text: textMessage,
     }) || null;
@@ -96,89 +100,49 @@ function wrapChannelFactory(name) {
   WppClient[name] = wrapped;
 }
 
-async function sendBudgetIntro(channel, clientId) {
-  const text = String(messages.letteringBudgetIntro || '').trim();
-  if (!text) {
-    console.warn('[FLUXO][LETREIRO] explicação do orçamento ausente em messages.letteringBudgetIntro.');
-    return false;
-  }
-
-  if (typeof channel?.sendText === 'function') {
-    await channel.sendText(clientId, text, { noDelay: true, noTyping: true });
-    return true;
-  }
-
-  const chatId = normalizeChatId(clientId);
-  if (chatId && typeof channel?.client?.sendText === 'function') {
-    await channel.client.sendText(chatId, text);
-    return true;
-  }
-
-  console.warn(`[FLUXO][LETREIRO] não foi possível enviar a explicação do orçamento | cliente=${clientId}`);
-  return false;
-}
-
 async function sendMostruarioCatalog(channel, clientId) {
   const title = getCatalogName();
-  let catalogSent = false;
 
   if (typeof channel?.sendCatalog === 'function') {
     const sent = await channel.sendCatalog(clientId, {
       title,
       description: title,
       textMessage: title,
-    }, {
-      noDelay: true,
-      noTyping: true,
     });
-
-    catalogSent = sent !== false;
+    if (sent !== false) return true;
   }
 
-  if (!catalogSent) {
-    // Contingência sem a imagem antiga: envia somente o link já configurado.
-    const fallbackLink = Mostruario.getMostruarioLink();
-    console.warn('[CATÁLOGO] envio nativo indisponível; usando link simples como contingência.');
+  const fallbackLink = getFallbackLink();
+  console.warn('[CATÁLOGO] envio nativo indisponível; usando link simples como contingência.');
 
-    if (typeof channel?.sendText === 'function') {
-      await channel.sendText(clientId, fallbackLink, { noDelay: true, noTyping: true });
-      catalogSent = true;
-    } else {
-      const chatId = normalizeChatId(clientId);
-      if (chatId && typeof channel?.client?.sendText === 'function') {
-        await channel.client.sendText(chatId, fallbackLink);
-        catalogSent = true;
-      }
-    }
+  if (typeof channel?.sendText === 'function') {
+    await channel.sendText(clientId, fallbackLink, { noDelay: true, noTyping: true });
+    return true;
   }
 
-  if (!catalogSent) return false;
-
-  const introSent = await sendBudgetIntro(channel, clientId);
-  if (introSent) {
-    console.log(
-      `[FLUXO][LETREIRO] catálogo e explicação enviados | cliente=${clientId} `
-      + '| próximaEtapa=tipo_acrilico',
-    );
+  const chatId = normalizeChatId(clientId);
+  if (chatId && typeof channel?.client?.sendText === 'function') {
+    await channel.client.sendText(chatId, fallbackLink);
+    return true;
   }
 
-  return true;
+  return false;
 }
 
 function installCatalogMostruario() {
   wrapChannelFactory('createWppChannel');
   wrapChannelFactory('createMockChannel');
-  Mostruario.sendMostruarioLetreiro = sendMostruarioCatalog;
 }
 
 installCatalogMostruario();
 
 module.exports = {
   DEFAULT_CATALOG_NAME,
+  DEFAULT_FALLBACK_LINK,
   attachCatalogSender,
   getCatalogName,
+  getFallbackLink,
   installCatalogMostruario,
   normalizeChatId,
-  sendBudgetIntro,
   sendMostruarioCatalog,
 };
