@@ -19,7 +19,8 @@ sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
   websockify \
   dbus-x11 \
   fonts-liberation \
-  iproute2
+  iproute2 \
+  util-linux
 
 if ! command -v google-chrome-stable >/dev/null 2>&1 \
   && ! command -v google-chrome >/dev/null 2>&1 \
