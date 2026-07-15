@@ -33,7 +33,7 @@ assert.deepEqual(env.serviceLabelReplaceGroup, [
 
 assert.equal(
   messages.letteringBudgetIntro,
-  'Para preparar o orçamento do seu letreiro, preciso de algumas informações. Vamos começar pelo tipo de acrílico:',
+  'Para orçarmos seu letreiro, preciso de algumas informações. Vamos começar pelo tipo de acrílico:',
 );
 assert.equal(messages.askObservationWrite, 'Perfeito! Pode me contar o que gostaria de acrescentar?');
 assert.equal(messages.askGeneralObservationText, 'Perfeito! Pode me contar o que gostaria de acrescentar?');
@@ -56,5 +56,7 @@ assert.equal(
   false,
   'o texto antigo de finalização não pode voltar',
 );
+assert.equal(serializedMessages.includes('Confira nosso mostruário de *Letreiros e Cores*'), false);
+assert.equal(serializedMessages.includes('🔗 Ver Mostruário'), false);
 
 console.log('✅ Configuração comercial atual verificada: Instagram, catálogo, etiquetas e textos.');
