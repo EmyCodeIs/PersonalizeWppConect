@@ -94,7 +94,7 @@ function createDeduplicatedOutgoingHandler(handler, isInternalLabelOperation = (
     if (!chatId || /@g\.us$/i.test(chatId)) return;
 
     if (isInternalLabelOperation(chatId)) {
-      console.log(`[HANDOFF] evento ignorado durante aplicação interna de etiqueta: ${chatId}`);
+      console.log(`[ETIQUETAS] evento interno ignorado durante aplicação: ${chatId}`);
       return;
     }
 
@@ -103,7 +103,7 @@ function createDeduplicatedOutgoingHandler(handler, isInternalLabelOperation = (
     const type = outgoingType(raw) || 'unknown';
 
     if (!isVisibleOutgoingEvent(raw, text)) {
-      console.log(`[HANDOFF] evento não-mensagem ignorado: ${chatId} | tipo=${type}`);
+      console.log(`[EVENTO INTERNO] saída não-mensagem ignorada: ${chatId} | tipo=${type}`);
       return;
     }
 
@@ -118,11 +118,20 @@ function createDeduplicatedOutgoingHandler(handler, isInternalLabelOperation = (
       : `fallback:${chatId}:${type}:${text.toLowerCase()}:${fallbackWindow}`;
 
     if (seen.has(key)) {
-      console.log(`[HANDOFF] evento de saída duplicado ignorado: ${chatId} | chave=${key}`);
+      console.log(`[MONITOR DE SAÍDA] evento duplicado ignorado: ${chatId} | chave=${key}`);
       return;
     }
 
     seen.set(key, now);
+
+    // Saídas previamente registradas pelo próprio bot são resolvidas aqui e
+    // nunca chegam à rotina que pode ativar o handoff.
+    const matchedBotMessage = payload.channel?.outboundTracker?.consumeIfBot?.(chatId, raw);
+    if (matchedBotMessage) {
+      console.log(`[SAÍDA DO BOT] reconhecida: ${chatId} | tipo=${matchedBotMessage.type}`);
+      return;
+    }
+
     await handler({ ...payload, from: chatId, text, raw });
   };
 }
@@ -155,7 +164,7 @@ SellerHandoff.getAutomationBlock = async function getAutomationBlockExactSeller(
 
   if (assignment?.assigned && assignment.matchMode !== 'name') {
     console.warn(
-      `[HANDOFF] etiqueta ignorada por corresponder apenas à cor | chat=${clientId} `
+      `[ETIQUETAS] correspondência apenas pela cor ignorada | chat=${clientId} `
       + `| etiqueta=${assignment.labelName || '-'} | vendedor=${assignment.seller || '-'}`,
     );
   }
@@ -214,7 +223,7 @@ WppClient.createWppChannel = async function createWppChannelWithReliableOutgoing
     channel.applyContactLabel = async (clientId, label = {}) => {
       markInternalLabelOperation(clientId);
       console.log(
-        `[HANDOFF] proteção de operação interna ativada: ${normalizeChatId(clientId)} `
+        `[ETIQUETAS] proteção de operação interna ativada: ${normalizeChatId(clientId)} `
         + `| etiqueta=${String(label?.name || label || '-').trim() || '-'}`,
       );
       try {
@@ -243,9 +252,9 @@ WppClient.createWppChannel = async function createWppChannelWithReliableOutgoing
         source: 'onAnyMessage',
       });
     });
-    console.log('[HANDOFF] monitor de mensagens manuais ativo: onMessage + onAnyMessage com deduplicação');
+    console.log('[MONITOR DE SAÍDA] mensagens manuais e saídas do bot monitoradas com deduplicação');
   } else {
-    console.warn('[HANDOFF] onAnyMessage indisponível; monitor manual usando somente onMessage');
+    console.warn('[MONITOR DE SAÍDA] onAnyMessage indisponível; mensagens manuais monitoradas somente por onMessage');
   }
 
   return channel;
