@@ -13,13 +13,11 @@
     "session:access": "bash scripts/start-session-access.sh",
     "session:access:stop": "bash scripts/stop-session-access.sh",
     "session:access:install:ubuntu": "bash scripts/install-session-access-ubuntu.sh",
-    "session:access:windows": "node scripts/session-access-proxy.js"
+    "vps:start": "bash scripts/start-vps-whatsapp.sh"
   },
   "dependencies": {
-    "@novnc/novnc": "^1.5.0",
     "@wppconnect-team/wppconnect": "^2.2.1",
-    "dotenv": "^17.2.3",
-    "ws": "^8.18.0"
+    "dotenv": "^17.2.3"
   },
   "engines": {
     "node": ">=20 <25"
