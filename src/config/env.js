@@ -76,7 +76,9 @@ function sellerLabelRules() {
   return resolved;
 }
 
-const serviceLabelLetreiro = process.env.SERVICE_LABEL_LETREIRO || 'Orçamento letreiro';
+const INSTAGRAM_WELCOME_URL = 'https://www.instagram.com/personalizeseuambiente?igsh=NW9wYzI5ZHc1MnF2';
+const DEFAULT_CATALOG_NAME = 'Mostruário Letreiros';
+const serviceLabelLetreiro = process.env.SERVICE_LABEL_LETREIRO || 'Orçamento letreiros';
 const serviceLabelPlotagem = process.env.SERVICE_LABEL_PLOTAGEM || 'Plotagens';
 const serviceLabelOutros = process.env.SERVICE_LABEL_OUTROS || 'Outros';
 const supportLabelName = process.env.SERVICE_LABEL_SUPPORT || 'Suporte';
@@ -100,6 +102,8 @@ const env = {
   maintenanceIntervalMs: Math.max(60000, num('MAINTENANCE_INTERVAL_MS', 900000)),
   runtimeCacheMaxEntries: Math.max(500, num('RUNTIME_CACHE_MAX_ENTRIES', 5000)),
   botActivityTtlDays: Math.max(1, num('BOT_ACTIVITY_TTL_DAYS', 30)),
+  tokenCacheRoot: process.env.TOKEN_CACHE_ROOT || 'tokens',
+  tokenCacheMaxAgeDays: Math.max(0, num('TOKEN_CACHE_MAX_AGE_DAYS', 7)),
 
   // Controle global de concorrência/consumo para evitar excesso de processamento simultâneo.
   queueMaxUnits: Math.max(1, num('QUEUE_MAX_UNITS', num('MAX_CONCURRENT_CHATS', 2))),
@@ -152,7 +156,10 @@ const env = {
   serviceLabelPlotagemColor: process.env.SERVICE_LABEL_PLOTAGEM_COLOR || 'gray',
   serviceLabelOutrosColor: process.env.SERVICE_LABEL_OUTROS_COLOR || 'red',
   supportLabelColor,
-  serviceLabelReplaceGroup: list('SERVICE_LABEL_REPLACE_GROUP', [serviceLabelLetreiro, serviceLabelPlotagem, serviceLabelOutros]),
+  serviceLabelReplaceGroup: list(
+    'SERVICE_LABEL_REPLACE_GROUP',
+    [serviceLabelLetreiro, serviceLabelPlotagem, serviceLabelOutros, supportLabelName],
+  ),
   enableUnreadBootstrap: bool('ENABLE_UNREAD_BOOTSTRAP', false),
   unreadBootstrapDelayMs: Math.max(1000, num('UNREAD_BOOTSTRAP_DELAY_MS', 6000)),
   unreadBootstrapAttempts: Math.max(1, num('UNREAD_BOOTSTRAP_ATTEMPTS', 3)),
@@ -166,7 +173,8 @@ const env = {
   lidNumberMap: mapList('LID_NUMBER_MAP'),
   assetsDir: process.env.ASSETS_DIR || 'assets',
   bemVindosImageBaseName: process.env.BEM_VINDOS_IMAGE_BASENAME || 'capa_bem_vindos',
-  bemVindosLinkUrl: process.env.BEM_VINDOS_LINK_URL || 'https://personalizeseuambiente.com.br/bem-vindos',
+  bemVindosLinkUrl: process.env.BEM_VINDOS_LINK_URL || INSTAGRAM_WELCOME_URL,
+  mostruarioCatalogName: process.env.MOSTRUARIO_CATALOG_NAME || DEFAULT_CATALOG_NAME,
   mostruarioLetreiroImageBaseName: process.env.MOSTRUARIO_LETREIRO_IMAGE_BASENAME || 'capa-mostruario',
   mostruarioLinkUrl:
     process.env.MOSTRUARIO_LINK_URL
@@ -180,4 +188,9 @@ const env = {
 if (env.maxReplyDelayMs < env.minReplyDelayMs) env.maxReplyDelayMs = env.minReplyDelayMs;
 if (env.typingMaxMs < env.typingMinMs) env.typingMaxMs = env.typingMinMs;
 
-module.exports = { env, DEFAULT_SELLER_LABEL_RULES };
+module.exports = {
+  DEFAULT_CATALOG_NAME,
+  DEFAULT_SELLER_LABEL_RULES,
+  INSTAGRAM_WELCOME_URL,
+  env,
+};
