@@ -6,6 +6,15 @@ const { env } = require('../config/env');
 const DEFAULT_CATALOG_NAME = 'Mostruário Letreiros';
 const DEFAULT_FALLBACK_LINK = 'https://personalizeseuambiente.com.br/mostruario-letreiros';
 
+function wait(ms) {
+  return new Promise((resolve) => setTimeout(resolve, Math.max(0, Number(ms || 0))));
+}
+
+function catalogSettleMs() {
+  const configured = Number(process.env.LETTERING_CATALOG_SETTLE_MS);
+  return Number.isFinite(configured) && configured >= 0 ? configured : 1500;
+}
+
 function normalizeChatId(value) {
   const raw = String(value || '').trim();
   if (!raw) return '';
@@ -102,31 +111,36 @@ function wrapChannelFactory(name) {
 
 async function sendMostruarioCatalog(channel, clientId) {
   const title = getCatalogName();
+  let sent = false;
 
   if (typeof channel?.sendCatalog === 'function') {
-    const sent = await channel.sendCatalog(clientId, {
+    sent = await channel.sendCatalog(clientId, {
       title,
       description: title,
       textMessage: title,
     });
-    if (sent !== false) return true;
   }
 
-  const fallbackLink = getFallbackLink();
-  console.warn('[CATÁLOGO] envio nativo indisponível; usando link simples como contingência.');
+  if (sent === false) {
+    const fallbackLink = getFallbackLink();
+    console.warn('[CATÁLOGO] envio nativo indisponível; usando link simples como contingência.');
 
-  if (typeof channel?.sendText === 'function') {
-    await channel.sendText(clientId, fallbackLink, { noDelay: true, noTyping: true });
-    return true;
+    if (typeof channel?.sendText === 'function') {
+      sent = await channel.sendText(clientId, fallbackLink, { noDelay: true, noTyping: true });
+    } else {
+      const chatId = normalizeChatId(clientId);
+      if (chatId && typeof channel?.client?.sendText === 'function') {
+        sent = await channel.client.sendText(chatId, fallbackLink);
+      }
+    }
   }
 
-  const chatId = normalizeChatId(clientId);
-  if (chatId && typeof channel?.client?.sendText === 'function') {
-    await channel.client.sendText(chatId, fallbackLink);
-    return true;
-  }
+  if (sent === false || sent === null) return false;
 
-  return false;
+  const settleMs = catalogSettleMs();
+  if (settleMs) await wait(settleMs);
+  console.log(`[CATÁLOGO] cartão estabilizado | cliente=${clientId} | espera=${settleMs}ms`);
+  return true;
 }
 
 function installCatalogMostruario() {
@@ -140,6 +154,7 @@ module.exports = {
   DEFAULT_CATALOG_NAME,
   DEFAULT_FALLBACK_LINK,
   attachCatalogSender,
+  catalogSettleMs,
   getCatalogName,
   getFallbackLink,
   installCatalogMostruario,
