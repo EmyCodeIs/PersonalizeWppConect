@@ -88,7 +88,7 @@ const env = {
   sessionName: process.env.WPP_SESSION_NAME || 'personalize-wppconnect',
   mockMode: bool('MOCK_MODE', false),
   wppHeadless: bool('WPP_HEADLESS', false),
-  enableTestCommands: bool('ENABLE_TEST_COMMANDS', true),
+  enableTestCommands: bool('ENABLE_TEST_COMMANDS', false),
   businessName: process.env.BUSINESS_NAME || 'Personalize',
   sellerName: process.env.SELLER_NAME || 'Vendedor Personalize',
 
@@ -111,6 +111,7 @@ const env = {
   sellerLabelBlockingEnabled: bool('SELLER_LABEL_BLOCKING_ENABLED', true),
   sellerLabelRules: sellerLabelRules(),
   humanBlockHours: Math.max(1, num('HUMAN_BLOCK_HOURS', 24)),
+  labelMaintenanceAutoRemoveDuplicates: bool('LABEL_MAINTENANCE_AUTO_REMOVE_DUPLICATES', false),
 
   // Entrada do cliente. O buffer curto atende respostas simples; o longo é usado
   // em medidas, arte, endereço, Pantone, suporte e observações com várias mensagens.
@@ -152,7 +153,7 @@ const env = {
   serviceLabelOutrosColor: process.env.SERVICE_LABEL_OUTROS_COLOR || 'red',
   supportLabelColor,
   serviceLabelReplaceGroup: list('SERVICE_LABEL_REPLACE_GROUP', [serviceLabelLetreiro, serviceLabelPlotagem, serviceLabelOutros]),
-  enableUnreadBootstrap: bool('ENABLE_UNREAD_BOOTSTRAP', true),
+  enableUnreadBootstrap: bool('ENABLE_UNREAD_BOOTSTRAP', false),
   unreadBootstrapDelayMs: Math.max(1000, num('UNREAD_BOOTSTRAP_DELAY_MS', 6000)),
   unreadBootstrapAttempts: Math.max(1, num('UNREAD_BOOTSTRAP_ATTEMPTS', 3)),
   unreadBootstrapRetryDelayMs: Math.max(500, num('UNREAD_BOOTSTRAP_RETRY_DELAY_MS', 2500)),
