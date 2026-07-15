@@ -19,6 +19,23 @@ async function main() {
   const { messages } = require('../src/core/messages');
   const events = [];
 
+  const obsoletePreload = path.join(__dirname, '../src/core/letteringIntroPreload.js');
+  assert.equal(
+    fs.existsSync(obsoletePreload),
+    false,
+    'o fluxo não pode voltar a depender do preload antigo de introdução',
+  );
+
+  const startupSource = fs.readFileSync(
+    path.join(__dirname, '../src/start-with-required-labels.js'),
+    'utf8',
+  );
+  assert.equal(
+    startupSource.includes('letteringIntroPreload'),
+    false,
+    'a inicialização não pode carregar o preload removido',
+  );
+
   const originalReplace = ServiceLabels.replaceServiceLabel;
   ServiceLabels.replaceServiceLabel = async (_channel, clientId, service) => {
     events.push({ type: 'label', clientId, service });
@@ -27,7 +44,6 @@ async function main() {
 
   try {
     require('../src/core/catalogMostruarioPreload');
-    require('../src/core/letteringIntroPreload');
     const WppClient = require('../src/services/wppconnectClient');
     const { processCustomerMessage } = require('../src/flow/customerFlow');
 
@@ -65,7 +81,7 @@ async function main() {
     assert.match(String(events[3].description || ''), /tipo de acrílico/i);
     assert.equal(Store.getSession(clientId).etapa, 'tipo_acrilico');
 
-    console.log('✅ Fluxo real verificado: etiqueta → catálogo → explicação → lista de acrílico.');
+    console.log('✅ Fluxo real verificado sem preload: etiqueta → catálogo → explicação → lista de acrílico.');
   } finally {
     ServiceLabels.replaceServiceLabel = originalReplace;
   }
