@@ -38,6 +38,10 @@ serviceLabels.initializeServiceLabels = ensureRequiredLabelsOnce;
 installIdempotentServiceLabels();
 installLidServiceLabelFix();
 
+// Mantém somente uma etiqueta operacional entre Letreiros, Plotagens, Outros
+// e Suporte. Etiquetas manuais e a etiqueta exata do vendedor são preservadas.
+require('./core/exclusiveServiceLabelsPreload');
+
 // Precisa carregar antes do fluxo para trocar o mostruário antigo pelo cartão
 // nativo do catálogo do WhatsApp Business.
 require('./core/catalogMostruarioPreload');
