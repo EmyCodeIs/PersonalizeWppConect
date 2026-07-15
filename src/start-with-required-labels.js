@@ -38,8 +38,12 @@ serviceLabels.initializeServiceLabels = ensureRequiredLabelsOnce;
 installIdempotentServiceLabels();
 installLidServiceLabelFix();
 
-// Mantém somente uma etiqueta operacional entre Letreiros, Plotagens, Outros
-// e Suporte. Etiquetas manuais e a etiqueta exata do vendedor são preservadas.
+// Garante que Letreiros, Plotagens, Outros e Suporte sejam sempre tratados
+// como o mesmo grupo operacional, mesmo com um .env antigo incompleto.
+require('./core/operationalLabelPolicyPreload');
+
+// Mantém somente uma etiqueta operacional. Etiquetas manuais e a etiqueta
+// exata do vendedor são preservadas.
 require('./core/exclusiveServiceLabelsPreload');
 
 // Precisa carregar antes do fluxo para trocar o mostruário antigo pelo cartão
