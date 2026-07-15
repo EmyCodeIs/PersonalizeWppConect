@@ -34,6 +34,7 @@ jobs:
           bash -n scripts/start-vps-whatsapp.sh
           bash -n scripts/install-session-access-ubuntu.sh
           bash -n scripts/configure-nginx-access.sh
+          bash -n scripts/backup-vps-state.sh
           bash -n scripts/vps-preflight.sh
           node --check ecosystem.config.cjs
 
