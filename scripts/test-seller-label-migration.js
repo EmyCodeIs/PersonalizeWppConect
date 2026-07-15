@@ -8,6 +8,10 @@ const {
   buildSellerLabelMigrationPlan,
   normalizeName,
 } = require('../src/core/sellerLabelMigration');
+const {
+  isBusinessDataReady,
+  normalizeState,
+} = require('./migrate-seller-labels');
 
 const labels = [
   { id: '10', name: 'Adriano', count: 2115 },
@@ -46,4 +50,24 @@ for (const untouched of ['Fornecedor', 'Acompanhar', 'Personalize', 'Voltar']) {
 }
 
 assert.equal(normalizeName('C. Eduardo'), 'c. eduardo');
-console.log('✅ Plano de migração verificado: aliases e duplicatas corrigidos sem tocar etiquetas manuais.');
+assert.equal(normalizeState(' connected '), 'CONNECTED');
+assert.equal(isBusinessDataReady({
+  state: 'CONNECTED',
+  labelsApiReady: true,
+  labelCount: 9,
+  chatCount: 120,
+}), true);
+assert.equal(isBusinessDataReady({
+  state: 'SYNCING',
+  labelsApiReady: true,
+  labelCount: 9,
+  chatCount: 120,
+}), false, 'não pode auditar enquanto o WhatsApp ainda está sincronizando');
+assert.equal(isBusinessDataReady({
+  state: 'CONNECTED',
+  labelsApiReady: true,
+  labelCount: 9,
+  chatCount: 0,
+}), false, 'não pode aceitar leitura vazia de conversas como auditoria real');
+
+console.log('✅ Plano de migração e espera de sincronização verificados sem tocar etiquetas manuais.');
