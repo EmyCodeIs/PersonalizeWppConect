@@ -4,6 +4,7 @@ const path = require('path');
 const { env } = require('../config/env');
 const { applyNamedLabel } = require('../core/serviceLabels');
 const { OutboundTracker } = require('../core/outboundTracker');
+const { resolveBrowserArgs } = require('../core/vpsBrowserPreload');
 
 function wait(ms) {
   return new Promise((resolve) => setTimeout(resolve, Math.max(0, Number(ms || 0))));
@@ -214,7 +215,11 @@ async function collectUnreadMessages(client) {
 
 async function createWppChannel({ onMessage, onOutgoingMessage, onQr } = {}) {
   const wppconnect = require('@wppconnect-team/wppconnect');
+  const browserArgs = resolveBrowserArgs();
   console.log(`[WPPConnect] Chrome visível: ${env.wppHeadless ? 'não (headless)' : 'sim'}`);
+  if (browserArgs.length) {
+    console.log(`[VPS-CHROME] argumentos aplicados: ${browserArgs.join(' ')}`);
+  }
 
   const client = await wppconnect.create({
     session: env.sessionName,
@@ -226,6 +231,7 @@ async function createWppChannel({ onMessage, onOutgoingMessage, onQr } = {}) {
     statusFind: (statusSession, session) => console.log('[WPPConnect]', session, statusSession),
     headless: env.wppHeadless,
     useChrome: true,
+    browserArgs,
     autoClose: false,
     folderNameToken: 'tokens',
   });
