@@ -25,7 +25,7 @@ const messages = {
   askOtherDescricao: 'Me conta qual serviço ou produto você precisa.',
   askOtherReferencia: 'Você tem alguma medida, foto, referência ou detalhe importante? Pode mandar por texto mesmo.',
   askOtherPrazo: 'Tem algum prazo ou urgência para esse pedido?',
-  completedContactNote: 'Pronto! Registrei todas as informações deste atendimento na sua ficha de contato. 😊',
+  completedContactNote: 'Certo! Encaminhei seu pedido para nossos vendedores e, em breve, alguém da equipe continuará o atendimento por aqui. 😊\n\nSe quiser acrescentar alguma informação ou tiver alguma dúvida, fique à vontade para enviar uma mensagem.',
   mostruario: 'Confira nosso mostruário de *Letreiros e Cores* e veja alguns modelos para te inspirar!\n\nIrei dar início ao seu orçamento logo abaixo:',
   mostruarioLink: '🔗 Ver Mostruário',
   askAcrylicType: 'Selecione o tipo de acrílico do seu letreiro:',
