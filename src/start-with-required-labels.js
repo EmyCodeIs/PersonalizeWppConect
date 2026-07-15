@@ -48,8 +48,8 @@ require('./core/exclusiveServiceLabelsPreload');
 // Impede reaplicações da mesma etiqueta durante o fluxo, finalização e reinícios.
 require('./core/serviceLabelAssignmentPreload');
 
-// Troca o mostruário antigo pelo catálogo nativo e envia, na mesma função,
-// a explicação que antecede a lista de tipo de acrílico.
+// Instala o catálogo nativo. O catálogo aguarda estabilização; o texto seguinte
+// precisa ser confirmado pelo canal antes de a lista de acrílico ser liberada.
 require('./core/catalogMostruarioPreload');
 require('./core/handoffPreload');
 // Precisa carregar antes da proteção administrativa: comandos digitados pelo
@@ -84,4 +84,5 @@ const TokenCache = require('./core/tokenCacheMaintenance');
 TokenCache.runStartupTokenCacheMaintenance();
 TokenCache.startTokenCacheMonitor();
 
+console.log('[BUILD] personalize-catalogo-texto-lista-v2');
 require('./bootstrap');
