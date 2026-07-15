@@ -1,6 +1,7 @@
 'use strict';
 
 const assert = require('assert/strict');
+const path = require('path');
 
 process.env.MOCK_MODE = 'true';
 
@@ -14,28 +15,38 @@ assert.deepEqual(
   ['--disable-gpu', '--window-size=1366,768', '--lang=pt-BR'],
 );
 
+const cwd = path.resolve('/tmp/personalize-browser-test');
+const common = [
+  `--disk-cache-dir=${path.resolve(cwd, 'data/browser-cache')}`,
+  '--disk-cache-size=104857600',
+  '--media-cache-size=52428800',
+];
+
 assert.deepEqual(
-  resolveBrowserArgs({ platform: 'win32', isRoot: false, configured: '' }),
-  [],
+  resolveBrowserArgs({ platform: 'win32', isRoot: false, configured: '', cwd }),
+  common,
 );
 
 assert.deepEqual(
-  resolveBrowserArgs({ platform: 'linux', isRoot: false, configured: '' }),
-  ['--disable-dev-shm-usage'],
+  resolveBrowserArgs({ platform: 'linux', isRoot: false, configured: '', cwd }),
+  [...common, '--disable-dev-shm-usage'],
 );
 
 assert.deepEqual(
-  resolveBrowserArgs({ platform: 'linux', isRoot: true, configured: '' }),
-  ['--disable-dev-shm-usage', '--no-sandbox', '--disable-setuid-sandbox'],
+  resolveBrowserArgs({ platform: 'linux', isRoot: true, configured: '', cwd }),
+  [...common, '--disable-dev-shm-usage', '--no-sandbox', '--disable-setuid-sandbox'],
 );
 
-assert.deepEqual(
-  resolveBrowserArgs({
-    platform: 'linux',
-    isRoot: true,
-    configured: '--disable-dev-shm-usage;--lang=pt-BR',
-  }),
-  ['--disable-dev-shm-usage', '--lang=pt-BR', '--no-sandbox', '--disable-setuid-sandbox'],
-);
+const custom = resolveBrowserArgs({
+  platform: 'linux',
+  isRoot: true,
+  cwd,
+  configured: '--disk-cache-size=20971520;--lang=pt-BR',
+});
+assert.equal(custom.includes('--disk-cache-size=20971520'), true);
+assert.equal(custom.includes('--disk-cache-size=104857600'), false);
+assert.equal(custom.includes('--lang=pt-BR'), true);
+assert.equal(custom.includes('--disable-dev-shm-usage'), true);
+assert.equal(custom.includes('--no-sandbox'), true);
 
-console.log('✅ Chrome da VPS verificado: Linux, memória compartilhada e execução root.');
+console.log('✅ Chrome verificado: cache fora de tokens, limites de tamanho e execução Linux/root.');
