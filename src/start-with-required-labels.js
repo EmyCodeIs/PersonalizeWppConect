@@ -16,5 +16,6 @@ require('./core/preferredSellerNotePreload');
 require('./core/completedFlowSilencePreload');
 require('./core/runtimeReliabilityPreload');
 require('./core/supportAndServicesPreload');
+require('./core/exactAcknowledgementPreload');
 require('./core/bufferStagePolicyPreload');
 require('./bootstrap');
