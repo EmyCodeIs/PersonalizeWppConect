@@ -3,6 +3,8 @@ set -uo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ENV_FILE="${ENV_FILE:-$ROOT_DIR/.env}"
+LOCK_FILE="$ROOT_DIR/data/session-access/start.lock"
+mkdir -p "$(dirname "$LOCK_FILE")"
 
 # shellcheck disable=SC1091
 source "$ROOT_DIR/scripts/load-dotenv.sh"
@@ -19,7 +21,7 @@ echo "[watchdog] supervisão do acesso remoto iniciada; intervalo=${INTERVAL_SEC
 while [[ "$stop_requested" == "false" ]]; do
   if ! bash "$ROOT_DIR/scripts/session-access-health.sh" >/dev/null 2>&1; then
     echo "[watchdog] componente inativo detectado; tentando recuperar"
-    if bash "$ROOT_DIR/scripts/start-session-access.sh"; then
+    if flock -w 30 "$LOCK_FILE" bash "$ROOT_DIR/scripts/start-session-access.sh"; then
       echo "[watchdog] recuperação concluída"
     else
       echo "[watchdog] recuperação falhou; nova tentativa em ${INTERVAL_SECONDS}s" >&2
