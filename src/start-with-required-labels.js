@@ -4,9 +4,6 @@
 // Na VPS, `npm run vps:start` cria uma área de trabalho virtual, publica essa
 // mesma tela pelo noVNC e inicia o WPPConnect dentro dela.
 
-// Precisa ser carregado antes dos módulos que importam o cliente WPPConnect.
-require('./core/vpsBrowserPreload');
-
 const serviceLabels = require('./core/serviceLabels');
 const { ensureRequiredLabelsOnce } = require('./core/requiredLabelsStartup');
 const { installIdempotentServiceLabels } = require('./core/idempotentServiceLabels');
