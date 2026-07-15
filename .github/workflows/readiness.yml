@@ -27,11 +27,23 @@ jobs:
 
       - name: Verificar scripts da VPS
         run: |
+          bash -n scripts/load-dotenv.sh
           bash -n scripts/start-session-access.sh
           bash -n scripts/stop-session-access.sh
           bash -n scripts/start-vps-whatsapp.sh
           bash -n scripts/install-session-access-ubuntu.sh
           node --check ecosystem.config.cjs
+
+      - name: Testar carregamento seguro do ambiente
+        run: |
+          cat > /tmp/personalize-test.env <<'EOF'
+          SELLER_LABEL_RULES=Adriano=#8FD0A8;Ana=#00A4F2;Emy=#7FE51F;C. Eduardo=#FEB100
+          SESSION_ACCESS_PUBLIC_URL=https://whatsapp.exemplo.com/vnc.html?autoconnect=true&resize=scale
+          EOF
+          source scripts/load-dotenv.sh
+          load_dotenv_file /tmp/personalize-test.env
+          test "$SELLER_LABEL_RULES" = 'Adriano=#8FD0A8;Ana=#00A4F2;Emy=#7FE51F;C. Eduardo=#FEB100'
+          test "$SESSION_ACCESS_PUBLIC_URL" = 'https://whatsapp.exemplo.com/vnc.html?autoconnect=true&resize=scale'
 
       - name: Verificar sintaxe e regressoes
         run: npm test
