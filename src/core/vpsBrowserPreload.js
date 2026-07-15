@@ -1,7 +1,5 @@
 'use strict';
 
-const wppconnect = require('@wppconnect-team/wppconnect');
-
 function parseExtraArgs(value) {
   return String(value || '')
     .split(/[;\n]/)
@@ -30,34 +28,7 @@ function resolveBrowserArgs(options = {}) {
   return [...new Set(args)];
 }
 
-function installVpsBrowserOptions() {
-  if (wppconnect.__personalizeVpsBrowserOptionsInstalled) return;
-  if (typeof wppconnect.create !== 'function') {
-    throw new Error('WPPConnect create() indisponível para configurar o Chrome.');
-  }
-
-  const originalCreate = wppconnect.create.bind(wppconnect);
-  wppconnect.create = function createWithVpsBrowserOptions(options = {}) {
-    const existing = Array.isArray(options.browserArgs) ? options.browserArgs : [];
-    const browserArgs = [...new Set([...existing, ...resolveBrowserArgs()])];
-
-    if (browserArgs.length) {
-      console.log(`[VPS-CHROME] argumentos aplicados: ${browserArgs.join(' ')}`);
-    }
-
-    return originalCreate({
-      ...options,
-      browserArgs,
-    });
-  };
-
-  wppconnect.__personalizeVpsBrowserOptionsInstalled = true;
-}
-
-installVpsBrowserOptions();
-
 module.exports = {
-  installVpsBrowserOptions,
   parseExtraArgs,
   resolveBrowserArgs,
 };
