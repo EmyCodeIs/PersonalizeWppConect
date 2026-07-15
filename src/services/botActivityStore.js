@@ -61,11 +61,29 @@ function persist() {
   }
 }
 
-function recordExpired(record, now = Date.now()) {
+function recordTimestamp(record) {
   const timestamp = new Date(record?.at || 0).getTime();
-  if (!Number.isFinite(timestamp) || timestamp <= 0) return true;
+  return Number.isFinite(timestamp) && timestamp > 0 ? timestamp : 0;
+}
+
+function recordExpired(record, now = Date.now()) {
+  const timestamp = recordTimestamp(record);
+  if (!timestamp) return true;
   const ttlMs = Math.max(1, Number(env.botActivityTtlDays || 30)) * 24 * 60 * 60 * 1000;
   return timestamp <= (now - ttlMs);
+}
+
+function enforceMaxEntries() {
+  const maxEntries = Math.max(500, Number(env.runtimeCacheMaxEntries || 5000));
+  const entries = Object.entries(state.contacts || {});
+  if (entries.length <= maxEntries) return false;
+
+  entries.sort(([, a], [, b]) => recordTimestamp(a) - recordTimestamp(b));
+  const removeCount = entries.length - maxEntries;
+  for (let index = 0; index < removeCount; index += 1) {
+    delete state.contacts[entries[index][0]];
+  }
+  return removeCount > 0;
 }
 
 function purgeExpired({ write = true } = {}) {
@@ -78,6 +96,7 @@ function purgeExpired({ write = true } = {}) {
     changed = true;
   }
 
+  if (enforceMaxEntries()) changed = true;
   if (changed && write) persist();
   return changed;
 }
@@ -95,6 +114,7 @@ function markBotOutbound(clientId, payload = {}) {
   };
 
   for (const key of keys) state.contacts[key] = record;
+  enforceMaxEntries();
   persist();
   return record;
 }
@@ -145,7 +165,9 @@ module.exports = {
   resetAll,
   _test: {
     candidateKeys,
+    enforceMaxEntries,
     normalizeChatId,
     recordExpired,
+    recordTimestamp,
   },
 };
