@@ -9,6 +9,108 @@ const { migrateSellerLabels } = require('../src/core/sellerLabelMigration');
 const apply = process.argv.includes('--apply');
 const confirmation = process.argv.find((item) => item.startsWith('--confirm='))?.split('=').slice(1).join('=') || '';
 
+function wait(ms) {
+  return new Promise((resolve) => setTimeout(resolve, Math.max(0, Number(ms || 0))));
+}
+
+function normalizeState(value) {
+  return String(value || '').trim().toUpperCase();
+}
+
+function isBusinessDataReady(snapshot = {}) {
+  const state = normalizeState(snapshot.state);
+  const stateReady = !state || state === 'CONNECTED';
+  return stateReady
+    && snapshot.labelsApiReady === true
+    && Number(snapshot.labelCount || 0) > 0
+    && Number(snapshot.chatCount || 0) > 0;
+}
+
+async function readBusinessReadiness(client) {
+  let state = '';
+  try {
+    if (typeof client?.getConnectionState === 'function') {
+      state = normalizeState(await client.getConnectionState());
+    }
+  } catch (_) {}
+
+  let page = {
+    labelsApiReady: false,
+    labelCount: 0,
+    chatCount: 0,
+    actionApiReady: false,
+  };
+
+  if (client?.page?.evaluate) {
+    try {
+      page = await client.page.evaluate(async () => {
+        const WPP = window.WPP || null;
+        const Store = window.Store || null;
+        let labels = [];
+
+        try {
+          if (typeof WPP?.labels?.getAllLabels === 'function') {
+            const raw = await WPP.labels.getAllLabels();
+            labels = Array.isArray(raw) ? raw : Object.values(raw || {});
+          }
+        } catch (_) {}
+
+        let chats = [];
+        try {
+          const rawChats = Store?.Chat?.getModelsArray?.() || Store?.Chat?.models || [];
+          chats = Array.isArray(rawChats) ? rawChats : Object.values(rawChats || {});
+        } catch (_) {}
+
+        return {
+          labelsApiReady: typeof WPP?.labels?.getAllLabels === 'function',
+          labelCount: labels.length,
+          chatCount: chats.length,
+          actionApiReady: typeof WPP?.labels?.addOrRemoveLabels === 'function'
+            || typeof WPP?.lists?.addChats === 'function',
+        };
+      });
+    } catch (_) {}
+  }
+
+  return { state, ...page };
+}
+
+async function waitForBusinessSync(channel, options = {}) {
+  const client = channel?.client;
+  const timeoutMs = Math.max(30000, Number(options.timeoutMs || 120000));
+  const intervalMs = Math.max(1000, Number(options.intervalMs || 2500));
+  const startedAt = Date.now();
+  let lastLogAt = 0;
+  let last = {};
+
+  while ((Date.now() - startedAt) < timeoutMs) {
+    last = await readBusinessReadiness(client);
+    if (isBusinessDataReady(last)) {
+      console.log(
+        `[LISTAS][MIGRAÇÃO] WhatsApp sincronizado | estado=${last.state || '-'} `
+        + `| etiquetas=${last.labelCount} | conversas=${last.chatCount}`,
+      );
+      return last;
+    }
+
+    if ((Date.now() - lastLogAt) >= 10000) {
+      lastLogAt = Date.now();
+      console.log(
+        `[LISTAS][MIGRAÇÃO] aguardando sincronização | estado=${last.state || '-'} `
+        + `| etiquetas=${last.labelCount || 0} | conversas=${last.chatCount || 0}`,
+      );
+    }
+
+    await wait(intervalMs);
+  }
+
+  throw new Error(
+    `WhatsApp não terminou a sincronização em ${Math.round(timeoutMs / 1000)}s `
+    + `(estado=${last.state || '-'}, etiquetas=${last.labelCount || 0}, conversas=${last.chatCount || 0}). `
+    + 'Nenhuma etiqueta foi alterada.',
+  );
+}
+
 function printReport(report) {
   console.log(`\n[LISTAS][MIGRAÇÃO] modo=${report.apply ? 'APLICAR' : 'AUDITORIA'} | conversasCarregadas=${report.chatCount}`);
   if (report.missingTargets?.length) {
@@ -64,7 +166,19 @@ async function main() {
 
   const channel = await createWppChannel();
   try {
-    await ensureRequiredLabelsOnce(channel);
+    await waitForBusinessSync(channel);
+
+    // Auditoria é somente leitura. A criação das etiquetas corretas ocorre apenas
+    // no modo aplicar e somente após o WhatsApp concluir a sincronização.
+    if (apply) {
+      const requiredReady = await ensureRequiredLabelsOnce(channel);
+      if (!requiredReady) {
+        throw new Error('Não foi possível confirmar todas as etiquetas corretas. Migração cancelada sem remover vínculos.');
+      }
+      await wait(2500);
+      await waitForBusinessSync(channel, { timeoutMs: 60000 });
+    }
+
     const report = await migrateSellerLabels(channel, { apply });
     printReport(report);
 
@@ -77,7 +191,17 @@ async function main() {
   }
 }
 
-main().catch((error) => {
-  console.error('[LISTAS][MIGRAÇÃO] falha:', error?.stack || error?.message || error);
-  process.exitCode = 1;
-});
+if (require.main === module) {
+  main().catch((error) => {
+    console.error('[LISTAS][MIGRAÇÃO] falha:', error?.stack || error?.message || error);
+    process.exitCode = 1;
+  });
+}
+
+module.exports = {
+  isBusinessDataReady,
+  main,
+  normalizeState,
+  readBusinessReadiness,
+  waitForBusinessSync,
+};
