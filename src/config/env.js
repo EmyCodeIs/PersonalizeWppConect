@@ -104,6 +104,10 @@ const env = {
   botActivityTtlDays: Math.max(1, num('BOT_ACTIVITY_TTL_DAYS', 30)),
   tokenCacheRoot: process.env.TOKEN_CACHE_ROOT || 'tokens',
   tokenCacheMaxAgeDays: Math.max(0, num('TOKEN_CACHE_MAX_AGE_DAYS', 7)),
+  tokenCacheAutoClean: bool('TOKEN_CACHE_AUTO_CLEAN', true),
+  tokenCacheForceCleanMb: Math.max(50, num('TOKEN_CACHE_FORCE_CLEAN_MB', 300)),
+  tokenCacheWarnMb: Math.max(100, num('TOKEN_CACHE_WARN_MB', 500)),
+  tokenCacheLogIntervalHours: Math.max(1, num('TOKEN_CACHE_LOG_INTERVAL_HOURS', 6)),
 
   // Controle global de concorrência/consumo para evitar excesso de processamento simultâneo.
   queueMaxUnits: Math.max(1, num('QUEUE_MAX_UNITS', num('MAX_CONCURRENT_CHATS', 2))),
