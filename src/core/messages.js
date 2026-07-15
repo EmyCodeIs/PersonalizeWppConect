@@ -33,6 +33,7 @@ const messages = {
   supportNeedDetails: 'Pode me explicar o que aconteceu ou qual ajuda você precisa? Você também pode enviar imagem ou arquivo.',
   mostruario: 'Confira nosso mostruário de *Letreiros e Cores* e veja alguns modelos para te inspirar!\n\nIrei dar início ao seu orçamento logo abaixo:',
   mostruarioLink: '🔗 Ver Mostruário',
+  letteringBudgetIntro: 'Para preparar o orçamento do seu letreiro, preciso de algumas informações. Vamos começar pelo tipo de acrílico:',
   askAcrylicType: 'Selecione o tipo de acrílico do seu letreiro:',
   askColorCount: 'Quantas cores terá seu letreiro?',
   askPantone: '🎨 *Cor Personalizada*\n\nMe informe a *cor Pantone* (código da sua cor).\n\nPode também enviar sua paleta de cores ou o arquivo da sua *logo/identidade visual* para referência.',
