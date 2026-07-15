@@ -31,12 +31,19 @@ assert.deepEqual(env.serviceLabelReplaceGroup, [
   'Suporte',
 ]);
 
+assert.equal(
+  messages.letteringBudgetIntro,
+  'Para preparar o orçamento do seu letreiro, preciso de algumas informações. Vamos começar pelo tipo de acrílico:',
+);
 assert.equal(messages.askObservationWrite, 'Perfeito! Pode me contar o que gostaria de acrescentar?');
 assert.equal(messages.askGeneralObservationText, 'Perfeito! Pode me contar o que gostaria de acrescentar?');
 assert.equal(
   messages.completedContactNote,
   'Certo! Seu pedido foi registrado e encaminhado para nossa equipe. Em breve, um vendedor continuará o atendimento por aqui. 😊',
 );
+
+const sellerEventSource = require('fs').readFileSync(require('path').join(__dirname, '../src/core/sellerLabelEventsPreload.js'), 'utf8');
+assert.equal(sellerEventSource.includes('onUpdateLabel'), true, 'o monitor de alteração de etiquetas precisa continuar registrado');
 
 const serializedMessages = JSON.stringify(messages);
 assert.equal(
