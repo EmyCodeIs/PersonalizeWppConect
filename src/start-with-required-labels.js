@@ -34,6 +34,9 @@ require('./core/handoffPreload');
 // ativar handoff, mas ainda preserva os IDs necessários para a limpeza.
 require('./core/resetCommandHandoffPreload');
 require('./core/resetCleanupPreload');
+// Substitui a limpeza ampla antiga por uma limpeza que remove somente as
+// etiquetas gerenciadas, preservando as etiquetas manuais do contato.
+require('./core/safeResetCleanupOverridePreload');
 require('./core/customerFlowFixPreload');
 require('./core/preferredSellerNotePreload');
 require('./core/completedFlowSilencePreload');
