@@ -40,7 +40,9 @@ function mapList(name) {
 const serviceLabelLetreiro = process.env.SERVICE_LABEL_LETREIRO || 'Orçamento letreiro';
 const serviceLabelPlotagem = process.env.SERVICE_LABEL_PLOTAGEM || 'Plotagens';
 const serviceLabelOutros = process.env.SERVICE_LABEL_OUTROS || 'Outros';
+const supportLabelName = process.env.SERVICE_LABEL_SUPPORT || 'Suporte';
 const serviceLabelLetreiroColor = process.env.SERVICE_LABEL_LETREIRO_COLOR || 'purple';
+const supportLabelColor = process.env.SERVICE_LABEL_SUPPORT_COLOR || 'red';
 const flowSessionTtlHours = Math.max(1, num('FLOW_SESSION_TTL_HOURS', 24));
 
 const env = {
@@ -67,7 +69,7 @@ const env = {
   humanBlockHours: Math.max(1, num('HUMAN_BLOCK_HOURS', 24)),
 
   // Entrada do cliente. O buffer curto atende respostas simples; o longo é usado
-  // em medidas, arte, endereço, Pantone e observações com várias mensagens.
+  // em medidas, arte, endereço, Pantone, suporte e observações com várias mensagens.
   bufferMs: Math.max(800, num('BUFFER_MS', 4500)),
   multiMessageBufferMs: Math.max(2500, num('MULTI_MESSAGE_BUFFER_MS', 8000)),
   measureBufferMs: Math.max(2500, num('MEASURE_BUFFER_MS', 8000)),
@@ -77,6 +79,7 @@ const env = {
   addressBufferMs: Math.max(2500, num('ADDRESS_BUFFER_MS', 8000)),
   pantoneBufferMs: Math.max(2500, num('PANTONE_BUFFER_MS', 8000)),
   observationBufferMs: Math.max(2500, num('OBSERVATION_BUFFER_MS', 9000)),
+  supportBufferMs: Math.max(5000, num('SUPPORT_BUFFER_MS', 9000)),
   cityBufferMs: Math.max(800, num('CITY_BUFFER_MS', 2500)),
   interactiveBufferMs: Math.max(100, num('INTERACTIVE_BUFFER_MS', 350)),
 
@@ -99,9 +102,11 @@ const env = {
   serviceLabelLetreiro,
   serviceLabelPlotagem,
   serviceLabelOutros,
+  supportLabelName,
   serviceLabelLetreiroColor,
   serviceLabelPlotagemColor: process.env.SERVICE_LABEL_PLOTAGEM_COLOR || 'gray',
   serviceLabelOutrosColor: process.env.SERVICE_LABEL_OUTROS_COLOR || 'red',
+  supportLabelColor,
   serviceLabelReplaceGroup: list('SERVICE_LABEL_REPLACE_GROUP', [serviceLabelLetreiro, serviceLabelPlotagem, serviceLabelOutros]),
   enableUnreadBootstrap: bool('ENABLE_UNREAD_BOOTSTRAP', true),
   unreadBootstrapDelayMs: Math.max(1000, num('UNREAD_BOOTSTRAP_DELAY_MS', 6000)),
