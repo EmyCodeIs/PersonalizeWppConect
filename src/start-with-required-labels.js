@@ -29,6 +29,10 @@ installIdempotentServiceLabels();
 installLidServiceLabelFix();
 
 require('./core/handoffPreload');
+// Precisa carregar entre o monitor de saída e a limpeza do reset: assim o
+// /resetarsys digitado pelo vendedor volta ao processador de comandos sem
+// ativar handoff, mas ainda preserva os IDs necessários para a limpeza.
+require('./core/resetCommandHandoffPreload');
 require('./core/resetCleanupPreload');
 require('./core/customerFlowFixPreload');
 require('./core/preferredSellerNotePreload');
