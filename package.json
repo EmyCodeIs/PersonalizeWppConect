@@ -19,6 +19,7 @@
     "session:access:health": "bash scripts/session-access-health.sh",
     "session:access:watch": "bash scripts/watch-session-access.sh",
     "session:access:install:ubuntu": "bash scripts/install-session-access-ubuntu.sh",
+    "vps:backup": "bash scripts/backup-vps-state.sh",
     "vps:preflight": "bash scripts/vps-preflight.sh",
     "vps:configure-nginx": "bash scripts/configure-nginx-access.sh",
     "vps:start": "bash scripts/start-vps-whatsapp.sh"
