@@ -3,6 +3,7 @@
 const fs = require('fs');
 const path = require('path');
 const Identity = require('./contactIdentity');
+const { env } = require('../config/env');
 
 const DATA_DIR = path.join(process.cwd(), 'data');
 const STORE_PATH = path.join(DATA_DIR, 'bot-activity.json');
@@ -60,7 +61,29 @@ function persist() {
   }
 }
 
+function recordExpired(record, now = Date.now()) {
+  const timestamp = new Date(record?.at || 0).getTime();
+  if (!Number.isFinite(timestamp) || timestamp <= 0) return true;
+  const ttlMs = Math.max(1, Number(env.botActivityTtlDays || 30)) * 24 * 60 * 60 * 1000;
+  return timestamp <= (now - ttlMs);
+}
+
+function purgeExpired({ write = true } = {}) {
+  const now = Date.now();
+  let changed = false;
+
+  for (const [key, record] of Object.entries(state.contacts || {})) {
+    if (!recordExpired(record, now)) continue;
+    delete state.contacts[key];
+    changed = true;
+  }
+
+  if (changed && write) persist();
+  return changed;
+}
+
 function markBotOutbound(clientId, payload = {}) {
+  purgeExpired({ write: false });
   const keys = candidateKeys(clientId);
   if (!keys.length) return null;
 
@@ -77,10 +100,23 @@ function markBotOutbound(clientId, payload = {}) {
 }
 
 function getLastBotOutbound(clientId) {
+  let changed = false;
+
   for (const key of candidateKeys(clientId)) {
     const record = state.contacts[key];
-    if (record?.at) return { ...record };
+    if (!record) continue;
+
+    if (recordExpired(record)) {
+      delete state.contacts[key];
+      changed = true;
+      continue;
+    }
+
+    if (changed) persist();
+    return { ...record };
   }
+
+  if (changed) persist();
   return null;
 }
 
@@ -89,12 +125,27 @@ function resetAll() {
   persist();
 }
 
+purgeExpired({ write: false });
+
+if (!global.__personalizeBotActivityMaintenanceTimer) {
+  const intervalMs = Math.max(60000, Number(env.maintenanceIntervalMs || 900000));
+  const timer = setInterval(() => {
+    try { purgeExpired(); } catch (error) {
+      console.warn('[BOT-ACTIVITY] falha ao limpar checkpoints antigos:', error?.message || error);
+    }
+  }, intervalMs);
+  if (typeof timer.unref === 'function') timer.unref();
+  global.__personalizeBotActivityMaintenanceTimer = timer;
+}
+
 module.exports = {
   markBotOutbound,
   getLastBotOutbound,
+  purgeExpired,
   resetAll,
   _test: {
     candidateKeys,
     normalizeChatId,
+    recordExpired,
   },
 };
