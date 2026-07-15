@@ -27,6 +27,35 @@ npm start
 
 Depois leia o QR Code no navegador aberto pelo WPPConnect.
 
+## Chrome local e Chrome compartilhado na VPS
+
+### Windows local
+
+Use somente:
+
+```powershell
+npm start
+```
+
+O WPPConnect abre o Chrome normalmente no computador. O projeto não inicia portal, TightVNC ou link remoto no Windows.
+
+### VPS Ubuntu
+
+Use:
+
+```bash
+npm run session:access:install:ubuntu
+npm run vps:start
+```
+
+O segundo comando cria um desktop virtual, publica essa tela com noVNC e inicia o WPPConnect dentro do mesmo desktop. Assim, o vendedor acessa pelo navegador exatamente o mesmo Chrome usado pela automação.
+
+A configuração completa está em:
+
+```txt
+docs/ACESSO-VENDEDOR-VPS.md
+```
+
 ## Entrada do fluxo
 
 A primeira resposta após o buffer é:
