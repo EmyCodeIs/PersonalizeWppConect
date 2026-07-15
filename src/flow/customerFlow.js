@@ -6,8 +6,9 @@ const {
   buildDepthMenu, buildDeliveryMenu,
 } = require('../core/menuCatalog');
 const {
-  sendMostruarioLetreiro, sendTabelaCores, sendTabelaEspessura, sendTabelaProfundidade,
+  sendTabelaCores, sendTabelaEspessura, sendTabelaProfundidade,
 } = require('../core/mostruario');
+const { sendMostruarioCatalog } = require('../core/catalogMostruarioPreload');
 const { replaceServiceLabel } = require('../core/serviceLabels');
 const { detectInitialContext } = require('../core/intent');
 const { parseMedidasFromText, normalizeText, extractName, extractPhone } = require('../core/parsers');
@@ -269,8 +270,16 @@ async function processCustomerMessage({ clientId, text, channel, messages: inbou
     d.flow = service; d.demanda = {};
     await replaceServiceLabel(channel, clientId, service).catch(() => null);
     if (service === 'letreiro') {
-      s.etapa = 'tipo_acrilico'; Store.saveSession(s);
-      await sendMostruarioLetreiro(channel, clientId); await sendMenu(channel, clientId, 'tipoAcrilico'); return s;
+      s.etapa = 'tipo_acrilico';
+      Store.saveSession(s);
+      await sendMostruarioCatalog(channel, clientId);
+      await channel.sendText(clientId, messages.letteringBudgetIntro);
+      console.log(
+        `[FLUXO][LETREIRO] catálogo enviado e explicação exibida | cliente=${clientId} `
+        + '| próximaEtapa=tipo_acrilico',
+      );
+      await sendMenu(channel, clientId, 'tipoAcrilico');
+      return s;
     }
     s.etapa = service === 'plotagem' ? 'plotagem_descricao' : 'outros_descricao'; Store.saveSession(s);
     await channel.sendText(clientId, service === 'plotagem' ? messages.plotagem : messages.otherService);
