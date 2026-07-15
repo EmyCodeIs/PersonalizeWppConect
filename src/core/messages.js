@@ -31,9 +31,7 @@ const messages = {
   supportAsk: 'Certo, me explique sua demanda para que eu encaminhe ao nosso suporte.',
   supportForwarded: 'Certo, encaminhei sua mensagem para nossa equipe que em breve assumirá o atendimento. Aguarde por aqui. 🙂',
   supportNeedDetails: 'Pode me explicar o que aconteceu ou qual ajuda você precisa? Você também pode enviar imagem ou arquivo.',
-  mostruario: 'Confira nosso mostruário de *Letreiros e Cores* e veja alguns modelos para te inspirar!\n\nIrei dar início ao seu orçamento logo abaixo:',
-  mostruarioLink: '🔗 Ver Mostruário',
-  letteringBudgetIntro: 'Para preparar o orçamento do seu letreiro, preciso de algumas informações. Vamos começar pelo tipo de acrílico:',
+  letteringBudgetIntro: 'Para orçarmos seu letreiro, preciso de algumas informações. Vamos começar pelo tipo de acrílico:',
   askAcrylicType: 'Selecione o tipo de acrílico do seu letreiro:',
   askColorCount: 'Quantas cores terá seu letreiro?',
   askPantone: '🎨 *Cor Personalizada*\n\nMe informe a *cor Pantone* (código da sua cor).\n\nPode também enviar sua paleta de cores ou o arquivo da sua *logo/identidade visual* para referência.',
@@ -52,7 +50,6 @@ const messages = {
   installationNote: 'Para instalação, a equipe precisa analisar o endereço e os detalhes informados antes da confirmação final.',
   askObservation: '📝\nGostaria de anexar alguma informação sobre o letreiro? Pode ser quantidade, detalhe de logo, observação de instalação, acabamento ou qualquer ponto importante.',
   askObservationText,
-  // Compatibilidade com o nome usado pelo fluxo base. Mantém exatamente o texto definido acima.
   askObservationWrite: askObservationText,
   askGeneralObservation: '📝\nGostaria de acrescentar alguma observação ou detalhe importante sobre o pedido?',
   askGeneralObservationText: askObservationText,
