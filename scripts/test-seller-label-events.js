@@ -32,16 +32,12 @@ async function main() {
 
   const originalGetAutomationBlock = SellerHandoff.getAutomationBlock;
   let clearCount = 0;
-  let mode = 'assigned';
+  let mode = 'stale_after_add';
   SellerHandoff.getAutomationBlock = async () => {
-    if (mode === 'assigned') {
-      return {
-        blocked: true,
-        reason: 'seller_label',
-        seller: 'ana',
-        labelName: 'Ana',
-        source: 'seller_label',
-      };
+    if (mode === 'stale_after_add') {
+      // Simula a janela real em que o evento chegou, mas o Store do WhatsApp
+      // ainda não refletiu a etiqueta. O payload do evento precisa bastar.
+      return { blocked: false, source: 'no_seller_label_yet' };
     }
     return { blocked: false, source: 'seller_label_removed' };
   };
