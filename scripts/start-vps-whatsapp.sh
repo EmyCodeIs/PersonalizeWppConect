@@ -21,4 +21,6 @@ echo "[vps] iniciando WPPConnect dentro do desktop compartilhado $DISPLAY"
 echo "[vps] o vendedor verá e controlará exatamente o Chrome aberto pelo bot"
 echo
 
-exec npm start
+# Executa o Node diretamente. Assim PM2/systemd monitora o processo real do bot,
+# em vez de acompanhar um processo intermediário do npm.
+exec node src/start-with-required-labels.js
