@@ -1,14 +1,22 @@
 'use strict';
 
+function configuredConcurrentChats(fallback) {
+  const value = Number(process.env.MAX_CONCURRENT_CHATS);
+  return Number.isFinite(value) && value > 0 ? value : fallback;
+}
+
 class ChatTaskQueue {
   constructor({
     maxUnits = 2,
-    maxConcurrentChats = maxUnits,
+    maxConcurrentChats,
     maxQueueSize = 40,
     taskTimeoutMs = 45000,
   } = {}) {
     this.maxUnits = Math.max(1, Number(maxUnits || 1));
-    this.maxConcurrentChats = Math.max(1, Number(maxConcurrentChats || 1));
+    this.maxConcurrentChats = Math.max(
+      1,
+      Number(maxConcurrentChats || configuredConcurrentChats(this.maxUnits)),
+    );
     this.maxQueueSize = Math.max(1, Number(maxQueueSize || 1));
     this.taskTimeoutMs = Math.max(10, Number(taskTimeoutMs || 0));
     this.runningUnits = 0;
