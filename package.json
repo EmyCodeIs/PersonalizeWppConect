@@ -19,8 +19,10 @@
     "vps:start": "bash scripts/start-vps-whatsapp.sh"
   },
   "dependencies": {
+    "@novnc/novnc": "^1.5.0",
     "@wppconnect-team/wppconnect": "^2.2.1",
-    "dotenv": "^17.2.3"
+    "dotenv": "^17.2.3",
+    "ws": "^8.18.0"
   },
   "engines": {
     "node": ">=20 <25"
