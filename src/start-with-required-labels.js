@@ -1,5 +1,7 @@
 'use strict';
 
+require('dotenv').config();
+
 // No Windows, SESSION_ACCESS_AUTO_START decide se o portal local será iniciado.
 // Na VPS, `npm run vps:start` cria uma área de trabalho virtual, publica essa
 // mesma tela pelo noVNC e inicia o WPPConnect dentro dela.
