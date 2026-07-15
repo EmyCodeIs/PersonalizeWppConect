@@ -52,6 +52,16 @@ if ! command -v npm >/dev/null 2>&1; then
 fi
 
 sudo npm install -g pm2
+
+# Evita que os logs cresçam indefinidamente no disco da VPS.
+if ! pm2 describe pm2-logrotate >/dev/null 2>&1; then
+  pm2 install pm2-logrotate
+fi
+pm2 set pm2-logrotate:max_size 10M
+pm2 set pm2-logrotate:retain 14
+pm2 set pm2-logrotate:compress true
+pm2 set pm2-logrotate:rotateInterval '0 0 * * *'
+
 sudo systemctl enable --now nginx
 
 chmod +x "$ROOT_DIR"/scripts/*.sh
