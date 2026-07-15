@@ -37,6 +37,45 @@ function mapList(name) {
     }, {});
 }
 
+// Cores verificadas nas etiquetas já existentes do WhatsApp Business.
+// O sistema reutiliza essas etiquetas pelo nome e não troca a cor de uma
+// etiqueta existente. Os hexadecimais servem para conferência e criação apenas
+// quando uma etiqueta obrigatória realmente não existir.
+const DEFAULT_SELLER_LABEL_RULES = Object.freeze({
+  adriano: '#8fd0a8',
+  ana: '#00a4f2',
+  emy: '#7fe51f',
+  'c. eduardo': '#feb100',
+});
+
+const LEGACY_SELLER_LABEL_ALIASES = Object.freeze({
+  aninha: 'ana',
+  carlos: 'c. eduardo',
+});
+
+function sellerLabelRules() {
+  const configured = mapList('SELLER_LABEL_RULES');
+  const resolved = { ...DEFAULT_SELLER_LABEL_RULES };
+
+  for (const [rawName, rawColor] of Object.entries(configured)) {
+    const name = LEGACY_SELLER_LABEL_ALIASES[rawName] || rawName;
+    const color = String(rawColor || '').trim();
+    if (!name || !color) continue;
+
+    // Configurações antigas usavam nomes genéricos e cores aproximadas.
+    // Para os vendedores já verificados, somente um hexadecimal explícito
+    // substitui a cor real; assim um .env antigo não cria Aninha/Carlos.
+    if (Object.prototype.hasOwnProperty.call(DEFAULT_SELLER_LABEL_RULES, name)
+      && !/^#[0-9a-f]{6}$/i.test(color)) {
+      continue;
+    }
+
+    resolved[name] = color;
+  }
+
+  return resolved;
+}
+
 const serviceLabelLetreiro = process.env.SERVICE_LABEL_LETREIRO || 'Orçamento letreiro';
 const serviceLabelPlotagem = process.env.SERVICE_LABEL_PLOTAGEM || 'Plotagens';
 const serviceLabelOutros = process.env.SERVICE_LABEL_OUTROS || 'Outros';
@@ -57,6 +96,11 @@ const env = {
   flowSessionTtlHours,
   completedSessionTtlHours: Math.max(1, num('COMPLETED_SESSION_TTL_HOURS', flowSessionTtlHours)),
 
+  // Limpeza periódica e limites dos caches mantidos em memória na VPS.
+  maintenanceIntervalMs: Math.max(60000, num('MAINTENANCE_INTERVAL_MS', 900000)),
+  runtimeCacheMaxEntries: Math.max(500, num('RUNTIME_CACHE_MAX_ENTRIES', 5000)),
+  botActivityTtlDays: Math.max(1, num('BOT_ACTIVITY_TTL_DAYS', 30)),
+
   // Controle global de concorrência/consumo para evitar excesso de processamento simultâneo.
   queueMaxUnits: Math.max(1, num('QUEUE_MAX_UNITS', num('MAX_CONCURRENT_CHATS', 2))),
   maxConcurrentChats: Math.max(1, num('MAX_CONCURRENT_CHATS', 2)),
@@ -65,7 +109,7 @@ const env = {
 
   // Handoff humano / vendedores.
   sellerLabelBlockingEnabled: bool('SELLER_LABEL_BLOCKING_ENABLED', true),
-  sellerLabelRules: mapList('SELLER_LABEL_RULES'),
+  sellerLabelRules: sellerLabelRules(),
   humanBlockHours: Math.max(1, num('HUMAN_BLOCK_HOURS', 24)),
 
   // Entrada do cliente. O buffer curto atende respostas simples; o longo é usado
@@ -115,6 +159,7 @@ const env = {
   unreadBootstrapMaxChats: Math.max(1, num('UNREAD_BOOTSTRAP_MAX_CHATS', 30)),
   unreadBootstrapMaxMessagesPerChat: Math.max(1, num('UNREAD_BOOTSTRAP_MAX_MESSAGES_PER_CHAT', 8)),
   unreadRecoveryHistoryLimit: Math.max(20, num('UNREAD_RECOVERY_HISTORY_LIMIT', 120)),
+  unreadBootstrapMaxAgeHours: Math.max(1, num('UNREAD_BOOTSTRAP_MAX_AGE_HOURS', 24)),
   allowedClientNumbers: list('ALLOWED_CLIENT_NUMBERS', []),
   allowedChatIds: list('ALLOWED_CHAT_IDS', []),
   lidNumberMap: mapList('LID_NUMBER_MAP'),
@@ -134,4 +179,4 @@ const env = {
 if (env.maxReplyDelayMs < env.minReplyDelayMs) env.maxReplyDelayMs = env.minReplyDelayMs;
 if (env.typingMaxMs < env.typingMinMs) env.typingMaxMs = env.typingMinMs;
 
-module.exports = { env };
+module.exports = { env, DEFAULT_SELLER_LABEL_RULES };
