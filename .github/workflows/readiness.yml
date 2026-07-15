@@ -1,6 +1,7 @@
 name: Prontidao VPS
 
 on:
+  workflow_dispatch:
   push:
     branches:
       - feat/stage-a-short-memory-ttl
