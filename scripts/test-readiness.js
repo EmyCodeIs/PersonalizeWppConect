@@ -17,17 +17,25 @@ process.env.COMPLETED_SESSION_TTL_HOURS = '1';
 process.env.UNREAD_BOOTSTRAP_MAX_AGE_HOURS = '24';
 process.env.MAINTENANCE_INTERVAL_MS = '60000';
 process.env.RUNTIME_CACHE_MAX_ENTRIES = '500';
+process.env.MAX_CONCURRENT_CHATS = '2';
+delete process.env.ENABLE_TEST_COMMANDS;
+delete process.env.ENABLE_UNREAD_BOOTSTRAP;
+delete process.env.LABEL_MAINTENANCE_AUTO_REMOVE_DUPLICATES;
 // Simula um .env antigo para garantir a migração sem criar Aninha/Carlos.
 process.env.SELLER_LABEL_RULES = 'adriano=green;aninha=blue;carlos=yellow';
 
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 async function testQueueSerialization() {
   const { ChatTaskQueue } = require('../src/core/chatTaskQueue');
-  const queue = new ChatTaskQueue({ maxUnits: 2, maxQueueSize: 5, taskTimeoutMs: 2000 });
+  const queue = new ChatTaskQueue({ maxUnits: 2, maxConcurrentChats: 2, maxQueueSize: 5, taskTimeoutMs: 2000 });
   const events = [];
 
   const first = queue.enqueue('chat-1', async () => {
     events.push('primeiro-inicio');
-    await new Promise((resolve) => setTimeout(resolve, 30));
+    await sleep(30);
     events.push('primeiro-fim');
   });
 
@@ -39,12 +47,57 @@ async function testQueueSerialization() {
   assert.deepEqual(events, ['primeiro-inicio', 'primeiro-fim', 'segundo-inicio']);
 }
 
+async function testQueueConcurrencyLimit() {
+  const { ChatTaskQueue } = require('../src/core/chatTaskQueue');
+  const queue = new ChatTaskQueue({ maxUnits: 4, maxQueueSize: 10, taskTimeoutMs: 1000 });
+  let active = 0;
+  let peak = 0;
+
+  const tasks = ['a', 'b', 'c', 'd'].map((chatId) => queue.enqueue(chatId, async () => {
+    active += 1;
+    peak = Math.max(peak, active);
+    await sleep(35);
+    active -= 1;
+  }));
+
+  await Promise.all(tasks);
+  assert.equal(queue.stats().maxConcurrentChats, 2);
+  assert.equal(peak, 2);
+}
+
+async function testTimeoutKeepsChatLocked() {
+  const { ChatTaskQueue } = require('../src/core/chatTaskQueue');
+  const queue = new ChatTaskQueue({ maxUnits: 2, maxConcurrentChats: 2, maxQueueSize: 5, taskTimeoutMs: 20 });
+  const events = [];
+
+  const first = queue.enqueue('chat-timeout', async () => {
+    events.push('lenta-inicio');
+    await sleep(60);
+    events.push('lenta-fim');
+  });
+
+  const second = queue.enqueue('chat-timeout', async () => {
+    events.push('seguinte-inicio');
+  });
+
+  const [firstResult, secondResult] = await Promise.allSettled([first, second]);
+  assert.equal(firstResult.status, 'rejected');
+  assert.equal(firstResult.reason?.code, 'QUEUE_TIMEOUT');
+  assert.equal(secondResult.status, 'fulfilled');
+  assert.deepEqual(events, ['lenta-inicio', 'lenta-fim', 'seguinte-inicio']);
+}
+
 async function run() {
   const { env } = require('../src/config/env');
   const { messages } = require('../src/core/messages');
   const MenuCatalog = require('../src/core/menuCatalog');
   const Store = require('../src/services/leadStore');
   const CustomerFlow = require('../src/flow/customerFlow');
+
+  assert.equal(env.enableTestCommands, false);
+  assert.equal(env.enableUnreadBootstrap, false);
+  assert.equal(env.labelMaintenanceAutoRemoveDuplicates, false);
+  assert.equal(env.maxConcurrentChats, 2);
 
   assert.deepEqual(env.sellerLabelRules, {
     adriano: '#8fd0a8',
@@ -122,7 +175,6 @@ async function run() {
     'Azul espelhado', 'Roxo espelhado', 'Voltar',
   ]);
 
-  // Regressão corrigida: ao escolher adicionar observação, o texto não pode ficar vazio.
   const observationClient = '5531999999911';
   const observationSession = Store.getSession(observationClient);
   observationSession.etapa = 'observacao_pedido_menu';
@@ -159,8 +211,10 @@ async function run() {
   assert.equal(readiness.isUnreadWithinAge({ raw: { timestamp: Math.floor((now - (25 * 3600000)) / 1000) } }, { now, maxAgeHours: 24 }), false);
 
   await testQueueSerialization();
+  await testQueueConcurrencyLimit();
+  await testTimeoutKeepsChatLocked();
 
-  console.log('✅ Prontidão verificada: textos, fluxo, TTL, fila, vendedores, cache e não lidas.');
+  console.log('✅ Prontidão verificada: textos, fluxo, TTL, fila, timeout, vendedores, cache e não lidas.');
 }
 
 run()
