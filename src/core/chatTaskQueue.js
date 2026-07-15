@@ -127,7 +127,7 @@ class ChatTaskQueue {
       .catch((error) => {
         if (timeoutHandle) clearTimeout(timeoutHandle);
         if (timedOut && timeoutError) {
-          timeoutError.cause = error;
+          if (error !== timeoutError) timeoutError.cause = error;
           throw timeoutError;
         }
         throw error;
