@@ -3,6 +3,7 @@
 const SellerHandoff = require('./sellerHandoff');
 const Store = require('../services/leadStore');
 const Identity = require('../services/contactIdentity');
+const { env } = require('../config/env');
 
 function wait(ms) {
   return new Promise((resolve) => setTimeout(resolve, Math.max(0, Number(ms || 0))));
@@ -35,6 +36,26 @@ function labelNamesFromUpdate(data = {}) {
   return labels
     .map((label) => String(label?.name || label?.label || '').trim())
     .filter(Boolean);
+}
+
+function normalizeName(value) {
+  return String(value || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function sellerFromEventNames(names = []) {
+  const byNormalizedName = new Map(
+    Object.keys(env.sellerLabelRules || {}).map((name) => [normalizeName(name), name]),
+  );
+  for (const labelName of names) {
+    const seller = byNormalizedName.get(normalizeName(labelName));
+    if (seller) return { seller, labelName };
+  }
+  return null;
 }
 
 function existingSessionFor(clientId) {
@@ -94,6 +115,46 @@ function createSellerLabelUpdateHandler(options = {}) {
       return { handled: false, reason: 'INTERNAL_OPERATION', chatId };
     }
 
+    const sellerFromEvent = type === 'add' ? sellerFromEventNames(names) : null;
+    if (sellerFromEvent) {
+      const key = `${chatId}:assigned:${sellerFromEvent.seller}`;
+      const now = Date.now();
+      const duplicate = Number(seen.get(key) || 0) > (now - 15000);
+      seen.set(key, now);
+
+      persistSellerStatus(chatId, {
+        status: 'assigned',
+        seller: sellerFromEvent.seller,
+        labelName: sellerFromEvent.labelName,
+        assignedAt: new Date().toISOString(),
+        releasedAt: null,
+      });
+      clearBuffer(chatId);
+
+      if (!duplicate) {
+        const session = existingSessionFor(chatId);
+        const phase = session?.completed || session?.dados?.botDone ? 'concluído' : 'em_andamento';
+        console.log(
+          `[HANDOFF][VENDEDOR] cliente assumido pelo evento real | cliente=${chatId} `
+          + `| vendedor=${sellerFromEvent.seller} | etiqueta="${sellerFromEvent.labelName}" `
+          + `| préAtendimento=${phase} | evento=${type}`,
+        );
+      }
+
+      return {
+        handled: true,
+        assigned: true,
+        chatId,
+        guard: {
+          blocked: true,
+          reason: 'seller_label',
+          seller: sellerFromEvent.seller,
+          labelName: sellerFromEvent.labelName,
+          source: 'seller_label_event',
+        },
+      };
+    }
+
     if (delayMs) await wait(delayMs);
 
     const guard = await SellerHandoff.getAutomationBlock(channel, chatId);
@@ -145,6 +206,8 @@ module.exports = {
   existingSessionFor,
   extractLabelUpdateChatId,
   labelNamesFromUpdate,
+  normalizeName,
+  sellerFromEventNames,
   persistSellerStatus,
   serializedId,
 };
