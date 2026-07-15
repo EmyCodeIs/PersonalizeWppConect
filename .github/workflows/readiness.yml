@@ -29,9 +29,20 @@ jobs:
           bash -n scripts/load-dotenv.sh
           bash -n scripts/start-session-access.sh
           bash -n scripts/stop-session-access.sh
+          bash -n scripts/session-access-health.sh
+          bash -n scripts/watch-session-access.sh
           bash -n scripts/start-vps-whatsapp.sh
           bash -n scripts/install-session-access-ubuntu.sh
+          bash -n scripts/configure-nginx-access.sh
+          bash -n scripts/vps-preflight.sh
           node --check ecosystem.config.cjs
+
+      - name: Conferir template seguro do Nginx
+        run: |
+          grep -q 'listen 443 ssl' deploy/nginx-whatsapp.conf
+          grep -q 'auth_basic_user_file' deploy/nginx-whatsapp.conf
+          grep -q 'proxy_pass http://127.0.0.1:6080' deploy/nginx-whatsapp.conf
+          grep -q 'return 301 https://' deploy/nginx-whatsapp.conf
 
       - name: Testar carregamento seguro do ambiente
         run: |
