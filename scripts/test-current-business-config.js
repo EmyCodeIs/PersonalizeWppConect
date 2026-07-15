@@ -20,6 +20,15 @@ const {
   env,
 } = require('../src/config/env');
 const { messages } = require('../src/core/messages');
+const { menus } = require('../src/core/menuCatalog');
+
+const serviceRows = Object.fromEntries(menus.servicos.rows.map((row) => [row.id, row]));
+assert.equal(serviceRows.serv_letreiro.description, 'Solicitar orçamento do meu letreiro');
+assert.equal(serviceRows.serv_plotagem.description, 'Vitrines, paredes, veículos e adesivos');
+assert.equal(serviceRows.serv_outros.description, 'Placas, fachadas e outros serviços');
+assert.equal(serviceRows.serv_suporte.description, 'Dúvidas ou atendimento com nossa equipe');
+assert.equal(menus.servicos.rows.length, 4, 'a lista deve ter quatro opções estáticas, sem mutação por preload');
+assert.equal(JSON.stringify(menus.servicos.rows).includes('Coletar dados da solicitação'), false);
 
 assert.equal(env.bemVindosLinkUrl, INSTAGRAM_WELCOME_URL);
 assert.equal(env.mostruarioCatalogName, DEFAULT_CATALOG_NAME);
