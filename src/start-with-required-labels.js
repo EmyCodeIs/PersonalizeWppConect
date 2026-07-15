@@ -1,8 +1,11 @@
 'use strict';
 
 // No Windows, SESSION_ACCESS_AUTO_START decide se o portal local será iniciado.
-// Na VPS, `npm run vps:start` cria a área de trabalho virtual, publica essa
+// Na VPS, `npm run vps:start` cria uma área de trabalho virtual, publica essa
 // mesma tela pelo noVNC e inicia o WPPConnect dentro dela.
+
+// Precisa ser carregado antes dos módulos que importam o cliente WPPConnect.
+require('./core/vpsBrowserPreload');
 
 const serviceLabels = require('./core/serviceLabels');
 const { ensureRequiredLabelsOnce } = require('./core/requiredLabelsStartup');
