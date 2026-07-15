@@ -40,17 +40,142 @@ function candidateChatIds(clientId) {
 }
 
 async function clearNote(channel, candidates) {
-  const attempted = [];
-  for (const chatId of candidates) {
-    attempted.push(chatId);
-    try {
-      const result = await channel?.setContactNote?.(chatId, '');
-      if (result !== false && result !== null && result !== undefined) {
-        return { cleared: true, chatId, attempted };
-      }
-    } catch (_) {}
+  const client = channel?.client;
+  if (!client?.page?.evaluate) {
+    return {
+      cleared: false,
+      found: 0,
+      clearedChatIds: [],
+      attempted: [...candidates],
+      results: [],
+      error: 'NOTE_PAGE_UNAVAILABLE',
+    };
   }
-  return { cleared: false, chatId: null, attempted };
+
+  try {
+    return await client.page.evaluate(async ({ candidates }) => {
+      const WPP = window.WPP || null;
+      const invisibleBlank = '\u200B';
+      const visibleContent = (value) => String(value || '')
+        .replace(/[\s\u200B\u200C\u200D\u2060\uFEFF]/g, '');
+      const noteContent = (note) => note?.content
+        ?? note?.attributes?.content
+        ?? note?._value?.content
+        ?? '';
+
+      const getNote = async (chatId) => {
+        if (typeof WPP?.chat?.getNotes === 'function') return WPP.chat.getNotes(chatId);
+        if (typeof WPP?.contact?.getNotes === 'function') return WPP.contact.getNotes(chatId);
+        return null;
+      };
+
+      const setNote = async (chatId, content) => {
+        if (typeof WPP?.chat?.setNotes === 'function') return WPP.chat.setNotes(chatId, content);
+        if (typeof WPP?.contact?.setNotes === 'function') return WPP.contact.setNotes(chatId, content);
+        throw new Error('NOTE_SET_API_UNAVAILABLE');
+      };
+
+      const deleteCandidates = [
+        [WPP?.chat, 'deleteNotes'],
+        [WPP?.chat, 'removeNotes'],
+        [WPP?.chat, 'clearNotes'],
+        [WPP?.contact, 'deleteNotes'],
+        [WPP?.contact, 'removeNotes'],
+        [WPP?.contact, 'clearNotes'],
+      ];
+
+      const results = [];
+      for (const chatId of candidates) {
+        let before = null;
+        try {
+          before = await getNote(chatId);
+        } catch (error) {
+          results.push({
+            chatId,
+            found: false,
+            cleared: false,
+            mode: 'read-error',
+            error: String(error?.message || error),
+          });
+          continue;
+        }
+
+        if (!before) {
+          results.push({ chatId, found: false, cleared: true, mode: 'sem-nota' });
+          continue;
+        }
+
+        if (!visibleContent(noteContent(before))) {
+          results.push({ chatId, found: true, cleared: true, mode: 'já-vazia' });
+          continue;
+        }
+
+        let deleted = false;
+        let deleteMode = null;
+        for (const [scope, method] of deleteCandidates) {
+          if (typeof scope?.[method] !== 'function') continue;
+          try {
+            await scope[method](chatId);
+            const afterDelete = await getNote(chatId).catch(() => null);
+            if (!afterDelete || !visibleContent(noteContent(afterDelete))) {
+              deleted = true;
+              deleteMode = method;
+              break;
+            }
+          } catch (_) {}
+        }
+
+        if (deleted) {
+          results.push({ chatId, found: true, cleared: true, mode: deleteMode });
+          continue;
+        }
+
+        // O WA-JS rejeita conteúdo vazio em setNotes. Quando a versão carregada
+        // não expõe uma função de remoção, gravamos um caractere invisível e
+        // verificamos se não restou nenhum conteúdo visível para o atendente.
+        try {
+          await setNote(chatId, invisibleBlank);
+          const afterBlank = await getNote(chatId).catch(() => null);
+          const cleared = !afterBlank || !visibleContent(noteContent(afterBlank));
+          results.push({
+            chatId,
+            found: true,
+            cleared,
+            mode: 'vazio-invisível',
+            error: cleared ? null : 'NOTE_CONTENT_REMAINED',
+          });
+        } catch (error) {
+          results.push({
+            chatId,
+            found: true,
+            cleared: false,
+            mode: 'write-error',
+            error: String(error?.message || error),
+          });
+        }
+      }
+
+      const foundResults = results.filter((item) => item.found);
+      const failures = results.filter((item) => item.found && !item.cleared);
+      return {
+        cleared: failures.length === 0,
+        found: foundResults.length,
+        clearedChatIds: foundResults.filter((item) => item.cleared).map((item) => item.chatId),
+        attempted: [...candidates],
+        results,
+        error: failures.length ? failures.map((item) => `${item.chatId}:${item.error || item.mode}`).join(' | ') : null,
+      };
+    }, { candidates });
+  } catch (error) {
+    return {
+      cleared: false,
+      found: 0,
+      clearedChatIds: [],
+      attempted: [...candidates],
+      results: [],
+      error: String(error?.message || error),
+    };
+  }
 }
 
 async function clearLabels(channel, candidates) {
@@ -186,11 +311,14 @@ async function clearContactForSystemReset(channel, clientId) {
   console.log(
     `[RESETARSYS] contato limpo | cliente=${clientId} | ids=${candidates.join(',') || '-'} `
     + `| chatsEncontrados=${(labels.chatIds || []).join(',') || '-'} `
-    + `| nota=${note.cleared ? `apagada:${note.chatId}` : 'não_confirmada'} `
+    + `| notasEncontradas=${Number(note.found || 0)} `
+    + `| notasLimpas=${(note.clearedChatIds || []).join(',') || 'nenhuma/ausente'} `
+    + `| nota=${note.cleared ? 'apagada' : 'não_confirmada'} `
     + `| etiquetasGlobais=${Number(labels.requested || 0)} `
     + `| restantes=${labels.remaining === null ? 'não_confirmado' : Number(labels.remaining)} `
     + `| modo=${labels.mode || '-'} | bloqueioHumano=limpo `
     + `| resultado=${ok ? 'OK' : 'PARCIAL'}`
+    + `${note.error ? ` | erroNota=${note.error}` : ''}`
     + `${labels.error ? ` | erro=${labels.error}` : ''}`,
   );
 
