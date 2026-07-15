@@ -26,9 +26,10 @@ const menus = {
     fallbackText: messages.askService,
     interactiveOnly: true,
     rows: [
-      { id: 'serv_letreiro', title: 'Letreiro de acrílico', description: 'Orçamento de letreiro e cores' },
-      { id: 'serv_plotagem', title: 'Plotagem', description: 'Coletar dados da solicitação' },
-      { id: 'serv_outros', title: 'Outros', description: 'Coletar dados da solicitação' },
+      { id: 'serv_letreiro', title: 'Letreiro de acrílico', description: 'Solicitar orçamento do meu letreiro' },
+      { id: 'serv_plotagem', title: 'Plotagem', description: 'Vitrines, paredes, veículos e adesivos' },
+      { id: 'serv_outros', title: 'Outros', description: 'Placas, fachadas e outros serviços' },
+      { id: 'serv_suporte', title: 'Suporte', description: 'Dúvidas ou atendimento com nossa equipe' },
     ],
   },
   tipoAcrilico: {
