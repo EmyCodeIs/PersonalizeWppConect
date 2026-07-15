@@ -49,23 +49,22 @@ function safeCustomerText(value, maxLength = 1000) {
     .map((line) => line.trim())
     .filter(Boolean)
     .filter((line) => !looksLikeEncodedMedia(line))
-    .filter((line) => !/^\[(imagem|arquivo|documento|video|vídeo) enviado/i.test(line));
+    .filter((line) => !/^\[(imagem|arquivo|documento|video|vídeo) enviad[oa]/i.test(line));
 
   const text = lines.join(' | ').replace(/\s{2,}/g, ' ').trim();
   return text ? text.slice(0, maxLength) : '';
 }
 
 function inboundMediaType(messagesList = []) {
-  const types = [];
   for (const item of messagesList || []) {
     const raw = item?.raw || item || {};
     const type = String(raw?.type || raw?.mimetype || raw?.mediaType || '').toLowerCase();
     const filename = raw?.filename || raw?.fileName || raw?.document?.filename || '';
-    if (/image/.test(type)) types.push('imagem');
-    else if (/document|pdf|application/.test(type) || filename) types.push('arquivo');
-    else if (/video/.test(type)) types.push('vídeo');
+    if (/image/.test(type)) return 'image';
+    if (/document|pdf|application/.test(type) || filename) return 'document';
+    if (/video/.test(type)) return 'video';
   }
-  return types[0] || '';
+  return '';
 }
 
 function sanitizeMediaCollectionInput(value, messagesList = []) {
@@ -73,7 +72,10 @@ function sanitizeMediaCollectionInput(value, messagesList = []) {
   if (safeText) return safeText;
 
   const mediaType = inboundMediaType(messagesList);
-  return mediaType ? `[${mediaType} enviada]` : value;
+  if (mediaType === 'image') return '[imagem enviado]';
+  if (mediaType === 'document') return '[arquivo enviado]';
+  if (mediaType === 'video') return '[video enviado]';
+  return value;
 }
 
 function formatService(flow) {
@@ -138,9 +140,7 @@ function buildSellerNote(session = {}) {
     }
 
     const pantone = safeCustomerText(data.pantoneDescricao, 300);
-    if (pantone && !/^\[(imagem|arquivo|vídeo) enviada\]$/i.test(pantone)) {
-      detailLines.push(`Cor personalizada: ${pantone}`);
-    }
+    if (pantone) detailLines.push(`Cor personalizada: ${pantone}`);
 
     if (Array.isArray(data.coresSelecionadas) && data.coresSelecionadas.length) {
       const label = data.coresSelecionadas.length === 1 ? 'Cor' : 'Cores';
@@ -164,9 +164,7 @@ function buildSellerNote(session = {}) {
     const pantoneMedia = formatMediaCount(data.pantoneMedias);
     const allMedia = [artMedia, pantoneMedia].filter(Boolean).join(', ');
     if (allMedia) detailLines.push(`Arte/referências: ${allMedia}`);
-    if (artText && !/^\[(imagem|arquivo|vídeo) enviada\]$/i.test(artText)) {
-      detailLines.push(`Descrição da arte: ${artText}`);
-    }
+    if (artText) detailLines.push(`Descrição da arte: ${artText}`);
 
     if (data.envio) {
       detailLines.push(`Recebimento: ${data.envio === 'Retirada' ? 'Retirada na empresa' : data.envio}`);
