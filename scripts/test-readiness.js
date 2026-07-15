@@ -21,7 +21,6 @@ process.env.MAX_CONCURRENT_CHATS = '2';
 delete process.env.ENABLE_TEST_COMMANDS;
 delete process.env.ENABLE_UNREAD_BOOTSTRAP;
 delete process.env.LABEL_MAINTENANCE_AUTO_REMOVE_DUPLICATES;
-// Simula um .env antigo para garantir a migração sem criar Aninha/Carlos.
 process.env.SELLER_LABEL_RULES = 'adriano=green;aninha=blue;carlos=yellow';
 
 function sleep(ms) {
@@ -123,8 +122,7 @@ async function run() {
     supportAsk: 'Certo, me explique sua demanda para que eu encaminhe ao nosso suporte.',
     supportForwarded: 'Certo, encaminhei sua mensagem para nossa equipe que em breve assumirá o atendimento. Aguarde por aqui. 🙂',
     supportNeedDetails: 'Pode me explicar o que aconteceu ou qual ajuda você precisa? Você também pode enviar imagem ou arquivo.',
-    mostruario: 'Confira nosso mostruário de *Letreiros e Cores* e veja alguns modelos para te inspirar!\n\nIrei dar início ao seu orçamento logo abaixo:',
-    mostruarioLink: '🔗 Ver Mostruário',
+    letteringBudgetIntro: 'Para orçarmos seu letreiro, preciso de algumas informações. Vamos começar pelo tipo de acrílico:',
     askAcrylicType: 'Selecione o tipo de acrílico do seu letreiro:',
     askColorCount: 'Quantas cores terá seu letreiro?',
     askPantone: '🎨 *Cor Personalizada*\n\nMe informe a *cor Pantone* (código da sua cor).\n\nPode também enviar sua paleta de cores ou o arquivo da sua *logo/identidade visual* para referência.',
@@ -157,11 +155,12 @@ async function run() {
   assert.equal(messages.welcome('Emilly', { isReturning: true }), 'Olá, Emilly! 👋\nQue bom te ver novamente no Canal de Atendimento da Personalize!');
 
   assert.deepEqual(
-    MenuCatalog.menus.servicos.rows.map(({ id, title }) => ({ id, title })),
+    MenuCatalog.menus.servicos.rows.map(({ id, title, description }) => ({ id, title, description })),
     [
-      { id: 'serv_letreiro', title: 'Letreiro de acrílico' },
-      { id: 'serv_plotagem', title: 'Plotagem' },
-      { id: 'serv_outros', title: 'Outros' },
+      { id: 'serv_letreiro', title: 'Letreiro de acrílico', description: 'Solicitar orçamento do meu letreiro' },
+      { id: 'serv_plotagem', title: 'Plotagem', description: 'Vitrines, paredes, veículos e adesivos' },
+      { id: 'serv_outros', title: 'Outros', description: 'Placas, fachadas e outros serviços' },
+      { id: 'serv_suporte', title: 'Suporte', description: 'Dúvidas ou atendimento com nossa equipe' },
     ],
   );
   assert.deepEqual(MenuCatalog.menus.quantidadeCores.rows.map((row) => row.id), [
