@@ -1,0 +1,27 @@
+name: Prontidao VPS
+
+on:
+  push:
+    branches:
+      - feat/stage-a-short-memory-ttl
+  pull_request:
+
+jobs:
+  readiness:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Baixar projeto
+        uses: actions/checkout@v4
+
+      - name: Configurar Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Instalar dependencias
+        run: npm ci
+
+      - name: Verificar sintaxe e regressoes
+        run: npm test
