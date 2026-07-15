@@ -19,22 +19,29 @@ async function main() {
   const { messages } = require('../src/core/messages');
   const events = [];
 
+  const flowSource = fs.readFileSync(path.join(__dirname, '../src/flow/customerFlow.js'), 'utf8');
+  const catalogSource = fs.readFileSync(path.join(__dirname, '../src/core/catalogMostruarioPreload.js'), 'utf8');
+  const showcaseSource = fs.readFileSync(path.join(__dirname, '../src/core/mostruario.js'), 'utf8');
   const obsoletePreload = path.join(__dirname, '../src/core/letteringIntroPreload.js');
-  assert.equal(
-    fs.existsSync(obsoletePreload),
-    false,
-    'o fluxo não pode voltar a depender do preload antigo de introdução',
-  );
 
-  const startupSource = fs.readFileSync(
-    path.join(__dirname, '../src/start-with-required-labels.js'),
-    'utf8',
+  assert.equal(fs.existsSync(obsoletePreload), false, 'o preload antigo não pode voltar');
+  assert.equal(
+    flowSource.includes('await channel.sendText(clientId, messages.letteringBudgetIntro);'),
+    true,
+    'a explicação precisa estar escrita diretamente no customerFlow',
   );
   assert.equal(
-    startupSource.includes('letteringIntroPreload'),
+    catalogSource.includes('messages.letteringBudgetIntro'),
     false,
-    'a inicialização não pode carregar o preload removido',
+    'o módulo do catálogo não pode enviar a explicação do fluxo',
   );
+  assert.equal(
+    catalogSource.includes("require('./mostruario')"),
+    false,
+    'o catálogo novo não pode depender do mostruário antigo',
+  );
+  assert.equal(showcaseSource.includes('sendMostruarioLetreiro'), false);
+  assert.equal(showcaseSource.includes('getMostruarioImagePath'), false);
 
   const originalReplace = ServiceLabels.replaceServiceLabel;
   ServiceLabels.replaceServiceLabel = async (_channel, clientId, service) => {
@@ -78,10 +85,14 @@ async function main() {
     assert.deepEqual(events.map((item) => item.type), ['label', 'catalog', 'text', 'menu']);
     assert.equal(events[0].service, 'letreiro');
     assert.equal(events[2].message, messages.letteringBudgetIntro);
+    assert.equal(
+      events[2].message,
+      'Para orçarmos seu letreiro, preciso de algumas informações. Vamos começar pelo tipo de acrílico:',
+    );
     assert.match(String(events[3].description || ''), /tipo de acrílico/i);
     assert.equal(Store.getSession(clientId).etapa, 'tipo_acrilico');
 
-    console.log('✅ Fluxo real verificado sem preload: etiqueta → catálogo → explicação → lista de acrílico.');
+    console.log('✅ Fluxo real: etiqueta → catálogo → texto direto no customerFlow → lista de acrílico.');
   } finally {
     ServiceLabels.replaceServiceLabel = originalReplace;
   }
