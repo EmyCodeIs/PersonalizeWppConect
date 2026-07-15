@@ -160,23 +160,23 @@ function filePathToDataUri(filePath) {
 async function sendImageCaptionFast(channel, clientId, filePath, caption = '') {
   if (!filePath) return false;
 
-  const chatId = normalizeChatId(clientId);
   const fullPath = path.resolve(process.cwd(), filePath);
-  const filename = path.basename(fullPath);
-  const dataUri = filePathToDataUri(fullPath);
 
-  if (dataUri && typeof channel?.client?.sendImageFromBase64 === 'function') {
-    await channel.client.sendImageFromBase64(chatId, dataUri, filename, String(caption || ''));
+  // Sempre passa pelo canal rastreado. Enviar diretamente por
+  // client.sendImageFromBase64/sendImage fazia o retorno onAnyMessage parecer
+  // uma mensagem manual e ativava o handoff do próprio bot.
+  if (typeof channel?.sendImage === 'function') {
+    await channel.sendImage(clientId, fullPath, caption || '', {
+      noDelay: true,
+      noTyping: true,
+    });
     return true;
   }
 
+  const chatId = normalizeChatId(clientId);
+  const filename = path.basename(fullPath);
   if (typeof channel?.client?.sendImage === 'function') {
     await channel.client.sendImage(chatId, fullPath, filename, String(caption || ''));
-    return true;
-  }
-
-  if (typeof channel?.sendImage === 'function') {
-    await channel.sendImage(clientId, filePath, caption || '');
     return true;
   }
 
@@ -197,7 +197,12 @@ async function sendImageIfExists(channel, clientId, filePath, caption = '', opti
   try {
     let result;
 
-    if (options.fast && typeof channel?.client?.sendImage === 'function') {
+    if (typeof channel?.sendImage === 'function') {
+      result = await channel.sendImage(clientId, filePath, caption || '', {
+        noDelay: Boolean(options.fast),
+        noTyping: Boolean(options.fast),
+      });
+    } else {
       const chatId = normalizeChatId(clientId);
       const fullPath = path.resolve(process.cwd(), filePath);
       result = await channel.client.sendImage(
@@ -206,8 +211,6 @@ async function sendImageIfExists(channel, clientId, filePath, caption = '', opti
         path.basename(fullPath),
         String(caption || ''),
       );
-    } else {
-      result = await channel.sendImage(clientId, filePath, caption || '');
     }
 
     console.log(`[ASSET] imagem enviada: ${path.basename(filePath)} em ${Date.now() - startedAt}ms`);
@@ -220,12 +223,15 @@ async function sendImageIfExists(channel, clientId, filePath, caption = '', opti
 
 async function sendTextFast(channel, clientId, text, logPrefix = 'LINK') {
   const startedAt = Date.now();
-  const chatId = normalizeChatId(clientId);
 
-  if (typeof channel?.client?.sendText === 'function') {
-    await channel.client.sendText(chatId, String(text || ''));
+  if (typeof channel?.sendText === 'function') {
+    await channel.sendText(clientId, text, {
+      noDelay: true,
+      noTyping: true,
+    });
   } else {
-    await channel.sendText(clientId, text, { noTyping: true });
+    const chatId = normalizeChatId(clientId);
+    await channel.client.sendText(chatId, String(text || ''));
   }
 
   console.log(`[${logPrefix}] enviado em ${Date.now() - startedAt}ms`);
