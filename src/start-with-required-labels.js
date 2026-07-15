@@ -6,6 +6,16 @@ require('dotenv').config();
 // Na VPS, `npm run vps:start` cria uma área de trabalho virtual, publica essa
 // mesma tela pelo noVNC e inicia o WPPConnect dentro dela.
 
+const INSTAGRAM_WELCOME_URL = 'https://www.instagram.com/personalizeseuambiente?igsh=NW9wYzI5ZHc1MnF2';
+const LEGACY_WELCOME_URL = 'https://personalizeseuambiente.com.br/bem-vindos';
+const configuredWelcomeUrl = String(process.env.BEM_VINDOS_LINK_URL || '').trim();
+
+// Migra automaticamente o valor antigo. Um link diferente definido futuramente
+// no .env continua sendo respeitado.
+if (!configuredWelcomeUrl || configuredWelcomeUrl === LEGACY_WELCOME_URL) {
+  process.env.BEM_VINDOS_LINK_URL = INSTAGRAM_WELCOME_URL;
+}
+
 const duplicateRemovalRequested = ['1', 'true', 'yes', 'sim', 'on']
   .includes(String(process.env.LABEL_MAINTENANCE_AUTO_REMOVE_DUPLICATES || '').trim().toLowerCase());
 const duplicateRemovalConfirmed = String(process.env.LABEL_MAINTENANCE_CONFIRM_DELETE || '').trim()
@@ -28,6 +38,9 @@ serviceLabels.initializeServiceLabels = ensureRequiredLabelsOnce;
 installIdempotentServiceLabels();
 installLidServiceLabelFix();
 
+// Precisa carregar antes do fluxo para trocar o mostruário antigo pelo cartão
+// nativo do catálogo do WhatsApp Business.
+require('./core/catalogMostruarioPreload');
 require('./core/handoffPreload');
 // Precisa carregar entre o monitor de saída e a limpeza do reset: assim o
 // /resetarsys digitado pelo vendedor volta ao processador de comandos sem
