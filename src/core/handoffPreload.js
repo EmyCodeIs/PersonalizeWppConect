@@ -14,13 +14,13 @@ function normalizeChatId(value) {
 }
 
 function messageId(message = {}) {
-  return String(
-    message?.id?._serialized
-    || message?.id
-    || message?.messageId
-    || message?.key?.id
-    || ''
-  ).trim();
+  const candidates = [
+    message?.id?._serialized,
+    typeof message?.id === 'string' ? message.id : '',
+    message?.messageId,
+    message?.key?.id,
+  ];
+  return String(candidates.find((value) => typeof value === 'string' && value.trim()) || '').trim();
 }
 
 function outgoingChatId(message = {}) {
@@ -34,19 +34,37 @@ function outgoingChatId(message = {}) {
   );
 }
 
+function firstVisibleString(...values) {
+  for (const value of values) {
+    if (typeof value !== 'string') continue;
+    const text = value.trim();
+    if (text) return text;
+  }
+  return '';
+}
+
 function outgoingText(message = {}) {
+  // Não usa `content`: em eventos internos do WhatsApp esse campo pode conter
+  // metadados de etiqueta/protocolo e não representa uma mensagem do vendedor.
+  return firstVisibleString(
+    message?.body,
+    message?.caption,
+    message?.text,
+    message?.description,
+  );
+}
+
+function outgoingType(message = {}) {
   return String(
-    message?.body
-    || message?.caption
-    || message?.text
-    || message?.content
-    || message?.description
+    message?.type
+    || message?.mimetype
+    || message?.mediaType
     || ''
-  ).trim();
+  ).trim().toLowerCase();
 }
 
 function mediaMarker(message = {}) {
-  const type = String(message?.type || message?.mimetype || message?.mediaType || '').toLowerCase();
+  const type = outgoingType(message);
   const filename = message?.filename || message?.fileName || message?.document?.filename || '';
   if (/image/.test(type)) return '[imagem enviada]';
   if (/document|pdf|application/.test(type) || filename) {
@@ -59,10 +77,17 @@ function mediaMarker(message = {}) {
 }
 
 function isVisibleOutgoingEvent(message = {}, text = '') {
-  if (String(text || '').trim()) return true;
+  const type = outgoingType(message);
+  const visibleType = /^(?:chat|text|image|video|document|audio|ptt|sticker|list|buttons?|template|location|vcard)$/;
 
-  const type = String(message?.type || message?.mimetype || message?.mediaType || '').trim().toLowerCase();
-  return /^(?:chat|text|image|video|document|audio|ptt|sticker|list|buttons?|template|location|vcard)$/.test(type);
+  // Eventos de etiqueta, sincronização, protocolo, notificação e outros eventos
+  // internos nunca podem assumir o atendimento, mesmo que tragam `content`.
+  if (!visibleType.test(type)) return false;
+
+  // Uma mensagem textual precisa realmente ter corpo/legenda/texto visível.
+  if (/^(?:chat|text)$/.test(type)) return Boolean(String(text || '').trim());
+
+  return true;
 }
 
 function createDeduplicatedOutgoingHandler(handler) {
@@ -77,11 +102,11 @@ function createDeduplicatedOutgoingHandler(handler) {
     if (!chatId || /@g\.us$/i.test(chatId)) return;
 
     const id = messageId(raw);
-    const text = String(payload.text || outgoingText(raw) || mediaMarker(raw)).trim();
-    const type = String(raw?.type || raw?.mimetype || raw?.mediaType || 'unknown').toLowerCase();
+    const text = firstVisibleString(payload.text, outgoingText(raw), mediaMarker(raw));
+    const type = outgoingType(raw) || 'unknown';
 
     if (!isVisibleOutgoingEvent(raw, text)) {
-      console.log(`[HANDOFF] evento interno ignorado: ${chatId} | tipo=${type || 'desconhecido'}`);
+      console.log(`[HANDOFF] evento não-mensagem ignorado: ${chatId} | tipo=${type}`);
       return;
     }
 
@@ -188,12 +213,14 @@ WppClient.createWppChannel = async function createWppChannelWithReliableOutgoing
 module.exports = {
   _test: {
     createDeduplicatedOutgoingHandler,
+    firstVisibleString,
     isVisibleOutgoingEvent,
     mediaMarker,
     messageId,
     normalizeChatId,
     outgoingChatId,
     outgoingText,
+    outgoingType,
     originalGetAutomationBlock,
   },
 };
