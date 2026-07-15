@@ -7,12 +7,10 @@ DATA_DIR="$ROOT_DIR/data"
 PID_DIR="$DATA_DIR/session-access"
 mkdir -p "$DATA_DIR" "$PID_DIR"
 
-if [[ -f "$ENV_FILE" ]]; then
-  set -a
-  # shellcheck disable=SC1090
-  source "$ENV_FILE"
-  set +a
-fi
+# Carrega o .env sem executar espaços, ponto e vírgula ou & como comandos shell.
+# shellcheck disable=SC1091
+source "$ROOT_DIR/scripts/load-dotenv.sh"
+load_dotenv_file "$ENV_FILE"
 
 DISPLAY_VALUE="${SESSION_DISPLAY:-:1}"
 SCREEN_SIZE="${SESSION_SCREEN_SIZE:-1366x768x24}"
