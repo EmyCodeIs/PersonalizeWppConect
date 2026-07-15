@@ -27,6 +27,7 @@ const current = [
 
 const result = classifyAttachedLabels(current, 'Orçamento letreiros', 'quote-current');
 
+assert.equal(result.targetPresent, true);
 assert.deepEqual(
   result.remove.map((item) => item.id).sort(),
   ['plotagem', 'quote-old', 'support'],
@@ -39,9 +40,26 @@ assert.deepEqual(
   'deve preservar alvo canônico, etiquetas manuais e vendedor',
 );
 
+const targetMissing = classifyAttachedLabels(
+  [
+    { id: 'manual', name: 'Acompanhar' },
+    { id: 'plotagem', name: 'Plotagens' },
+    { id: 'seller', name: 'C. Eduardo' },
+  ],
+  'Orçamento letreiros',
+  'quote-current',
+);
+
+assert.equal(targetMissing.targetPresent, false);
+assert.deepEqual(targetMissing.remove, [], 'não pode remover a etiqueta antiga antes de confirmar a nova');
+assert.deepEqual(
+  targetMissing.preserve.map((item) => item.id).sort(),
+  ['manual', 'plotagem', 'seller'],
+);
+
 assert.deepEqual(
   operationalLabelNames().sort(),
   ['orcamento letreiros', 'outros', 'plotagens', 'suporte'],
 );
 
-console.log('✅ Etiquetas operacionais exclusivas verificadas; manuais e vendedor preservados.');
+console.log('✅ Etiquetas operacionais exclusivas verificadas; manuais, vendedor e fallback seguro preservados.');
