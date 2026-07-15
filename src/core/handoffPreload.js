@@ -44,8 +44,6 @@ function firstVisibleString(...values) {
 }
 
 function outgoingText(message = {}) {
-  // Não usa `content`: em eventos internos do WhatsApp esse campo pode conter
-  // metadados de etiqueta/protocolo e não representa uma mensagem do vendedor.
   return firstVisibleString(
     message?.body,
     message?.caption,
@@ -79,18 +77,12 @@ function mediaMarker(message = {}) {
 function isVisibleOutgoingEvent(message = {}, text = '') {
   const type = outgoingType(message);
   const visibleType = /^(?:chat|text|image|video|document|audio|ptt|sticker|list|buttons?|template|location|vcard)$/;
-
-  // Eventos de etiqueta, sincronização, protocolo, notificação e outros eventos
-  // internos nunca podem assumir o atendimento, mesmo que tragam `content`.
   if (!visibleType.test(type)) return false;
-
-  // Uma mensagem textual precisa realmente ter corpo/legenda/texto visível.
   if (/^(?:chat|text)$/.test(type)) return Boolean(String(text || '').trim());
-
   return true;
 }
 
-function createDeduplicatedOutgoingHandler(handler) {
+function createDeduplicatedOutgoingHandler(handler, isInternalLabelOperation = () => false) {
   const seen = new Map();
   const ttlMs = 30000;
 
@@ -100,6 +92,11 @@ function createDeduplicatedOutgoingHandler(handler) {
     const raw = payload.raw || {};
     const chatId = normalizeChatId(payload.from || outgoingChatId(raw));
     if (!chatId || /@g\.us$/i.test(chatId)) return;
+
+    if (isInternalLabelOperation(chatId)) {
+      console.log(`[HANDOFF] evento ignorado durante aplicação interna de etiqueta: ${chatId}`);
+      return;
+    }
 
     const id = messageId(raw);
     const text = firstVisibleString(payload.text, outgoingText(raw), mediaMarker(raw));
@@ -181,11 +178,55 @@ SellerHandoff.getAutomationBlock = async function getAutomationBlockExactSeller(
 const originalCreateWppChannel = WppClient.createWppChannel;
 
 WppClient.createWppChannel = async function createWppChannelWithReliableOutgoing(options = {}) {
-  const handleOutgoing = createDeduplicatedOutgoingHandler(options.onOutgoingMessage);
+  const internalLabelOperations = new Map();
+  const labelGuardMs = 8000;
+
+  const purgeLabelOperations = () => {
+    const now = Date.now();
+    for (const [chatId, expiresAt] of internalLabelOperations.entries()) {
+      if (expiresAt <= now) internalLabelOperations.delete(chatId);
+    }
+  };
+
+  const isInternalLabelOperation = (chatId) => {
+    purgeLabelOperations();
+    return Number(internalLabelOperations.get(normalizeChatId(chatId)) || 0) > Date.now();
+  };
+
+  const markInternalLabelOperation = (chatId) => {
+    const normalized = normalizeChatId(chatId);
+    if (!normalized) return;
+    internalLabelOperations.set(normalized, Date.now() + labelGuardMs);
+  };
+
+  const handleOutgoing = createDeduplicatedOutgoingHandler(
+    options.onOutgoingMessage,
+    isInternalLabelOperation,
+  );
+
   const channel = await originalCreateWppChannel({
     ...options,
     onOutgoingMessage: handleOutgoing,
   });
+
+  if (typeof channel?.applyContactLabel === 'function') {
+    const originalApplyContactLabel = channel.applyContactLabel.bind(channel);
+    channel.applyContactLabel = async (clientId, label = {}) => {
+      markInternalLabelOperation(clientId);
+      console.log(
+        `[HANDOFF] proteção de operação interna ativada: ${normalizeChatId(clientId)} `
+        + `| etiqueta=${String(label?.name || label || '-').trim() || '-'}`,
+      );
+      try {
+        return await originalApplyContactLabel(clientId, label);
+      } finally {
+        markInternalLabelOperation(clientId);
+      }
+    };
+  }
+
+  channel.__markInternalLabelOperation = markInternalLabelOperation;
+  channel.__isInternalLabelOperation = isInternalLabelOperation;
 
   const client = channel?.client;
   if (typeof client?.onAnyMessage === 'function') {
