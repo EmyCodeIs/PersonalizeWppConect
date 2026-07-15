@@ -25,4 +25,5 @@ require('./core/runtimeReliabilityPreload');
 require('./core/supportAndServicesPreload');
 require('./core/exactAcknowledgementPreload');
 require('./core/bufferStagePolicyPreload');
+require('./core/vpsReadinessPreload');
 require('./bootstrap');
