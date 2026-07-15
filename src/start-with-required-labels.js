@@ -48,11 +48,9 @@ require('./core/exclusiveServiceLabelsPreload');
 // Impede reaplicações da mesma etiqueta durante o fluxo, finalização e reinícios.
 require('./core/serviceLabelAssignmentPreload');
 
-// Precisa carregar antes do fluxo para trocar o mostruário antigo pelo cartão
-// nativo do catálogo do WhatsApp Business.
+// Troca o mostruário antigo pelo catálogo nativo e envia, na mesma função,
+// a explicação que antecede a lista de tipo de acrílico.
 require('./core/catalogMostruarioPreload');
-// Depois do catálogo, explica por que o cliente responderá às próximas listas.
-require('./core/letteringIntroPreload');
 require('./core/handoffPreload');
 // Precisa carregar antes da proteção administrativa: comandos digitados pelo
 // próprio WhatsApp Business voltam ao processador sem ativar handoff.
