@@ -39,6 +39,17 @@ function candidateChatIds(clientId) {
   return [...new Set([direct, ...known.map(normalizeChatId), ...mapped].filter(Boolean))];
 }
 
+function resetCommandFromPayload(payload = {}) {
+  const text = String(
+    payload?.text
+    || payload?.raw?.body
+    || payload?.raw?.text
+    || payload?.raw?.caption
+    || ''
+  ).trim();
+  return text.split(/\r?\n/)[0].trim().toLowerCase() === '/resetarsys';
+}
+
 async function clearNote(channel, candidates) {
   const client = channel?.client;
   if (!client?.page?.evaluate) {
@@ -55,6 +66,8 @@ async function clearNote(channel, candidates) {
   try {
     return await client.page.evaluate(async ({ candidates }) => {
       const WPP = window.WPP || null;
+      const hasGetApi = typeof WPP?.chat?.getNotes === 'function'
+        || typeof WPP?.contact?.getNotes === 'function';
       const invisibleBlank = '\u200B';
       const visibleContent = (value) => String(value || '')
         .replace(/[\s\u200B\u200C\u200D\u2060\uFEFF]/g, '');
@@ -63,10 +76,20 @@ async function clearNote(channel, candidates) {
         ?? note?._value?.content
         ?? '';
 
+      if (!hasGetApi) {
+        return {
+          cleared: false,
+          found: 0,
+          clearedChatIds: [],
+          attempted: [...candidates],
+          results: [],
+          error: 'NOTE_GET_API_UNAVAILABLE',
+        };
+      }
+
       const getNote = async (chatId) => {
         if (typeof WPP?.chat?.getNotes === 'function') return WPP.chat.getNotes(chatId);
-        if (typeof WPP?.contact?.getNotes === 'function') return WPP.contact.getNotes(chatId);
-        return null;
+        return WPP.contact.getNotes(chatId);
       };
 
       const setNote = async (chatId, content) => {
@@ -155,15 +178,21 @@ async function clearNote(channel, candidates) {
         }
       }
 
-      const foundResults = results.filter((item) => item.found);
-      const failures = results.filter((item) => item.found && !item.cleared);
+      const readableResults = results.filter((item) => item.mode !== 'read-error');
+      const foundResults = readableResults.filter((item) => item.found);
+      const failures = readableResults.filter((item) => !item.cleared);
+      const noReadableAlias = readableResults.length === 0;
+      const errors = failures.length
+        ? failures
+        : (noReadableAlias ? results.filter((item) => item.error) : []);
+
       return {
-        cleared: failures.length === 0,
+        cleared: !noReadableAlias && failures.length === 0,
         found: foundResults.length,
         clearedChatIds: foundResults.filter((item) => item.cleared).map((item) => item.chatId),
         attempted: [...candidates],
         results,
-        error: failures.length ? failures.map((item) => `${item.chatId}:${item.error || item.mode}`).join(' | ') : null,
+        error: errors.length ? errors.map((item) => `${item.chatId}:${item.error || item.mode}`).join(' | ') : null,
       };
     }, { candidates });
   } catch (error) {
@@ -286,8 +315,10 @@ async function clearLabels(channel, candidates) {
   }, { candidates });
 }
 
-async function clearContactForSystemReset(channel, clientId) {
-  const candidates = candidateChatIds(clientId);
+async function clearContactForSystemReset(channel, clientId, preservedCandidates = null) {
+  const candidates = Array.isArray(preservedCandidates) && preservedCandidates.length
+    ? [...new Set(preservedCandidates.map(normalizeChatId).filter(Boolean))]
+    : candidateChatIds(clientId);
   const note = await clearNote(channel, candidates);
   let labels;
 
@@ -325,14 +356,17 @@ async function clearContactForSystemReset(channel, clientId) {
   return { ok, candidates, note, labels };
 }
 
-function installResetCleanup(channel) {
+function installResetCleanup(channel, pendingResetCandidates = new Map()) {
   if (!channel || typeof channel.sendText !== 'function' || channel.__resetCleanupInstalled) return channel;
   const originalSendText = channel.sendText.bind(channel);
 
   channel.sendText = async (clientId, text, options = {}) => {
     const message = String(text || '');
     if (message.startsWith('Sistema resetado para teste.')) {
-      await clearContactForSystemReset(channel, clientId);
+      const key = normalizeChatId(clientId);
+      const preserved = pendingResetCandidates.get(key) || null;
+      await clearContactForSystemReset(channel, clientId, preserved);
+      for (const candidate of preserved || [key]) pendingResetCandidates.delete(normalizeChatId(candidate));
     }
     return originalSendText(clientId, text, options);
   };
@@ -343,12 +377,31 @@ function installResetCleanup(channel) {
 
 const originalCreateWppChannel = WppClient.createWppChannel;
 WppClient.createWppChannel = async function createWppChannelWithReliableReset(options = {}) {
-  const channel = await originalCreateWppChannel(options);
-  return installResetCleanup(channel);
+  const pendingResetCandidates = new Map();
+  const originalOnMessage = options.onMessage;
+
+  const onMessage = async (payload = {}) => {
+    if (resetCommandFromPayload(payload)) {
+      const clientId = normalizeChatId(payload.from || payload?.raw?.from || payload?.raw?.chatId || '');
+      if (clientId) {
+        const preserved = candidateChatIds(clientId);
+        for (const candidate of preserved) pendingResetCandidates.set(normalizeChatId(candidate), preserved);
+        pendingResetCandidates.set(clientId, preserved);
+        console.log(`[RESETARSYS] IDs preservados antes da limpeza local: ${preserved.join(',') || clientId}`);
+      }
+    }
+
+    if (typeof originalOnMessage === 'function') return originalOnMessage(payload);
+    return undefined;
+  };
+
+  const channel = await originalCreateWppChannel({ ...options, onMessage });
+  return installResetCleanup(channel, pendingResetCandidates);
 };
 
 module.exports = {
   candidateChatIds,
   clearContactForSystemReset,
   installResetCleanup,
+  resetCommandFromPayload,
 };
