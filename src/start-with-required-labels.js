@@ -1,11 +1,8 @@
 'use strict';
 
-// O compartilhamento de tela não é iniciado no Windows.
-// Na VPS, `npm run vps:start` cria uma área de trabalho virtual,
-// publica essa mesma tela pelo noVNC e inicia o WPPConnect nela.
-if (process.platform === 'win32') {
-  process.env.SESSION_ACCESS_AUTO_START = 'false';
-}
+// No Windows, SESSION_ACCESS_AUTO_START decide se o portal local será iniciado.
+// Na VPS, `npm run vps:start` cria a área de trabalho virtual, publica essa
+// mesma tela pelo noVNC e inicia o WPPConnect dentro dela.
 
 const serviceLabels = require('./core/serviceLabels');
 const { ensureRequiredLabelsOnce } = require('./core/requiredLabelsStartup');
