@@ -163,13 +163,14 @@ function findSellerLabelMatch(items = []) {
 
     for (const [sellerKey, sellerColor] of rules) {
       const normalizedSeller = normalizeName(sellerKey);
-      const wantedHex = desiredHex(sellerColor);
       const labelHex = String(item?.hexColor || '').trim().toLowerCase();
       const labelColorIndex = Number.isFinite(Number(item?.colorIndex)) ? Number(item.colorIndex) : null;
-      const byName = normalizedSeller && normalizedLabelName.includes(normalizedSeller);
-      const byHex = Boolean(wantedHex && labelHex && wantedHex === labelHex);
+      // Vendedor é reconhecido somente pelo nome exato. Cor serve para criação
+      // e conferência visual, nunca como identidade, pois etiquetas manuais podem
+      // compartilhar a mesma cor (por exemplo, Fornecedor e C. Eduardo).
+      const byExactName = Boolean(normalizedSeller && normalizedLabelName === normalizedSeller);
 
-      if (byName || byHex) {
+      if (byExactName) {
         return {
           assigned: true,
           seller: sellerKey,
@@ -178,7 +179,7 @@ function findSellerLabelMatch(items = []) {
           labelId: String(item?.id || ''),
           labelHex: labelHex || null,
           labelColorIndex,
-          matchMode: byName ? 'name' : 'hex',
+          matchMode: 'exact_name',
         };
       }
     }
