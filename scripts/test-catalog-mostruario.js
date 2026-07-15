@@ -3,8 +3,12 @@
 const assert = require('assert/strict');
 const fs = require('fs');
 const path = require('path');
+
+process.env.LETTERING_CATALOG_SETTLE_MS = '0';
+
 const {
   DEFAULT_CATALOG_NAME,
+  catalogSettleMs,
   getCatalogName,
   sendMostruarioCatalog,
 } = require('../src/core/catalogMostruarioPreload');
@@ -16,6 +20,7 @@ async function main() {
   try {
     delete process.env.MOSTRUARIO_CATALOG_NAME;
     assert.equal(getCatalogName(), DEFAULT_CATALOG_NAME);
+    assert.equal(catalogSettleMs(), 0);
 
     const catalogSource = fs.readFileSync(
       path.join(__dirname, '../src/core/catalogMostruarioPreload.js'),
@@ -23,6 +28,7 @@ async function main() {
     );
     assert.equal(catalogSource.includes('letteringBudgetIntro'), false);
     assert.equal(catalogSource.includes("require('./mostruario')"), false);
+    assert.equal(catalogSource.includes('cartão estabilizado'), true);
 
     const channel = {
       async sendCatalog(clientId, payload) {
@@ -60,7 +66,7 @@ async function main() {
     process.env.MOSTRUARIO_CATALOG_NAME = 'Catálogo personalizado';
     assert.equal(getCatalogName(), 'Catálogo personalizado');
 
-    console.log('✅ Catálogo novo envia apenas catálogo/link; texto de fluxo fica no customerFlow.');
+    console.log('✅ Catálogo novo estabiliza antes do próximo balão e não usa a imagem antiga.');
   } finally {
     if (previous === undefined) delete process.env.MOSTRUARIO_CATALOG_NAME;
     else process.env.MOSTRUARIO_CATALOG_NAME = previous;
