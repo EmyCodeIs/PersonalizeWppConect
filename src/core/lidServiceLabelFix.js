@@ -120,9 +120,16 @@ function installLidServiceLabelFix() {
   if (ServiceLabels.__lidServiceLabelFixInstalled) return ServiceLabels;
 
   const originalReplaceServiceLabel = ServiceLabels.replaceServiceLabel.bind(ServiceLabels);
+  const originalApplyNamedLabel = ServiceLabels.applyNamedLabel.bind(ServiceLabels);
+
   ServiceLabels.replaceServiceLabel = async function replaceServiceLabelWithResolvedId(channel, clientId, service) {
     const resolvedClientId = await resolvePhoneJid(channel, clientId);
     return originalReplaceServiceLabel(channel, resolvedClientId || clientId, service);
+  };
+
+  ServiceLabels.applyNamedLabel = async function applyNamedLabelWithResolvedId(channel, clientId, target) {
+    const resolvedClientId = await resolvePhoneJid(channel, clientId);
+    return originalApplyNamedLabel(channel, resolvedClientId || clientId, target);
   };
 
   ServiceLabels.__lidServiceLabelFixInstalled = true;
