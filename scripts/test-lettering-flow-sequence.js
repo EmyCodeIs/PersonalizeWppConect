@@ -43,14 +43,6 @@ async function main() {
   assert.equal(showcaseSource.includes('sendMostruarioLetreiro'), false, 'o mostruário antigo não pode voltar');
   assert.equal(showcaseSource.includes('getMostruarioImagePath'), false, 'a imagem antiga não pode voltar');
 
-  const serviceRowsBefore = JSON.stringify(MenuCatalog.menus.servicos.rows);
-  require('../src/core/supportAndServicesPreload');
-  assert.equal(
-    JSON.stringify(MenuCatalog.menus.servicos.rows),
-    serviceRowsBefore,
-    'carregar os fluxos complementares não pode alterar a lista inicial',
-  );
-
   const originalReplace = ServiceLabels.replaceServiceLabel;
   ServiceLabels.replaceServiceLabel = async (_channel, clientId, service) => {
     events.push({ type: 'label', clientId, service });
@@ -58,6 +50,14 @@ async function main() {
   };
 
   try {
+    const serviceRowsBefore = JSON.stringify(MenuCatalog.menus.servicos.rows);
+    require('../src/core/supportAndServicesPreload');
+    assert.equal(
+      JSON.stringify(MenuCatalog.menus.servicos.rows),
+      serviceRowsBefore,
+      'carregar os fluxos complementares não pode alterar a lista inicial',
+    );
+
     require('../src/core/catalogMostruarioPreload');
     const WppClient = require('../src/services/wppconnectClient');
     const { processCustomerMessage } = require('../src/flow/customerFlow');
