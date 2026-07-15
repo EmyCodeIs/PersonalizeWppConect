@@ -14,17 +14,25 @@ if [[ -f "$ENV_FILE" ]]; then
   set +a
 fi
 
-DISPLAY_VALUE="${DISPLAY:-:1}"
+DISPLAY_VALUE="${SESSION_DISPLAY:-:1}"
+SCREEN_SIZE="${SESSION_SCREEN_SIZE:-1366x768x24}"
 SESSION_ACCESS_HOST="${SESSION_ACCESS_HOST:-127.0.0.1}"
 SESSION_ACCESS_PORT="${SESSION_ACCESS_PORT:-6080}"
 SESSION_VNC_PORT="${SESSION_VNC_PORT:-5901}"
-SESSION_ACCESS_PASSWORD="${SESSION_ACCESS_PASSWORD:-2580}"
+SESSION_ACCESS_PASSWORD="${SESSION_ACCESS_PASSWORD:-troque-esta-senha}"
 SESSION_NOVNC_WEB="${SESSION_NOVNC_WEB:-/usr/share/novnc}"
 SESSION_VNC_PASSWORD_FILE="${SESSION_VNC_PASSWORD_FILE:-$DATA_DIR/session-access.vncpass}"
-X11VNC_LOG="$DATA_DIR/x11vnc.log"
-NOVNC_LOG="$DATA_DIR/novnc.log"
+SESSION_ACCESS_PUBLIC_URL="${SESSION_ACCESS_PUBLIC_URL:-}"
+
+XVFB_PID_FILE="$PID_DIR/xvfb.pid"
+OPENBOX_PID_FILE="$PID_DIR/openbox.pid"
 X11VNC_PID_FILE="$PID_DIR/x11vnc.pid"
 NOVNC_PID_FILE="$PID_DIR/novnc.pid"
+
+XVFB_LOG="$DATA_DIR/xvfb.log"
+OPENBOX_LOG="$DATA_DIR/openbox.log"
+X11VNC_LOG="$DATA_DIR/x11vnc.log"
+NOVNC_LOG="$DATA_DIR/novnc.log"
 
 need_cmd() {
   if ! command -v "$1" >/dev/null 2>&1; then
@@ -33,13 +41,62 @@ need_cmd() {
   fi
 }
 
+pid_is_running() {
+  local file="$1"
+  [[ -f "$file" ]] || return 1
+  local pid
+  pid="$(cat "$file" 2>/dev/null || true)"
+  [[ -n "$pid" ]] && kill -0 "$pid" >/dev/null 2>&1
+}
+
+cleanup_stale_pid() {
+  local file="$1"
+  if [[ -f "$file" ]] && ! pid_is_running "$file"; then
+    rm -f "$file"
+  fi
+}
+
+need_cmd Xvfb
+need_cmd openbox-session
 need_cmd x11vnc
 need_cmd bash
 
 if [[ ! -d "$SESSION_NOVNC_WEB" ]]; then
   echo "[session-access] diretório do noVNC não encontrado: $SESSION_NOVNC_WEB" >&2
-  echo "[session-access] instale o pacote novnc ou ajuste SESSION_NOVNC_WEB no .env" >&2
+  echo "[session-access] execute npm run session:access:install:ubuntu" >&2
   exit 1
+fi
+
+if [[ "$SESSION_ACCESS_PASSWORD" == "troque-esta-senha" ]]; then
+  echo "[session-access] defina uma senha forte em SESSION_ACCESS_PASSWORD no .env" >&2
+  exit 1
+fi
+
+for file in "$XVFB_PID_FILE" "$OPENBOX_PID_FILE" "$X11VNC_PID_FILE" "$NOVNC_PID_FILE"; do
+  cleanup_stale_pid "$file"
+done
+
+if ! pid_is_running "$XVFB_PID_FILE"; then
+  nohup Xvfb "$DISPLAY_VALUE" \
+    -screen 0 "$SCREEN_SIZE" \
+    -ac \
+    -nolisten tcp \
+    -noreset \
+    >"$XVFB_LOG" 2>&1 &
+  echo $! > "$XVFB_PID_FILE"
+  sleep 1
+  echo "[session-access] desktop virtual iniciado em $DISPLAY_VALUE"
+else
+  echo "[session-access] desktop virtual já está ativo"
+fi
+
+if ! pid_is_running "$OPENBOX_PID_FILE"; then
+  DISPLAY="$DISPLAY_VALUE" nohup openbox-session >"$OPENBOX_LOG" 2>&1 &
+  echo $! > "$OPENBOX_PID_FILE"
+  sleep 1
+  echo "[session-access] gerenciador de janelas iniciado"
+else
+  echo "[session-access] gerenciador de janelas já está ativo"
 fi
 
 if ! x11vnc -storepasswd "$SESSION_ACCESS_PASSWORD" "$SESSION_VNC_PASSWORD_FILE" >/dev/null 2>&1; then
@@ -47,36 +104,22 @@ if ! x11vnc -storepasswd "$SESSION_ACCESS_PASSWORD" "$SESSION_VNC_PASSWORD_FILE"
   exit 1
 fi
 
-cleanup_pid() {
-  local file="$1"
-  if [[ -f "$file" ]]; then
-    local pid
-    pid="$(cat "$file" 2>/dev/null || true)"
-    if [[ -n "$pid" ]] && ! kill -0 "$pid" >/dev/null 2>&1; then
-      rm -f "$file"
-    fi
-  fi
-}
-
-cleanup_pid "$X11VNC_PID_FILE"
-cleanup_pid "$NOVNC_PID_FILE"
-
-if [[ -f "$X11VNC_PID_FILE" ]]; then
-  echo "[session-access] x11vnc já está ativo (pid $(cat "$X11VNC_PID_FILE"))"
-else
-  x11vnc \
+if ! pid_is_running "$X11VNC_PID_FILE"; then
+  nohup x11vnc \
     -display "$DISPLAY_VALUE" \
     -rfbport "$SESSION_VNC_PORT" \
     -rfbauth "$SESSION_VNC_PASSWORD_FILE" \
+    -localhost \
     -forever \
     -shared \
-    -bg \
-    -o "$X11VNC_LOG"
-
-  X11VNC_PID="$(pgrep -f "x11vnc .*${SESSION_VNC_PORT}" | head -n 1 || true)"
-  if [[ -n "$X11VNC_PID" ]]; then
-    echo "$X11VNC_PID" > "$X11VNC_PID_FILE"
-  fi
+    -noxdamage \
+    -repeat \
+    >"$X11VNC_LOG" 2>&1 &
+  echo $! > "$X11VNC_PID_FILE"
+  sleep 1
+  echo "[session-access] compartilhamento da tela iniciado"
+else
+  echo "[session-access] compartilhamento da tela já está ativo"
 fi
 
 if command -v novnc_proxy >/dev/null 2>&1; then
@@ -86,24 +129,25 @@ elif [[ -x "$SESSION_NOVNC_WEB/utils/novnc_proxy" ]]; then
 elif command -v websockify >/dev/null 2>&1; then
   NOVNC_CMD=(websockify --web "$SESSION_NOVNC_WEB" "${SESSION_ACCESS_HOST}:${SESSION_ACCESS_PORT}" "127.0.0.1:${SESSION_VNC_PORT}")
 else
-  echo "[session-access] novnc_proxy/websockify não encontrado." >&2
-  echo "[session-access] instale o pacote novnc ou websockify." >&2
+  echo "[session-access] novnc_proxy/websockify não encontrado" >&2
   exit 1
 fi
 
-if [[ -f "$NOVNC_PID_FILE" ]]; then
-  echo "[session-access] noVNC já está ativo (pid $(cat "$NOVNC_PID_FILE"))"
+if ! pid_is_running "$NOVNC_PID_FILE"; then
+  nohup "${NOVNC_CMD[@]}" >"$NOVNC_LOG" 2>&1 &
+  echo $! > "$NOVNC_PID_FILE"
+  sleep 1
+  echo "[session-access] acesso pelo navegador iniciado"
 else
-  nohup "${NOVNC_CMD[@]}" > "$NOVNC_LOG" 2>&1 &
-  NOVNC_PID=$!
-  echo "$NOVNC_PID" > "$NOVNC_PID_FILE"
+  echo "[session-access] acesso pelo navegador já está ativo"
 fi
 
-echo
+DEFAULT_URL="http://${SESSION_ACCESS_HOST}:${SESSION_ACCESS_PORT}/vnc.html?autoconnect=true&resize=scale"
+ACCESS_URL="${SESSION_ACCESS_PUBLIC_URL:-$DEFAULT_URL}"
 
-echo "[session-access] acesso pronto"
-echo "[session-access] display: $DISPLAY_VALUE"
-echo "[session-access] VNC interno: $SESSION_VNC_PORT"
-echo "[session-access] link: http://${SESSION_ACCESS_HOST}:${SESSION_ACCESS_PORT}/vnc.html"
-echo "[session-access] senha: $SESSION_ACCESS_PASSWORD"
+echo
+echo "[session-access] pronto"
+echo "[session-access] desktop compartilhado: $DISPLAY_VALUE"
+echo "[session-access] link do vendedor: $ACCESS_URL"
+echo "[session-access] o Chrome iniciado com DISPLAY=$DISPLAY_VALUE aparecerá nesse link"
 echo
