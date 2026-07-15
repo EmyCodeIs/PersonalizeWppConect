@@ -53,7 +53,33 @@ async function run() {
   assert.equal(manual.reason, 'manual_outbound_message');
   assert.equal(HumanControl.getBlock(clientId).control.blockedUntil, null);
 
-  console.log('✅ Handoff verificado: assumir, liberar etiqueta e preservar atendimento manual.');
+  const readiness = require('../src/core/vpsReadinessPreload');
+  const collision = readiness.findExactSellerLabel([
+    { id: 'manual', name: 'fornecedor', hexColor: '#feb100' },
+    { id: 'seller', name: 'C. Eduardo', hexColor: '#feb100' },
+  ]);
+  assert.equal(collision.seller, 'c. eduardo');
+  assert.equal(readiness.findExactSellerLabel([{ name: 'Adriano Silva' }]), null);
+
+  const { resolveSellerLabelCandidates } = require('../src/core/sellerAliasHandoffPreload');
+  const resolved = await resolveSellerLabelCandidates(
+    {},
+    '12345678901234@lid',
+    { resolvePhoneJid: async () => '5531999999999@c.us' },
+  );
+  assert.equal(resolved.conclusiveIdentity, true);
+  assert.ok(resolved.candidates.includes('12345678901234@lid'));
+  assert.ok(resolved.candidates.includes('5531999999999@c.us'));
+
+  const unresolved = await resolveSellerLabelCandidates(
+    {},
+    '98765432109876@lid',
+    { resolvePhoneJid: async () => null },
+  );
+  assert.equal(unresolved.conclusiveIdentity, false);
+  assert.deepEqual(unresolved.candidates, ['98765432109876@lid']);
+
+  console.log('✅ Handoff verificado: vendedor exato, aliases, liberação segura e atendimento manual.');
 }
 
 run()
