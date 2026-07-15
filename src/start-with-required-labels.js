@@ -42,10 +42,12 @@ installLidServiceLabelFix();
 // nativo do catálogo do WhatsApp Business.
 require('./core/catalogMostruarioPreload');
 require('./core/handoffPreload');
-// Precisa carregar entre o monitor de saída e a limpeza do reset: assim o
-// /resetarsys digitado pelo vendedor volta ao processador de comandos sem
-// ativar handoff, mas ainda preserva os IDs necessários para a limpeza.
+// Precisa carregar antes da proteção administrativa: comandos digitados pelo
+// próprio WhatsApp Business voltam ao processador sem ativar handoff.
 require('./core/resetCommandHandoffPreload');
+// Mantém os comandos ativos somente para os números/IDs administrativos
+// configurados separadamente da whitelist geral de atendimento.
+require('./core/testCommandAccessPreload');
 require('./core/resetCleanupPreload');
 // Substitui a limpeza ampla antiga por uma limpeza que remove somente as
 // etiquetas gerenciadas, preservando as etiquetas manuais do contato.
