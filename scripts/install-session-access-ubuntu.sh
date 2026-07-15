@@ -2,11 +2,17 @@
 set -euo pipefail
 
 sudo apt-get update
-sudo apt-get install -y x11vnc novnc websockify xvfb openbox
+sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
+  xvfb \
+  openbox \
+  x11vnc \
+  novnc \
+  websockify \
+  dbus-x11 \
+  fonts-liberation
 
 echo
-echo "Pacotes instalados."
-echo "Agora garanta que o Chrome e o bot usem DISPLAY=:1 e suba uma tela virtual, por exemplo:"
-echo "  Xvfb :1 -screen 0 1366x768x24 >/tmp/xvfb.log 2>&1 &"
-echo "  export DISPLAY=:1"
+echo "[session-access] dependências instaladas"
+echo "[session-access] depois configure o bloco da VPS no .env"
+echo "[session-access] para iniciar desktop + noVNC + bot: npm run vps:start"
 echo
