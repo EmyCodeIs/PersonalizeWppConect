@@ -5,6 +5,13 @@ const path = require('path');
 const { env } = require('../config/env');
 
 const IMAGE_EXTENSIONS = ['.png', '.jpg', '.jpeg', '.webp'];
+const IMAGE_MIME_BY_EXT = {
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.webp': 'image/webp',
+};
+const imageDataUriCache = new Map();
 
 function normalizeAssetName(value) {
   return String(value || '')
@@ -82,6 +89,7 @@ function resolveAssetPath(baseNameOrNames, extensions) {
 function getBemVindosImagePath() {
   return resolveAssetPath([
     env.bemVindosImageBaseName || 'capa_bem_vindos',
+    'capa_bem_vindos.jpg.jpeg',
     'capa_bem_vindos',
     'capa-bem-vindos',
     'capa_bem-vindos',
@@ -128,6 +136,51 @@ function getFileSizeKb(filePath) {
   } catch (_) {
     return null;
   }
+}
+
+function filePathToDataUri(filePath) {
+  const ext = path.extname(filePath).toLowerCase();
+  const mimeType = IMAGE_MIME_BY_EXT[ext];
+  if (!mimeType) return null;
+
+  const cacheKey = path.resolve(process.cwd(), filePath);
+  if (imageDataUriCache.has(cacheKey)) return imageDataUriCache.get(cacheKey);
+
+  try {
+    const content = fs.readFileSync(cacheKey);
+    const dataUri = `data:${mimeType};base64,${content.toString('base64')}`;
+    imageDataUriCache.set(cacheKey, dataUri);
+    return dataUri;
+  } catch (err) {
+    console.warn('[ASSET] nao foi possivel carregar imagem em base64:', filePath, err?.message || err);
+    return null;
+  }
+}
+
+async function sendImageCaptionFast(channel, clientId, filePath, caption = '') {
+  if (!filePath) return false;
+
+  const chatId = normalizeChatId(clientId);
+  const fullPath = path.resolve(process.cwd(), filePath);
+  const filename = path.basename(fullPath);
+  const dataUri = filePathToDataUri(fullPath);
+
+  if (dataUri && typeof channel?.client?.sendImageFromBase64 === 'function') {
+    await channel.client.sendImageFromBase64(chatId, dataUri, filename, String(caption || ''));
+    return true;
+  }
+
+  if (typeof channel?.client?.sendImage === 'function') {
+    await channel.client.sendImage(chatId, fullPath, filename, String(caption || ''));
+    return true;
+  }
+
+  if (typeof channel?.sendImage === 'function') {
+    await channel.sendImage(clientId, filePath, caption || '');
+    return true;
+  }
+
+  return false;
 }
 
 async function sendImageIfExists(channel, clientId, filePath, caption = '', options = {}) {
@@ -207,7 +260,7 @@ async function sendLinkedImage(channel, clientId, { imagePath, link, label }) {
   // Regra visual: a URL crua fica na legenda/título da própria imagem.
   // Não existe um segundo balão de texto para o link.
   if (imagePath) {
-    const ok = await sendImageIfExists(channel, clientId, imagePath, link, { fast: true });
+    const ok = await sendImageCaptionFast(channel, clientId, imagePath, link);
     if (!ok) {
       console.warn(`[${label}] falha no envio da imagem; usando link cru como fallback.`);
       await sendTextFast(channel, clientId, link, `${label} LINK FALLBACK`);
@@ -248,6 +301,16 @@ async function sendTabelaEspessura(channel, clientId) {
 async function sendTabelaProfundidade(channel, clientId) {
   return sendImageIfExists(channel, clientId, getTabelaProfundidadePath(), 'Referência de profundidade com acrílico cristal por trás.');
 }
+
+[
+  getBemVindosImagePath(),
+  getMostruarioImagePath(),
+  getTabelaCoresPath(),
+  getTabelaEspessuraPath(),
+  getTabelaProfundidadePath(),
+].forEach((assetPath) => {
+  if (assetPath) filePathToDataUri(assetPath);
+});
 
 module.exports = {
   sendBemVindos,
