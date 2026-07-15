@@ -67,6 +67,7 @@ class ChatTaskQueue {
         units,
         resolve,
         reject,
+        publicSettled: false,
       });
       this.processNext();
     });
@@ -83,18 +84,7 @@ class ChatTaskQueue {
       const item = this.queue.splice(index, 1)[0];
       this.runningUnits += item.units;
       this.runningChats.add(item.chatId);
-
-      this.runItem(item)
-        .then((result) => {
-          this.release(item);
-          item.resolve(result);
-          this.processNext();
-        })
-        .catch((error) => {
-          this.release(item);
-          item.reject(error);
-          this.processNext();
-        });
+      this.executeItem(item);
     }
   }
 
@@ -103,38 +93,48 @@ class ChatTaskQueue {
     this.runningChats.delete(item.chatId);
   }
 
-  runItem(item) {
-    let timedOut = false;
-    let timeoutError = null;
+  executeItem(item) {
     let timeoutHandle = null;
 
     if (item.timeoutMs) {
       timeoutHandle = setTimeout(() => {
-        timedOut = true;
-        timeoutError = new Error(`Timeout ao processar o chat ${item.chatId}.`);
-        timeoutError.code = 'QUEUE_TIMEOUT';
-        timeoutError.chatId = item.chatId;
+        if (item.publicSettled) return;
+        item.publicSettled = true;
+        const error = new Error(`Timeout ao processar o chat ${item.chatId}.`);
+        error.code = 'QUEUE_TIMEOUT';
+        error.chatId = item.chatId;
+        item.reject(error);
       }, item.timeoutMs);
       if (typeof timeoutHandle.unref === 'function') timeoutHandle.unref();
     }
 
-    // O lock do chat permanece até a tarefa real terminar. JavaScript não consegue
-    // cancelar uma Promise arbitrária; liberar o chat no instante do timeout faria
-    // duas tarefas do mesmo cliente alterarem a sessão ao mesmo tempo.
-    return Promise.resolve()
+    // O chamador recebe o timeout no momento correto, mas o lock e as unidades
+    // permanecem ocupados até a tarefa real terminar. Isso impede duas tarefas do
+    // mesmo cliente de alterarem a sessão simultaneamente.
+    Promise.resolve()
       .then(() => item.task())
       .then((result) => {
         if (timeoutHandle) clearTimeout(timeoutHandle);
-        if (timedOut) throw timeoutError;
-        return result;
+        this.release(item);
+        if (!item.publicSettled) {
+          item.publicSettled = true;
+          item.resolve(result);
+        }
+        this.processNext();
       })
       .catch((error) => {
         if (timeoutHandle) clearTimeout(timeoutHandle);
-        if (timedOut && timeoutError) {
-          if (error !== timeoutError) timeoutError.cause = error;
-          throw timeoutError;
+        this.release(item);
+        if (!item.publicSettled) {
+          item.publicSettled = true;
+          item.reject(error);
+        } else {
+          console.warn(
+            `[QUEUE] tarefa ${item.id} do chat ${item.chatId} falhou depois do timeout:`,
+            error?.message || error,
+          );
         }
-        throw error;
+        this.processNext();
       });
   }
 }
