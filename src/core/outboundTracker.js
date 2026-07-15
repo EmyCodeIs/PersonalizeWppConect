@@ -157,11 +157,13 @@ class OutboundTracker {
       const sameType = !item.type
         || item.type === type
         || (item.type === 'text' && type === 'chat')
-        || (item.type === 'list' && ['chat', 'list'].includes(type))
+        || (item.type === 'list' && ['chat', 'list', 'text'].includes(type))
         || (item.type === 'image' && ['image', 'chat'].includes(type))
         || (item.type === 'document' && ['document', 'chat'].includes(type));
 
       if (!sameType) return false;
+
+      if (item.type === 'list' && !text) return true;
 
       const media = isMediaType(item.type) || isMediaType(type);
       if (media) {
