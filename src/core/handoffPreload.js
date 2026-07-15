@@ -53,7 +53,16 @@ function mediaMarker(message = {}) {
     return `[arquivo enviado${filename ? `: ${filename}` : ''}]`;
   }
   if (/video/.test(type)) return '[vídeo enviado]';
+  if (/audio|ptt/.test(type)) return '[áudio enviado]';
+  if (/sticker/.test(type)) return '[figurinha enviada]';
   return '';
+}
+
+function isVisibleOutgoingEvent(message = {}, text = '') {
+  if (String(text || '').trim()) return true;
+
+  const type = String(message?.type || message?.mimetype || message?.mediaType || '').trim().toLowerCase();
+  return /^(?:chat|text|image|video|document|audio|ptt|sticker|list|buttons?|template|location|vcard)$/.test(type);
 }
 
 function createDeduplicatedOutgoingHandler(handler) {
@@ -69,9 +78,14 @@ function createDeduplicatedOutgoingHandler(handler) {
 
     const id = messageId(raw);
     const text = String(payload.text || outgoingText(raw) || mediaMarker(raw)).trim();
-    const type = String(raw?.type || raw?.mimetype || raw?.mediaType || 'text').toLowerCase();
-    const now = Date.now();
+    const type = String(raw?.type || raw?.mimetype || raw?.mediaType || 'unknown').toLowerCase();
 
+    if (!isVisibleOutgoingEvent(raw, text)) {
+      console.log(`[HANDOFF] evento interno ignorado: ${chatId} | tipo=${type || 'desconhecido'}`);
+      return;
+    }
+
+    const now = Date.now();
     for (const [key, createdAt] of seen.entries()) {
       if ((now - createdAt) > ttlMs) seen.delete(key);
     }
@@ -107,7 +121,6 @@ SellerHandoff.getAutomationBlock = async function getAutomationBlockExactSeller(
       labelName: assignment.labelName,
       blockedHours: env.humanBlockHours,
     });
-
     return {
       blocked: true,
       reason: 'seller_label',
@@ -175,6 +188,7 @@ WppClient.createWppChannel = async function createWppChannelWithReliableOutgoing
 module.exports = {
   _test: {
     createDeduplicatedOutgoingHandler,
+    isVisibleOutgoingEvent,
     mediaMarker,
     messageId,
     normalizeChatId,
