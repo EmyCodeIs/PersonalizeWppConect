@@ -58,6 +58,7 @@ need_cmd openbox-session
 need_cmd x11vnc
 need_cmd curl
 need_cmd ss
+need_cmd flock
 need_cmd nginx
 need_cmd htpasswd
 
@@ -163,6 +164,12 @@ else
   ok "recuperação de não lidas desativada para a primeira conexão"
 fi
 
+if [[ "$(id -u)" == "0" ]]; then
+  warn "processo será executado como root; o Chrome usará --no-sandbox. Prefira um usuário Linux dedicado"
+else
+  ok "processo será executado sem privilégios de root"
+fi
+
 NOVNC_WEB="${SESSION_NOVNC_WEB:-/usr/share/novnc}"
 if [[ -f "$NOVNC_WEB/vnc.html" ]]; then
   ok "interface noVNC encontrada em $NOVNC_WEB"
@@ -192,7 +199,9 @@ for script in \
   session-access-health.sh \
   watch-session-access.sh \
   start-vps-whatsapp.sh \
-  install-session-access-ubuntu.sh; do
+  install-session-access-ubuntu.sh \
+  configure-nginx-access.sh \
+  vps-preflight.sh; do
   if bash -n "$ROOT_DIR/scripts/$script"; then
     ok "sintaxe Bash: $script"
   else
