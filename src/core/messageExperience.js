@@ -80,7 +80,17 @@ function isWelcomeText(text) {
   return /bem-vindo\(a\) ao canal de atendimento da personalize!/i.test(String(text || ''));
 }
 
-async function sendTextDirect(channel, clientId, text) {
+function outboundTextAttempts() {
+  const value = Number(process.env.OUTBOUND_TEXT_ATTEMPTS);
+  return Number.isFinite(value) && value >= 1 ? Math.floor(value) : 2;
+}
+
+function outboundTextRetryMs() {
+  const value = Number(process.env.OUTBOUND_TEXT_RETRY_MS);
+  return Number.isFinite(value) && value >= 0 ? value : 700;
+}
+
+async function sendTextOnce(channel, clientId, text) {
   if (typeof channel?.__rawSendText === 'function') {
     return channel.__rawSendText(clientId, text, { noDelay: true });
   }
@@ -89,6 +99,37 @@ async function sendTextDirect(channel, clientId, text) {
     return channel.client.sendText(chatId, String(text || ''));
   }
   return channel?.sendText?.(clientId, text, { noDelay: true });
+}
+
+async function sendTextDirect(channel, clientId, text) {
+  const attempts = outboundTextAttempts();
+  const retryMs = outboundTextRetryMs();
+  let lastError = null;
+
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      const result = await sendTextOnce(channel, clientId, text);
+      if (result !== false && result !== null) return result === undefined ? true : result;
+      lastError = new Error('OUTBOUND_TEXT_NOT_CONFIRMED');
+      console.warn(
+        `[MENSAGEM] envio sem confirmação | cliente=${clientId} | tentativa=${attempt}/${attempts}`,
+      );
+    } catch (error) {
+      lastError = error;
+      console.warn(
+        `[MENSAGEM] falha no envio | cliente=${clientId} | tentativa=${attempt}/${attempts} `
+        + `| erro=${error?.message || error}`,
+      );
+    }
+
+    if (attempt < attempts && retryMs) await wait(retryMs);
+  }
+
+  const error = new Error(
+    `Não foi possível confirmar o envio da mensagem após ${attempts} tentativa(s): ${lastError?.message || 'erro desconhecido'}`,
+  );
+  error.code = 'outbound_text_unconfirmed';
+  throw error;
 }
 
 async function sendTextWithLinkedWelcome(channel, clientId, text, options = {}) {
@@ -181,6 +222,9 @@ function installMessageExperience(channel) {
 
 module.exports = {
   installMessageExperience,
+  outboundTextAttempts,
+  outboundTextRetryMs,
+  sendTextDirect,
   startTypingCompat,
   stopTypingCompat,
   typingDuration,
