@@ -45,10 +45,14 @@ require('./core/operationalLabelPolicyPreload');
 // Mantém somente uma etiqueta operacional. Etiquetas manuais e a etiqueta
 // exata do vendedor são preservadas.
 require('./core/exclusiveServiceLabelsPreload');
+// Impede reaplicações da mesma etiqueta durante o fluxo, finalização e reinícios.
+require('./core/serviceLabelAssignmentPreload');
 
 // Precisa carregar antes do fluxo para trocar o mostruário antigo pelo cartão
 // nativo do catálogo do WhatsApp Business.
 require('./core/catalogMostruarioPreload');
+// Depois do catálogo, explica por que o cliente responderá às próximas listas.
+require('./core/letteringIntroPreload');
 require('./core/handoffPreload');
 // Precisa carregar antes da proteção administrativa: comandos digitados pelo
 // próprio WhatsApp Business voltam ao processador sem ativar handoff.
@@ -65,6 +69,8 @@ require('./core/preferredSellerNotePreload');
 require('./core/completedFlowSilencePreload');
 require('./core/runtimeReliabilityPreload');
 require('./core/supportAndServicesPreload');
+// Aplica Suporte no momento da escolha, não apenas ao finalizar a coleta.
+require('./core/supportLabelSelectionPreload');
 require('./core/exactAcknowledgementPreload');
 require('./core/bufferStagePolicyPreload');
 
@@ -72,5 +78,12 @@ require('./core/bufferStagePolicyPreload');
 // exata do vendedor para os aliases @lid e @c.us do mesmo contato.
 require('./core/vpsReadinessPreload');
 require('./core/sellerAliasHandoffPreload');
+// Escuta a inclusão/remoção de etiqueta de vendedor mesmo após o fluxo concluído.
+require('./core/sellerLabelEventsPreload');
+
+// A limpeza acontece antes de o Chrome abrir. Durante a execução há apenas monitoramento.
+const TokenCache = require('./core/tokenCacheMaintenance');
+TokenCache.runStartupTokenCacheMaintenance();
+TokenCache.startTokenCacheMonitor();
 
 require('./bootstrap');
