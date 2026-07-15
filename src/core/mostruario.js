@@ -96,15 +96,6 @@ function getBemVindosImagePath() {
   ], IMAGE_EXTENSIONS);
 }
 
-function getMostruarioImagePath() {
-  return resolveAssetPath([
-    env.mostruarioLetreiroImageBaseName || 'capa-mostruario',
-    'capa-mostruario',
-    'Mostruario_Letreiro',
-    'mostruario-letreiro',
-  ], IMAGE_EXTENSIONS);
-}
-
 function getTabelaCoresPath() {
   return resolveAssetPath([
     env.assetTabelaCoresBaseName || 'tabela-cores-v2',
@@ -162,9 +153,6 @@ async function sendImageCaptionFast(channel, clientId, filePath, caption = '') {
 
   const fullPath = path.resolve(process.cwd(), filePath);
 
-  // Sempre passa pelo canal rastreado. Enviar diretamente por
-  // client.sendImageFromBase64/sendImage fazia o retorno onAnyMessage parecer
-  // uma mensagem manual e ativava o handoff do próprio bot.
   if (typeof channel?.sendImage === 'function') {
     await channel.sendImage(clientId, fullPath, caption || '', {
       noDelay: true,
@@ -252,19 +240,9 @@ function getBemVindosLink() {
   );
 }
 
-function getMostruarioLink() {
-  return validRawLink(
-    env.mostruarioLinkUrl,
-    'MOSTRUARIO_LINK_URL',
-    'https://personalizeseuambiente.com.br/mostruario-letreiros',
-  );
-}
-
 async function sendLinkedImage(channel, clientId, { imagePath, link, label }) {
   const totalStartedAt = Date.now();
 
-  // Regra visual: a URL crua fica na legenda/título da própria imagem.
-  // Não existe um segundo balão de texto para o link.
   if (imagePath) {
     const ok = await sendImageCaptionFast(channel, clientId, imagePath, link);
     if (!ok) {
@@ -288,14 +266,6 @@ async function sendBemVindos(channel, clientId) {
   });
 }
 
-async function sendMostruarioLetreiro(channel, clientId) {
-  return sendLinkedImage(channel, clientId, {
-    imagePath: getMostruarioImagePath(),
-    link: getMostruarioLink(),
-    label: 'MOSTRUARIO',
-  });
-}
-
 async function sendTabelaCores(channel, clientId) {
   return sendImageIfExists(channel, clientId, getTabelaCoresPath(), 'Confira nossa tabela de cores disponíveis.');
 }
@@ -310,7 +280,6 @@ async function sendTabelaProfundidade(channel, clientId) {
 
 [
   getBemVindosImagePath(),
-  getMostruarioImagePath(),
   getTabelaCoresPath(),
   getTabelaEspessuraPath(),
   getTabelaProfundidadePath(),
@@ -320,16 +289,13 @@ async function sendTabelaProfundidade(channel, clientId) {
 
 module.exports = {
   sendBemVindos,
-  sendMostruarioLetreiro,
   sendTabelaCores,
   sendTabelaEspessura,
   sendTabelaProfundidade,
   getBemVindosImagePath,
-  getMostruarioImagePath,
   getTabelaCoresPath,
   getTabelaEspessuraPath,
   getTabelaProfundidadePath,
   listAssetFiles,
   getBemVindosLink,
-  getMostruarioLink,
 };
