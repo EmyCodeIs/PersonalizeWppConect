@@ -2,7 +2,6 @@ node_modules/
 .env
 .wppconnect_auth/
 tokens/
-data/*.json
-data/*.jsonl
+data/
 npm-debug.log*
 .DS_Store
