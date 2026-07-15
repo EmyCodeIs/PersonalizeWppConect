@@ -158,6 +158,7 @@ async function repairDuplicateServiceLabelsOnce(channel) {
     return;
   }
 
+  const autoRemove = boolEnv('LABEL_MAINTENANCE_AUTO_REMOVE_DUPLICATES', false);
   let labels = await readLabels(channel);
 
   for (const expectedName of names) {
@@ -170,8 +171,11 @@ async function repairDuplicateServiceLabelsOnce(channel) {
 
     console.warn(
       `[LISTAS][INÍCIO] duplicata encontrada | nome="${expectedName}" | manter=${canonical?.id} `
-      + `(${Number(canonical?.count || 0)} conversa(s)) | remover=${duplicates.map((item) => `${item.id}(${Number(item.count || 0)})`).join(',')}`,
+      + `(${Number(canonical?.count || 0)} conversa(s)) | duplicatas=${duplicates.map((item) => `${item.id}(${Number(item.count || 0)})`).join(',')}`
+      + ` | remoçãoAutomática=${autoRemove ? 'ativada' : 'desativada'}`,
     );
+
+    if (!autoRemove) continue;
 
     for (const duplicate of duplicates) {
       const result = await deleteLabelById(channel, duplicate.id);
