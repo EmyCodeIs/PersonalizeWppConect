@@ -1,28 +1,19 @@
 'use strict';
 
-const fs = require('fs');
 const path = require('path');
 const Identity = require('./contactIdentity');
+const Persistence = require('./persistence');
 const { env } = require('../config/env');
 
 const DATA_DIR = path.join(process.cwd(), 'data');
 const STORE_PATH = path.join(DATA_DIR, 'bot-activity.json');
 
-function ensureDataDir() {
-  fs.mkdirSync(DATA_DIR, { recursive: true });
-}
-
 function readState() {
-  try {
-    if (!fs.existsSync(STORE_PATH)) return { contacts: {}, lastSavedAt: null };
-    const parsed = JSON.parse(fs.readFileSync(STORE_PATH, 'utf8'));
-    return {
-      contacts: parsed?.contacts && typeof parsed.contacts === 'object' ? parsed.contacts : {},
-      lastSavedAt: parsed?.lastSavedAt || null,
-    };
-  } catch (_) {
-    return { contacts: {}, lastSavedAt: null };
-  }
+  const parsed = Persistence.readJson(STORE_PATH, { contacts: {}, lastSavedAt: null });
+  return {
+    contacts: parsed?.contacts && typeof parsed.contacts === 'object' ? parsed.contacts : {},
+    lastSavedAt: parsed?.lastSavedAt || null,
+  };
 }
 
 const state = readState();
@@ -48,17 +39,8 @@ function candidateKeys(clientId) {
 }
 
 function persist() {
-  ensureDataDir();
   state.lastSavedAt = new Date().toISOString();
-  const serialized = JSON.stringify(state, null, 2);
-  const tempPath = `${STORE_PATH}.${process.pid}.tmp`;
-  fs.writeFileSync(tempPath, serialized, 'utf8');
-  try {
-    fs.renameSync(tempPath, STORE_PATH);
-  } catch (_) {
-    fs.writeFileSync(STORE_PATH, serialized, 'utf8');
-    try { if (fs.existsSync(tempPath)) fs.unlinkSync(tempPath); } catch (_) {}
-  }
+  Persistence.writeJson(STORE_PATH, state);
 }
 
 function recordTimestamp(record) {

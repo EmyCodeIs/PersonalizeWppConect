@@ -5,22 +5,33 @@ const fs = require('fs');
 const path = require('path');
 const dotenv = require('dotenv');
 
-const filePath = path.join(__dirname, '..', 'deploy', '.env.vps.example');
-const parsed = dotenv.parse(fs.readFileSync(filePath));
-const rules = String(parsed.SELLER_LABEL_RULES || '');
+for (const filename of ['.env.vps.example', '.env.vps.ready.example']) {
+  const filePath = path.join(__dirname, '..', 'deploy', filename);
+  const parsed = dotenv.parse(fs.readFileSync(filePath));
+  const rules = String(parsed.SELLER_LABEL_RULES || '');
 
-for (const expected of [
-  'Adriano=#8FD0A8',
-  'Ana=#00A4F2',
-  'Emy=#7FE51F',
-  'C. Eduardo=#FEB100',
-]) {
-  assert.ok(rules.includes(expected), `regra ausente ou cortada pelo dotenv: ${expected}`);
+  for (const expected of [
+    'Adriano=#8FD0A8',
+    'Ana=#00A4F2',
+    'Emy=#7FE51F',
+    'C. Eduardo=#FEB100',
+  ]) {
+    assert.ok(rules.includes(expected), `regra ausente ou cortada em ${filename}: ${expected}`);
+  }
+
+  assert.equal(parsed.ENABLE_TEST_COMMANDS, 'false');
+  assert.equal(parsed.ENABLE_UNREAD_BOOTSTRAP, 'false');
+  assert.equal(parsed.LABEL_MAINTENANCE_AUTO_REMOVE_DUPLICATES, 'false');
+  assert.equal(parsed.SESSION_ACCESS_HOST, '127.0.0.1');
+  assert.equal(parsed.STORAGE_DRIVER, 'sqlite');
+  assert.equal(parsed.SQLITE_DATABASE_PATH, 'data/personalize.sqlite');
+  assert.equal(parsed.SESSION_ACCESS_HTTP_USER, 'personalize');
+  assert.equal(parsed.SESSION_ACCESS_HTTP_PASSWORD, '2580');
+  assert.equal(parsed.SESSION_ACCESS_PASSWORD, '2580');
+  assert.equal(parsed.ALLOW_WEAK_SESSION_PASSWORD, 'true');
+  assert.equal(parsed.BROWSER_CACHE_DIR, 'data/browser-cache');
+  assert.equal(parsed.TOKEN_CACHE_AUTO_CLEAN, 'true');
+  assert.match(parsed.SESSION_ACCESS_PUBLIC_URL, /^https:\/\/__DOMAIN__\//);
 }
 
-assert.equal(parsed.ENABLE_TEST_COMMANDS, 'false');
-assert.equal(parsed.ENABLE_UNREAD_BOOTSTRAP, 'false');
-assert.equal(parsed.LABEL_MAINTENANCE_AUTO_REMOVE_DUPLICATES, 'false');
-assert.equal(parsed.SESSION_ACCESS_HOST, '127.0.0.1');
-
-console.log('✅ Ambiente VPS verificado: regras hex preservadas, testes/não lidas/exclusões desligados e noVNC privado.');
+console.log('✅ Ambiente VPS verificado: SQLite criptografado, noVNC privado, senha configurada e cache fora de tokens.');

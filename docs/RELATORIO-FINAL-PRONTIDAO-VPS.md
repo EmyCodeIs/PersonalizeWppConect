@@ -246,7 +246,7 @@ npm run vps:preflight
 Ele verifica:
 
 - `.env`;
-- Node 20 a 24;
+- Node 22 a 24;
 - npm;
 - navegador;
 - Xvfb/Openbox/x11vnc/noVNC;

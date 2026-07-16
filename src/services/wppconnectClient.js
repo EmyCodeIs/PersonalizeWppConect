@@ -5,6 +5,8 @@ const { env } = require('../config/env');
 const { applyNamedLabel } = require('../core/serviceLabels');
 const { OutboundTracker } = require('../core/outboundTracker');
 const { resolveBrowserArgs } = require('../core/vpsBrowserPreload');
+const { publishConnected, publishQrCode, publishState } = require('./qrAccess');
+const { setQrAdminClient } = require('./qrAdminServer');
 
 function wait(ms) {
   return new Promise((resolve) => setTimeout(resolve, Math.max(0, Number(ms || 0))));
@@ -226,17 +228,26 @@ async function createWppChannel({ onMessage, onOutgoingMessage, onQr } = {}) {
     catchQR: (base64Qr, asciiQR, attempts, urlCode) => {
       console.log('\n[WPPConnect] Escaneie o QR Code com o WhatsApp Business.\n');
       console.log(asciiQR);
+      publishQrCode({ base64Qr, attempts, urlCode, connectionState: 'PAIRING' });
       if (typeof onQr === 'function') onQr({ base64Qr, asciiQR, attempts, urlCode });
     },
-    statusFind: (statusSession, session) => console.log('[WPPConnect]', session, statusSession),
+    statusFind: (statusSession, session) => {
+      console.log('[WPPConnect]', session, statusSession);
+      publishState(String(statusSession || '').trim().toUpperCase(), `Status do WPPConnect: ${statusSession}`);
+    },
     headless: env.wppHeadless,
     useChrome: true,
     browserArgs,
-    autoClose: false,
+    // Keep the shared Chrome open indefinitely on the VPS so the remote view
+    // always shows the same WhatsApp Web session until the user scans the QR.
+    autoClose: 0,
+    deviceSyncTimeout: 0,
+    waitForLogin: false,
     folderNameToken: 'tokens',
   });
 
   const tracker = new OutboundTracker();
+  setQrAdminClient(client);
   const channel = {
     client,
     outboundTracker: tracker,
@@ -326,7 +337,15 @@ async function createWppChannel({ onMessage, onOutgoingMessage, onQr } = {}) {
     },
   };
 
-  client.onStateChange((state) => console.log('[WPPConnect] estado:', state));
+  client.onStateChange((state) => {
+    console.log('[WPPConnect] estado:', state);
+    const normalized = String(state || '').trim().toUpperCase();
+    if (normalized.includes('CONNECTED') || normalized.includes('SYNCING') || normalized.includes('RESUMING')) {
+      publishConnected(normalized);
+      return;
+    }
+    publishState(normalized);
+  });
   client.onMessage(async (message) => {
     if (message?.isGroupMsg) return;
 

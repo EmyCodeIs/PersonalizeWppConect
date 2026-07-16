@@ -1,72 +1,26 @@
 'use strict';
 
-const fs = require('fs');
 const path = require('path');
 const { env } = require('../config/env');
+const Persistence = require('./persistence');
 
 const DATA_DIR = path.join(process.cwd(), 'data');
 const IDENTITIES_PATH = path.join(DATA_DIR, 'contact-identities.json');
 
-function ensureDataDir() {
-  fs.mkdirSync(DATA_DIR, { recursive: true });
-}
-
 function readState() {
-  try {
-    if (!fs.existsSync(IDENTITIES_PATH)) return { contacts: {}, aliases: {}, updatedAt: null };
-    const parsed = JSON.parse(fs.readFileSync(IDENTITIES_PATH, 'utf8'));
-    return {
-      contacts: parsed?.contacts && typeof parsed.contacts === 'object' ? parsed.contacts : {},
-      aliases: parsed?.aliases && typeof parsed.aliases === 'object' ? parsed.aliases : {},
-      updatedAt: parsed?.updatedAt || null,
-    };
-  } catch (_) {
-    return { contacts: {}, aliases: {}, updatedAt: null };
-  }
+  const parsed = Persistence.readJson(IDENTITIES_PATH, { contacts: {}, aliases: {}, updatedAt: null });
+  return {
+    contacts: parsed?.contacts && typeof parsed.contacts === 'object' ? parsed.contacts : {},
+    aliases: parsed?.aliases && typeof parsed.aliases === 'object' ? parsed.aliases : {},
+    updatedAt: parsed?.updatedAt || null,
+  };
 }
 
 const state = readState();
 
-function sleepSync(ms) {
-  if (!Number.isFinite(ms) || ms <= 0) return;
-  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, Math.max(1, Math.floor(ms)));
-}
-
 function saveState() {
-  ensureDataDir();
   state.updatedAt = new Date().toISOString();
-  const serialized = JSON.stringify(state, null, 2);
-  const temp = `${IDENTITIES_PATH}.${process.pid}.tmp`;
-  fs.writeFileSync(temp, serialized, 'utf8');
-
-  let renamed = false;
-  let lastError = null;
-  for (let attempt = 1; attempt <= 5; attempt += 1) {
-    try {
-      fs.renameSync(temp, IDENTITIES_PATH);
-      renamed = true;
-      break;
-    } catch (err) {
-      lastError = err;
-      if (!['EPERM', 'EBUSY', 'EACCES'].includes(err?.code)) break;
-      sleepSync(40 * attempt);
-    }
-  }
-
-  if (!renamed) {
-    try {
-      fs.writeFileSync(IDENTITIES_PATH, serialized, 'utf8');
-      renamed = true;
-    } catch (err) {
-      lastError = err;
-    }
-  }
-
-  try {
-    if (fs.existsSync(temp)) fs.unlinkSync(temp);
-  } catch (_) {}
-
-  if (!renamed && lastError) throw lastError;
+  Persistence.writeJson(IDENTITIES_PATH, state);
 }
 
 function normalizeChatId(value) {

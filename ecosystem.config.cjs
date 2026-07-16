@@ -32,5 +32,14 @@ module.exports = {
       max_restarts: 10,
       max_memory_restart: process.env.PM2_MAX_MEMORY_RESTART || '1200M',
     },
+    {
+      ...common,
+      name: 'personalize-backup',
+      script: 'scripts/backup-vps-state.sh',
+      autorestart: false,
+      cron_restart: '15 3 * * *',
+      max_restarts: 0,
+      max_memory_restart: '150M',
+    },
   ],
 };

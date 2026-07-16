@@ -1,8 +1,8 @@
 'use strict';
 
-const fs = require('fs');
 const path = require('path');
 const Identity = require('./contactIdentity');
+const Persistence = require('./persistence');
 const { env } = require('../config/env');
 
 const DATA_DIR = path.join(process.cwd(), 'data');
@@ -10,58 +10,12 @@ const SESSIONS_PATH = path.join(DATA_DIR, 'sessions.json');
 const LEADS_PATH = path.join(DATA_DIR, 'leads.jsonl');
 const PROFILES_PATH = path.join(DATA_DIR, 'profiles.json');
 
-function ensureDataDir() {
-  fs.mkdirSync(DATA_DIR, { recursive: true });
-}
-
 function readJson(filePath, fallback) {
-  try {
-    if (!fs.existsSync(filePath)) return fallback;
-    return JSON.parse(fs.readFileSync(filePath, 'utf8'));
-  } catch (_) {
-    return fallback;
-  }
-}
-
-function sleepSync(ms) {
-  if (!Number.isFinite(ms) || ms <= 0) return;
-  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, Math.max(1, Math.floor(ms)));
+  return Persistence.readJson(filePath, fallback);
 }
 
 function writeJson(filePath, data) {
-  ensureDataDir();
-  const serialized = JSON.stringify(data, null, 2);
-  const tempPath = `${filePath}.${process.pid}.tmp`;
-  fs.writeFileSync(tempPath, serialized, 'utf8');
-
-  let renamed = false;
-  let lastError = null;
-  for (let attempt = 1; attempt <= 5; attempt += 1) {
-    try {
-      fs.renameSync(tempPath, filePath);
-      renamed = true;
-      break;
-    } catch (err) {
-      lastError = err;
-      if (!['EPERM', 'EBUSY', 'EACCES'].includes(err?.code)) break;
-      sleepSync(40 * attempt);
-    }
-  }
-
-  if (!renamed) {
-    try {
-      fs.writeFileSync(filePath, serialized, 'utf8');
-      renamed = true;
-    } catch (err) {
-      lastError = err;
-    }
-  }
-
-  try {
-    if (fs.existsSync(tempPath)) fs.unlinkSync(tempPath);
-  } catch (_) {}
-
-  if (!renamed && lastError) throw lastError;
+  return Persistence.writeJson(filePath, data);
 }
 
 const state = readJson(SESSIONS_PATH, { sessions: {}, lastSavedAt: null });
@@ -364,9 +318,8 @@ function buildCompactLead(payload = {}) {
 }
 
 function appendLead(payload = {}) {
-  ensureDataDir();
   const lead = buildCompactLead(payload);
-  fs.appendFileSync(LEADS_PATH, JSON.stringify(lead) + '\n', 'utf8');
+  Persistence.appendJsonLine(LEADS_PATH, lead);
   return lead;
 }
 
@@ -382,12 +335,7 @@ function resetSystem() {
   const previousProfileCount = Object.keys(profileState.profiles || {}).length;
   let previousLeadCount = 0;
 
-  try {
-    if (fs.existsSync(LEADS_PATH)) {
-      const raw = fs.readFileSync(LEADS_PATH, 'utf8');
-      previousLeadCount = raw.split('\n').filter((line) => line.trim()).length;
-    }
-  } catch (_) {}
+  previousLeadCount = Persistence.countJsonLines(LEADS_PATH);
 
   state.sessions = {};
   persistState();
@@ -395,8 +343,7 @@ function resetSystem() {
   profileState.profiles = {};
   persistProfiles();
 
-  ensureDataDir();
-  fs.writeFileSync(LEADS_PATH, '', 'utf8');
+  Persistence.clearJsonLines(LEADS_PATH);
   const previousIdentityCount = Identity.resetIdentities();
 
   return {
@@ -408,6 +355,7 @@ function resetSystem() {
   };
 }
 
+Persistence.importJsonLines(LEADS_PATH);
 purgeExpiredSessions({ write: false });
 
 module.exports = {

@@ -20,7 +20,8 @@ sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
   dbus-x11 \
   fonts-liberation \
   iproute2 \
-  util-linux
+  util-linux \
+  openssl
 
 if ! command -v google-chrome-stable >/dev/null 2>&1 \
   && ! command -v google-chrome >/dev/null 2>&1 \
@@ -47,7 +48,7 @@ if ! command -v google-chrome-stable >/dev/null 2>&1 \
 fi
 
 if ! command -v npm >/dev/null 2>&1; then
-  echo "[session-access] npm não encontrado; instale Node.js 20 a 24 antes de continuar" >&2
+  echo "[session-access] npm não encontrado; instale Node.js 22 a 24 antes de continuar" >&2
   exit 1
 fi
 

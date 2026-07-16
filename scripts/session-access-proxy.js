@@ -21,10 +21,11 @@ const accessPassword = String(process.env.SESSION_ACCESS_PASSWORD || '').trim();
 const vncHost = String(process.env.SESSION_VNC_HOST || '127.0.0.1').trim();
 const vncPort = Math.max(1, numberEnv('SESSION_VNC_PORT', 5900));
 const vncPassword = String(process.env.SESSION_VNC_PASSWORD || '').trim();
+const disableAppLogin = /^(1|true|yes|sim|on)$/i.test(String(process.env.SESSION_ACCESS_DISABLE_APP_LOGIN || '').trim());
 const novncRoot = path.resolve(process.cwd(), 'node_modules', '@novnc', 'novnc');
 const rfbModule = path.join(novncRoot, 'core', 'rfb.js');
 
-if (!accessPassword) {
+if (!disableAppLogin && !accessPassword) {
   throw new Error('Defina SESSION_ACCESS_PASSWORD no .env.');
 }
 if (!vncPassword) {
@@ -59,6 +60,7 @@ function parseCookies(request) {
 }
 
 function isAuthorized(request) {
+  if (disableAppLogin) return true;
   const token = parseCookies(request).personalize_session_access || '';
   const received = Buffer.from(token);
   const expected = Buffer.from(expectedToken);
@@ -227,6 +229,14 @@ const server = http.createServer(async (request, response) => {
   }
 
   if (request.method === 'POST' && url.pathname === '/login') {
+    if (disableAppLogin) {
+      response.writeHead(302, {
+        Location: '/',
+        'Cache-Control': 'no-store',
+      });
+      response.end();
+      return;
+    }
     try {
       const form = new URLSearchParams(await readBody(request));
       const supplied = String(form.get('password') || '');
@@ -254,6 +264,14 @@ const server = http.createServer(async (request, response) => {
   }
 
   if (request.method === 'GET' && url.pathname === '/logout') {
+    if (disableAppLogin) {
+      response.writeHead(302, {
+        Location: '/',
+        'Cache-Control': 'no-store',
+      });
+      response.end();
+      return;
+    }
     response.writeHead(302, {
       Location: '/',
       'Set-Cookie': 'personalize_session_access=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0',

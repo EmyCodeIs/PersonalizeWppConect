@@ -1,6 +1,7 @@
 'use strict';
 
 require('dotenv').config();
+require('./core/safeLoggingPreload');
 
 // No Windows, SESSION_ACCESS_AUTO_START decide se o portal local será iniciado.
 // Na VPS, `npm run vps:start` cria uma área de trabalho virtual, publica essa
@@ -79,10 +80,20 @@ require('./core/sellerAliasHandoffPreload');
 // Escuta a inclusão/remoção de etiqueta de vendedor mesmo após o fluxo concluído.
 require('./core/sellerLabelEventsPreload');
 
-// A limpeza acontece antes de o Chrome abrir. Durante a execução há apenas monitoramento.
+// As limpezas acontecem antes de o Chrome abrir. Durante a execução há apenas monitoramento.
 const TokenCache = require('./core/tokenCacheMaintenance');
+const BrowserCache = require('./core/browserCacheMaintenance');
+const Persistence = require('./services/persistence');
+const { startQrAdminServer } = require('./services/qrAdminServer');
+
 TokenCache.runStartupTokenCacheMaintenance();
 TokenCache.startTokenCacheMonitor();
+BrowserCache.runStartupBrowserCacheMaintenance();
+BrowserCache.startBrowserCacheMonitor();
+startQrAdminServer();
 
-console.log('[BUILD] personalize-catalogo-texto-lista-v2');
+const storage = Persistence.storageInfo();
+if (storage.driver === 'sqlite') Persistence.getDatabase();
+console.log(`[BANCO] driver=${storage.driver} | criptografado=${storage.encrypted ? 'sim' : 'não'}`);
+console.log('[BUILD] personalize-vps-secure-sqlite-v1');
 require('./bootstrap');

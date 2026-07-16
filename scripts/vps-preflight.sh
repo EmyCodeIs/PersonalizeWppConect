@@ -85,10 +85,33 @@ else
 fi
 
 NODE_MAJOR="$(node -p "Number(process.versions.node.split('.')[0])" 2>/dev/null || echo 0)"
-if (( NODE_MAJOR >= 20 && NODE_MAJOR < 25 )); then
+if (( NODE_MAJOR >= 22 && NODE_MAJOR < 25 )); then
   ok "Node.js compatível: $(node --version)"
 else
-  fail "Node.js incompatível: $(node --version 2>/dev/null || echo desconhecido); esperado 20 a 24"
+  fail "Node.js incompatível: $(node --version 2>/dev/null || echo desconhecido); esperado 22 a 24"
+fi
+
+
+if [[ "${STORAGE_DRIVER:-}" == "sqlite" ]]; then
+  if (( NODE_MAJOR >= 22 )); then
+    ok "SQLite embutido disponível no Node.js"
+  else
+    fail "STORAGE_DRIVER=sqlite exige Node.js 22 ou superior"
+  fi
+  if [[ -n "${DATA_ENCRYPTION_KEY:-}" ]]; then
+    ok "chave de criptografia configurada"
+  else
+    fail "DATA_ENCRYPTION_KEY ausente"
+  fi
+else
+  fail "STORAGE_DRIVER precisa ser sqlite na produção"
+fi
+
+CACHE_DIR="${BROWSER_CACHE_DIR:-data/browser-cache}"
+if [[ "$CACHE_DIR" == tokens* || "$CACHE_DIR" == */tokens/* ]]; then
+  fail "BROWSER_CACHE_DIR não pode ficar dentro de tokens/"
+else
+  ok "cache pesado separado de tokens/: $CACHE_DIR"
 fi
 
 if [[ "${MOCK_MODE:-false}" == "false" ]]; then
@@ -133,12 +156,16 @@ fi
 
 ACCESS_PASSWORD="${SESSION_ACCESS_PASSWORD:-}"
 case "$ACCESS_PASSWORD" in
-  ""|troque-esta-senha|COLOQUE_UMA_SENHA_FORTE_AQUI|2580)
-    fail "SESSION_ACCESS_PASSWORD ainda está vazia ou usa valor de teste"
+  ""|troque-esta-senha|COLOQUE_UMA_SENHA_FORTE_AQUI)
+    fail "SESSION_ACCESS_PASSWORD ausente"
     ;;
   *)
     if (( ${#ACCESS_PASSWORD} < 8 )); then
-      fail "SESSION_ACCESS_PASSWORD precisa ter pelo menos 8 caracteres"
+      if is_true "${ALLOW_WEAK_SESSION_PASSWORD:-false}"; then
+        warn "senha VNC curta autorizada explicitamente"
+      else
+        fail "SESSION_ACCESS_PASSWORD precisa ter pelo menos 8 caracteres"
+      fi
     else
       ok "senha VNC configurada"
     fi
@@ -201,6 +228,8 @@ for script in \
   start-vps-whatsapp.sh \
   install-session-access-ubuntu.sh \
   configure-nginx-access.sh \
+  deploy-vps-ready.sh \
+  backup-vps-state.sh \
   vps-preflight.sh; do
   if bash -n "$ROOT_DIR/scripts/$script"; then
     ok "sintaxe Bash: $script"

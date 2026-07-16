@@ -78,23 +78,11 @@ Qual dos nossos serviço deseja?
 
 Ao escolher **Letreiro de acrílico**, o bot envia:
 
-1. a imagem `assets/capa-mostruario.png|jpg|jpeg|webp`;
-2. uma mensagem separada contendo somente um link comum;
-3. a próxima etapa do fluxo de letreiro.
+1. o catálogo nativo `Mostruário Letreiros`;
+2. o texto de transição confirmado;
+3. a lista de tipo de acrílico.
 
-## Link do mostruário
-
-Configure no `.env`:
-
-```env
-MOSTRUARIO_LINK_URL=https://personalizeseuambiente.com.br/mostruario-letreiros
-```
-
-Esse endereço pode ser provisório durante os testes. Depois basta trocar pela página real.
-
-O sistema **não envia `mostruario.pdf`**, não abre servidor de PDF e não usa URL terminada em `.pdf`.
-
-Mesmo que exista um arquivo `assets/mostruario.pdf`, ele é ignorado pelo fluxo.
+A lista só é liberada depois da confirmação do texto. Se o catálogo nativo estiver indisponível, o sistema usa `MOSTRUARIO_LINK_URL` como contingência simples.
 
 ## Comandos de teste
 
@@ -121,13 +109,13 @@ ENABLE_TEST_COMMANDS=false
 ## Assets usados no fluxo
 
 ```txt
-assets/capa-mostruario.png|jpg|jpeg|webp
+assets/capa_bem_vindos.png|jpg|jpeg|webp
 assets/tabela-cores-v2.png|jpg|jpeg|webp
 assets/tabela-espessura.png|jpg|jpeg|webp
 assets/tabela-profundidade-3mm.png|jpg|jpeg|webp
 ```
 
-- `capa-mostruario`: capa enviada ao escolher Letreiro.
+- `capa_bem_vindos`: capa de boas-vindas vinculada ao Instagram.
 - `tabela-cores-v2`: enviada durante a seleção de cores.
 - `tabela-espessura`: referência para acrílico personalizado.
 - `tabela-profundidade-3mm`: referência de profundidade.

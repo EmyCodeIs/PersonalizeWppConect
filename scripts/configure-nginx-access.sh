@@ -3,7 +3,8 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DOMAIN="${1:-}"
-ACCESS_USER="${2:-vendedor}"
+ACCESS_USER="${2:-${SESSION_ACCESS_HTTP_USER:-personalize}}"
+ACCESS_PASSWORD="${3:-${SESSION_ACCESS_HTTP_PASSWORD:-}}"
 AVAILABLE_FILE="/etc/nginx/sites-available/personalize-whatsapp"
 ENABLED_FILE="/etc/nginx/sites-enabled/personalize-whatsapp"
 PASSWORD_FILE="/etc/nginx/.htpasswd-whatsapp"
@@ -31,10 +32,15 @@ if [[ ! -f "$TEMPLATE_FILE" ]]; then
   exit 1
 fi
 
+if [[ -z "$ACCESS_PASSWORD" ]]; then
+  echo "[nginx] defina SESSION_ACCESS_HTTP_PASSWORD ou passe a senha como terceiro argumento" >&2
+  exit 1
+fi
+
 if [[ -f "$PASSWORD_FILE" ]]; then
-  htpasswd "$PASSWORD_FILE" "$ACCESS_USER"
+  printf '%s\n' "$ACCESS_PASSWORD" | htpasswd -i "$PASSWORD_FILE" "$ACCESS_USER"
 else
-  htpasswd -c "$PASSWORD_FILE" "$ACCESS_USER"
+  printf '%s\n' "$ACCESS_PASSWORD" | htpasswd -ci "$PASSWORD_FILE" "$ACCESS_USER"
 fi
 chown root:www-data "$PASSWORD_FILE"
 chmod 640 "$PASSWORD_FILE"
@@ -80,5 +86,5 @@ echo
 echo "[nginx] acesso configurado"
 echo "[nginx] URL: https://$DOMAIN/vnc.html?autoconnect=true&resize=scale"
 echo "[nginx] usuário HTTP: $ACCESS_USER"
-echo "[nginx] a senha HTTP e a senha VNC são camadas separadas"
+echo "[nginx] senha HTTP configurada sem interação; a senha VNC continua como segunda camada"
 echo

@@ -16,6 +16,14 @@ const {
   replaceServiceLabel,
 } = require('./core/serviceLabels');
 const { getAutomationBlock, registerManualTakeover } = require('./core/sellerHandoff');
+const {
+  bufferDelayMultiplier,
+  evaluate: evaluateRuntimePressure,
+  getRuntimeProtectionState,
+  shouldSkipNonCriticalRepairs,
+  startRuntimeProtection,
+} = require('./core/runtimeProtection');
+const BotActivity = require('./services/botActivityStore');
 const Store = require('./services/leadStore');
 const Identity = require('./services/contactIdentity');
 const { env } = require('./config/env');
@@ -183,15 +191,16 @@ function resolveBufferDelay(clientId, raw, interactiveId) {
   if (interactiveId) return env.interactiveBufferMs;
   const session = Store.getSession(clientId);
   const stage = String(session?.etapa || '').trim();
+  const multiplier = bufferDelayMultiplier();
 
-  if (stage === 'tamanho') return env.measureBufferMs;
-  if (stage === 'arte_coleta') return env.artBufferMs;
-  if (stage === 'endereco') return env.addressBufferMs;
-  if (stage === 'pantone') return env.pantoneBufferMs;
-  if (stage === 'observacao_pedido_coleta') return env.observationBufferMs;
-  if (stage === 'cidade') return env.cityBufferMs;
-  if (MULTI_MESSAGE_STAGES.has(stage)) return env.multiMessageBufferMs;
-  return env.bufferMs;
+  if (stage === 'tamanho') return Math.round(env.measureBufferMs * multiplier);
+  if (stage === 'arte_coleta') return Math.round(env.artBufferMs * multiplier);
+  if (stage === 'endereco') return Math.round(env.addressBufferMs * multiplier);
+  if (stage === 'pantone') return Math.round(env.pantoneBufferMs * multiplier);
+  if (stage === 'observacao_pedido_coleta') return Math.round(env.observationBufferMs * multiplier);
+  if (stage === 'cidade') return Math.round(env.cityBufferMs * multiplier);
+  if (MULTI_MESSAGE_STAGES.has(stage)) return Math.round(env.multiMessageBufferMs * multiplier);
+  return Math.round(env.bufferMs * multiplier);
 }
 
 function getActiveServiceFlow(session) {
@@ -231,8 +240,213 @@ function estimateTaskUnits({ clientId, preparedText, bufferedMessages }) {
   return 1;
 }
 
+function activeSessionUpdatedAt(session) {
+  const candidates = [
+    session?.lastInteractionAt,
+    session?.updatedAt,
+    session?.createdAt,
+  ];
+  for (const candidate of candidates) {
+    const value = new Date(candidate).getTime();
+    if (Number.isFinite(value) && value > 0) return value;
+  }
+  return 0;
+}
+
+function activeRecoverySessions() {
+  return Store.listSessions()
+    .filter((session) => !session?.completed)
+    .filter((session) => {
+      const stage = String(session?.etapa || '').trim();
+      return Boolean(stage && stage !== 'inicio' && stage !== 'concluido');
+    })
+    .sort((a, b) => activeSessionUpdatedAt(b) - activeSessionUpdatedAt(a));
+}
+
+function historyMessageId(message = {}) {
+  return String(
+    message?.id?._serialized
+    || message?.id
+    || message?.messageId
+    || message?.key?.id
+    || ''
+  ).trim() || null;
+}
+
+function historyTimestampMs(message = {}) {
+  const candidates = [
+    message?.timestamp,
+    message?.t,
+    message?.messageTimestamp,
+    message?.id?.timestamp,
+  ];
+  for (const candidate of candidates) {
+    const value = Number(candidate);
+    if (!Number.isFinite(value) || value <= 0) continue;
+    return value < 1000000000000 ? value * 1000 : value;
+  }
+  return null;
+}
+
+function historyVisibleText(message = {}) {
+  return String(message?.body || message?.caption || message?.text || '').trim() || mediaMarker(message);
+}
+
+function isVisibleIncomingHistory(message = {}) {
+  if (message?.fromMe) return false;
+  const chatId = String(message?.from || message?.chatId || message?.id?.remote || message?.key?.remoteJid || '').trim();
+  if (!chatId || /@g\.us$/i.test(chatId)) return false;
+  return Boolean(historyVisibleText(message));
+}
+
+function isVisibleOutgoingHistory(message = {}) {
+  return Boolean(message?.fromMe && historyVisibleText(message));
+}
+
+function recoveryCandidateChatIds(clientId) {
+  const direct = Identity.normalizeChatId(clientId);
+  let known = [];
+  try { known = Identity.getLabelCandidateIds(clientId); } catch (_) {}
+  return [...new Set([direct, ...known].filter(Boolean))];
+}
+
+async function readRecoveryConversationHistory(client, clientId) {
+  const candidates = recoveryCandidateChatIds(clientId);
+  const attempts = [];
+
+  for (const chatId of candidates) {
+    if (typeof client?.getAllMessagesInChat === 'function') {
+      try {
+        const raw = await client.getAllMessagesInChat(chatId, true, false);
+        const messages = Array.isArray(raw) ? raw : Object.values(raw || {});
+        attempts.push({ chatId, available: true, messages });
+        if (messages.length) return { available: true, chatId, messages };
+      } catch (_) {}
+    }
+  }
+
+  if (client?.page?.evaluate) {
+    for (const chatId of candidates) {
+      try {
+        const messages = await client.page.evaluate(async ({ chatId, limit }) => {
+          const WPP = window.WPP || null;
+          if (typeof WPP?.chat?.getMessages !== 'function') return null;
+          const raw = await WPP.chat.getMessages(chatId, { count: limit, direction: 'before' });
+          return Array.isArray(raw) ? raw : Object.values(raw || {});
+        }, { chatId, limit: env.unreadRecoveryHistoryLimit || 120 });
+        if (Array.isArray(messages)) {
+          attempts.push({ chatId, available: true, messages });
+          if (messages.length) return { available: true, chatId, messages };
+        }
+      } catch (_) {}
+    }
+  }
+
+  return {
+    available: attempts.some((item) => item.available),
+    chatId: candidates[0] || null,
+    messages: [],
+  };
+}
+
+function findPendingCustomerReply(session, messages = []) {
+  const sorted = [...(messages || [])].sort((a, b) => {
+    const at = historyTimestampMs(a);
+    const bt = historyTimestampMs(b);
+    if (at === null || bt === null) return 0;
+    return at - bt;
+  });
+
+  if (!sorted.length) return null;
+
+  const checkpoint = BotActivity.getLastBotOutbound(session?.chatId || session?.clientId || session?.id);
+  const sessionUpdatedAt = activeSessionUpdatedAt(session);
+  const checkpointAt = checkpoint?.at ? new Date(checkpoint.at).getTime() : 0;
+  const baselineAt = Math.max(sessionUpdatedAt, Number.isFinite(checkpointAt) ? checkpointAt : 0);
+  const maxAgeMs = Math.max(1, Number(env.unreadBootstrapMaxAgeHours || 24)) * 60 * 60 * 1000;
+  const oldestAllowedAt = Date.now() - maxAgeMs;
+
+  let checkpointIndex = -1;
+  const checkpointId = String(checkpoint?.messageId || '').trim();
+  if (checkpointId) {
+    checkpointIndex = sorted.findIndex((message) => historyMessageId(message) === checkpointId);
+  }
+
+  for (let index = sorted.length - 1; index >= 0; index -= 1) {
+    const message = sorted[index];
+    if (!isVisibleIncomingHistory(message)) continue;
+
+    const timestamp = historyTimestampMs(message);
+    if (timestamp !== null && timestamp < oldestAllowedAt) continue;
+
+    const afterCheckpoint = checkpointIndex >= 0
+      ? index > checkpointIndex
+      : (timestamp !== null && timestamp > (baselineAt + 1500));
+
+    if (!afterCheckpoint) continue;
+
+    const outgoingAfter = sorted.slice(index + 1).some(isVisibleOutgoingHistory);
+    if (outgoingAfter) continue;
+
+    return {
+      message,
+      text: historyVisibleText(message),
+      timestamp,
+      reason: checkpointIndex >= 0 ? 'apos_checkpoint_sem_resposta' : 'apos_estado_salvo_sem_resposta',
+    };
+  }
+
+  return null;
+}
+
+async function recoverPendingActiveSessions(channel, onMessage) {
+  if (!channel?.client || typeof onMessage !== 'function') return { scanned: 0, recovered: 0 };
+
+  const sessions = activeRecoverySessions().slice(0, Math.max(1, Number(env.unreadBootstrapMaxChats || 30)));
+  let recovered = 0;
+
+  for (const session of sessions) {
+    const clientId = session?.chatId || session?.clientId || session?.id;
+    if (!clientId) continue;
+
+    const guard = await getAutomationBlock(channel, clientId);
+    if (guard?.blocked) {
+      console.log(`[RETOMADA] sessão ignorada por handoff | cliente=${clientId} | motivo=${guard.reason}`);
+      continue;
+    }
+
+    const history = await readRecoveryConversationHistory(channel.client, clientId);
+    if (!history.available) {
+      console.log(`[RETOMADA] histórico indisponível | cliente=${clientId}`);
+      continue;
+    }
+
+    const pending = findPendingCustomerReply(session, history.messages);
+    if (!pending?.message) continue;
+
+    recovered += 1;
+    console.log(
+      `[RETOMADA] resposta pendente recuperada | cliente=${clientId} | etapa=${session.etapa} `
+      + `| motivo=${pending.reason} | texto=${String(pending.text || '[sem texto]').slice(0, 120)}`,
+    );
+    await onMessage({
+      from: clientId,
+      text: pending.text,
+      raw: pending.message,
+      source: 'history-recovery',
+    });
+  }
+
+  console.log(`[RETOMADA] varredura concluída | sessões=${sessions.length} | recuperadas=${recovered}`);
+  return { scanned: sessions.length, recovered };
+}
+
 async function repairSessionServiceLabel(channel, clientId, repairedKeys, source = 'runtime') {
   if (!channel?.client) return false;
+  if (shouldSkipNonCriticalRepairs()) {
+    console.log(`[AUTOPROTEÇÃO] reparo de etiqueta adiado | cliente=${clientId} | origem=${source}`);
+    return false;
+  }
 
   const session = Store.getSession(clientId);
   const flow = getActiveServiceFlow(session);
@@ -259,6 +473,10 @@ async function repairSessionServiceLabel(channel, clientId, repairedKeys, source
 
 async function reconcileActiveServiceLists(channel, repairedKeys) {
   if (!channel?.client) return { found: 0, repaired: 0 };
+  if (shouldSkipNonCriticalRepairs()) {
+    console.log('[AUTOPROTEÇÃO] recuperação pós-reinício de etiquetas adiada por pressão interna.');
+    return { found: 0, repaired: 0, skipped: true };
+  }
 
   const sessions = Store.listSessions();
   let found = 0;
@@ -312,6 +530,7 @@ async function main() {
   console.log(`[PersonalizeWppConect] buffers de coleta: medida=${env.measureBufferMs}ms arte=${env.artBufferMs}ms endereço=${env.addressBufferMs}ms Pantone=${env.pantoneBufferMs}ms observação=${env.observationBufferMs}ms cidade=${env.cityBufferMs}ms`);
   console.log(`[PersonalizeWppConect] buffer listas/botões: ${env.interactiveBufferMs}ms`);
   console.log(`[PersonalizeWppConect] fila global: consumo=${env.queueMaxUnits}u espera=${env.maxQueueSize} timeout=${env.chatProcessTimeoutMs}ms`);
+  console.log(`[PersonalizeWppConect] autoproteção: fila>=${env.runtimePressureQueueThreshold} ou rss>=${env.runtimePressureRssMb}MB reduz typing e adia reparos não críticos`);
   console.log('[PersonalizeWppConect] handoff: etiqueta de vendedor e mensagem manual bloqueiam o bot automaticamente');
   console.log('[PersonalizeWppConect] respostas comuns: digitação única + balões sem pausa artificial');
   console.log('[PersonalizeWppConect] boas-vindas: saudação + imagem com link na legenda + lista, com digitação única antes do grupo');
@@ -330,6 +549,7 @@ async function main() {
     maxQueueSize: env.maxQueueSize,
     taskTimeoutMs: env.chatProcessTimeoutMs,
   });
+  startRuntimeProtection(taskQueue);
 
   const buffer = new BufferManager({
     delayMs: env.bufferMs,
@@ -348,10 +568,12 @@ async function main() {
 
       const units = estimateTaskUnits({ clientId, preparedText, bufferedMessages });
       const queuedAt = Date.now();
+      evaluateRuntimePressure(taskQueue);
       console.log(`[QUEUE] agendado chat=${clientId} units=${units} ${formatQueueStats(taskQueue.stats())}`);
 
       try {
         await taskQueue.enqueue(clientId, async () => {
+          evaluateRuntimePressure(taskQueue);
           const guardBeforeRun = await getAutomationBlock(channel, clientId);
           if (guardBeforeRun.blocked) {
             console.log(`[HANDOFF] bloqueado antes do processamento: ${clientId} | motivo=${guardBeforeRun.reason} | vendedor=${guardBeforeRun.seller || '-'} | etiqueta=${guardBeforeRun.labelName || '-'}`);
@@ -376,8 +598,10 @@ async function main() {
           await action();
         }, { units });
 
+        evaluateRuntimePressure(taskQueue);
         console.log(`[QUEUE] concluído chat=${clientId} ${formatQueueStats(taskQueue.stats())}`);
       } catch (err) {
+        evaluateRuntimePressure(taskQueue);
         const reason = err?.code || 'QUEUE_ERROR';
         console.warn(`[QUEUE] falha no chat ${clientId}: ${reason} - ${err?.message || err}`);
         await channel?.markUnread?.(clientId).catch(() => false);
@@ -450,7 +674,12 @@ async function main() {
     }
 
     const delayMs = resolveBufferDelay(canonicalChatId, raw, interactiveId);
-    console.log(`[PersonalizeWppConect] mensagem enfileirada (${source}) de ${canonicalChatId}; espera=${delayMs}ms${interactiveId ? `; ação=${interactiveId}` : ''}`);
+    const runtimeProtection = getRuntimeProtectionState();
+    console.log(
+      `[PersonalizeWppConect] mensagem enfileirada (${source}) de ${canonicalChatId}; espera=${delayMs}ms`
+      + `${interactiveId ? `; ação=${interactiveId}` : ''}`
+      + `${runtimeProtection.active ? `; autoproteção=${runtimeProtection.level}` : ''}`,
+    );
     buffer.push(canonicalChatId, {
       text: effectiveText,
       raw,
@@ -476,6 +705,9 @@ async function main() {
   });
   await reconcileActiveServiceLists(channel, repairedServiceLabels).catch((err) => {
     console.warn('[LISTAS] recuperação das sessões ativas falhou:', err?.message || err);
+  });
+  await recoverPendingActiveSessions(channel, onMessage).catch((err) => {
+    console.warn('[RETOMADA] recuperação de respostas pendentes falhou:', err?.message || err);
   });
   console.log('[PersonalizeWppConect] conectado. Aguardando mensagens...');
 

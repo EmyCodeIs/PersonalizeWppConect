@@ -102,6 +102,13 @@ const env = {
   maintenanceIntervalMs: Math.max(60000, num('MAINTENANCE_INTERVAL_MS', 900000)),
   runtimeCacheMaxEntries: Math.max(500, num('RUNTIME_CACHE_MAX_ENTRIES', 5000)),
   botActivityTtlDays: Math.max(1, num('BOT_ACTIVITY_TTL_DAYS', 30)),
+  runtimeProtectionEnabled: bool('RUNTIME_PROTECTION_ENABLED', true),
+  runtimeProtectionCheckMs: Math.max(5000, num('RUNTIME_PROTECTION_CHECK_MS', 15000)),
+  runtimePressureCooldownMs: Math.max(10000, num('RUNTIME_PRESSURE_COOLDOWN_MS', 60000)),
+  runtimePressureQueueThreshold: Math.max(1, num('RUNTIME_PRESSURE_QUEUE_THRESHOLD', 14)),
+  runtimePressureCriticalQueueThreshold: Math.max(1, num('RUNTIME_PRESSURE_CRITICAL_QUEUE_THRESHOLD', 26)),
+  runtimePressureRssMb: Math.max(128, num('RUNTIME_PRESSURE_RSS_MB', 350)),
+  runtimePressureCriticalRssMb: Math.max(256, num('RUNTIME_PRESSURE_CRITICAL_RSS_MB', 550)),
   tokenCacheRoot: process.env.TOKEN_CACHE_ROOT || 'tokens',
   tokenCacheMaxAgeDays: Math.max(0, num('TOKEN_CACHE_MAX_AGE_DAYS', 7)),
   tokenCacheAutoClean: bool('TOKEN_CACHE_AUTO_CLEAN', true),
@@ -127,8 +134,8 @@ const env = {
   multiMessageBufferMs: Math.max(2500, num('MULTI_MESSAGE_BUFFER_MS', 8000)),
   measureBufferMs: Math.max(2500, num('MEASURE_BUFFER_MS', 8000)),
   // Arte precisa de mais tempo porque imagem, legenda e referência podem chegar separadas.
-  // O mínimo de 12s prevalece mesmo quando um .env antigo ainda possui 8000.
-  artBufferMs: Math.max(12000, num('ART_BUFFER_MS', 12000)),
+  // O mínimo de 14s prevalece mesmo quando um .env antigo ainda possui valores menores.
+  artBufferMs: Math.max(14000, num('ART_BUFFER_MS', 14000)),
   addressBufferMs: Math.max(2500, num('ADDRESS_BUFFER_MS', 8000)),
   pantoneBufferMs: Math.max(2500, num('PANTONE_BUFFER_MS', 8000)),
   observationBufferMs: Math.max(2500, num('OBSERVATION_BUFFER_MS', 9000)),
@@ -179,7 +186,6 @@ const env = {
   bemVindosImageBaseName: process.env.BEM_VINDOS_IMAGE_BASENAME || 'capa_bem_vindos',
   bemVindosLinkUrl: process.env.BEM_VINDOS_LINK_URL || INSTAGRAM_WELCOME_URL,
   mostruarioCatalogName: process.env.MOSTRUARIO_CATALOG_NAME || DEFAULT_CATALOG_NAME,
-  mostruarioLetreiroImageBaseName: process.env.MOSTRUARIO_LETREIRO_IMAGE_BASENAME || 'capa-mostruario',
   mostruarioLinkUrl:
     process.env.MOSTRUARIO_LINK_URL
     || process.env.MOSTRUARIO_LETREIRO_LINK_URL

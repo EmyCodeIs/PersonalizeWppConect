@@ -40,7 +40,7 @@ check_loopback_listener() {
   local port="$2"
 
   if ! command -v ss >/dev/null 2>&1; then
-    echo "[health] AVISO: ss indisponível; porta $port não conferida"
+    echo "[health] AVISO: ss indisponivel; porta $port nao conferida"
     return
   fi
 
@@ -52,7 +52,9 @@ check_loopback_listener() {
     return
   fi
 
-  if echo "$listeners" | grep -Eq '(^|[[:space:]])(0\.0\.0\.0|\[::\]|\*):'; then
+  local local_addresses
+  local_addresses="$(echo "$listeners" | awk '{print $4}')"
+  if echo "$local_addresses" | grep -Eq '(^|[[:space:]])(0\.0\.0\.0|\[::\]|\*):'; then
     echo "[health] FALHA $name: porta $port exposta em todas as interfaces"
     failures=$((failures + 1))
     return
@@ -64,17 +66,17 @@ check_loopback_listener() {
 check_pid "Xvfb" "$PID_DIR/xvfb.pid"
 check_pid "Openbox" "$PID_DIR/openbox.pid"
 check_pid "x11vnc" "$PID_DIR/x11vnc.pid"
-check_pid "noVNC" "$PID_DIR/novnc.pid"
+check_pid "proxy web" "$PID_DIR/novnc.pid"
 
 check_loopback_listener "VNC interno" "$VNC_PORT"
-check_loopback_listener "noVNC interno" "$ACCESS_PORT"
+check_loopback_listener "acesso web interno" "$ACCESS_PORT"
 
 if command -v curl >/dev/null 2>&1; then
   if curl --fail --silent --show-error --max-time 5 \
-    "http://${ACCESS_HOST}:${ACCESS_PORT}/vnc.html" >/dev/null; then
-    echo "[health] OK noVNC: vnc.html acessível localmente"
+    "http://${ACCESS_HOST}:${ACCESS_PORT}/health" >/dev/null; then
+    echo "[health] OK acesso web: health acessivel localmente"
   else
-    echo "[health] FALHA noVNC: vnc.html indisponível"
+    echo "[health] FALHA acesso web: health indisponivel"
     failures=$((failures + 1))
   fi
 fi
@@ -84,4 +86,4 @@ if (( failures > 0 )); then
   exit 1
 fi
 
-echo "[health] resultado: saudável"
+echo "[health] resultado: saudavel"

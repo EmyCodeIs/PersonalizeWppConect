@@ -12,7 +12,9 @@ load_dotenv_file "$ENV_FILE"
 
 export DISPLAY="${SESSION_DISPLAY:-:1}"
 
-flock -w 30 "$LOCK_FILE" bash "$ROOT_DIR/scripts/start-session-access.sh"
+if ! bash "$ROOT_DIR/scripts/session-access-health.sh" >/dev/null 2>&1; then
+  flock -w 30 "$LOCK_FILE" bash "$ROOT_DIR/scripts/start-session-access.sh"
+fi
 bash "$ROOT_DIR/scripts/session-access-health.sh"
 
 cd "$ROOT_DIR"

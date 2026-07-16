@@ -5,3 +5,12 @@ tokens/
 data/
 npm-debug.log*
 .DS_Store
+*.zip
+ENV-VPS-ATENDIMENTO-GERAL-FINAL.env
+PersonalizeWppConect/
+COMANDO-CODEX.txt
+LEIA-ME-CODEX.txt
+LEIA-ME-PRIMEIRO.txt
+CODEX-VPS-PRONTO.md
+LOG-NPM-TEST-APROVADO.txt
+RELATORIO-VALIDACAO-FINAL.txt

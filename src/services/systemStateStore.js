@@ -1,28 +1,17 @@
 'use strict';
 
-const fs = require('fs');
 const path = require('path');
+const Persistence = require('./persistence');
 
 const DATA_DIR = path.join(process.cwd(), 'data');
 const STATE_PATH = path.join(DATA_DIR, 'system-state.json');
 
-function ensureDataDir() {
-  fs.mkdirSync(DATA_DIR, { recursive: true });
-}
-
 function readJson(filePath, fallback) {
-  try {
-    if (!fs.existsSync(filePath)) return fallback;
-    return JSON.parse(fs.readFileSync(filePath, 'utf8'));
-  } catch (_) {
-    return fallback;
-  }
+  return Persistence.readJson(filePath, fallback);
 }
 
 function writeJson(filePath, data) {
-  ensureDataDir();
-  fs.writeFileSync(`${filePath}.tmp`, JSON.stringify(data, null, 2), 'utf8');
-  fs.renameSync(`${filePath}.tmp`, filePath);
+  return Persistence.writeJson(filePath, data);
 }
 
 function nowIso() {

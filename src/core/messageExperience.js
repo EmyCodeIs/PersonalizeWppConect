@@ -4,6 +4,7 @@ const path = require('path');
 const { AsyncLocalStorage } = require('async_hooks');
 const { env } = require('../config/env');
 const { sendBemVindos } = require('./mostruario');
+const { shouldSuppressTyping } = require('./runtimeProtection');
 
 const responseContext = new AsyncLocalStorage();
 
@@ -166,7 +167,9 @@ function installMessageExperience(channel) {
       }
 
       const chatId = normalizeChatId(clientId);
-      const started = env.enableTyping ? await startTypingCompat(channel.client, chatId) : false;
+      const started = (env.enableTyping && !shouldSuppressTyping())
+        ? await startTypingCompat(channel.client, chatId)
+        : false;
       try {
         if (started) await wait(typingDuration(text, options));
         return await sendTextWithLinkedWelcome(channel, clientId, text, options);
@@ -184,7 +187,9 @@ function installMessageExperience(channel) {
       }
 
       const chatId = normalizeChatId(clientId);
-      const started = env.enableTyping ? await startTypingCompat(channel.client, chatId) : false;
+      const started = (env.enableTyping && !shouldSuppressTyping())
+        ? await startTypingCompat(channel.client, chatId)
+        : false;
       try {
         if (started) await wait(typingDuration(caption || 'Enviando imagem', options));
         return await sendImageDirect(channel, clientId, filePath, caption);
@@ -202,7 +207,7 @@ function installMessageExperience(channel) {
     if (isGroupedResponse()) return action();
 
     const chatId = normalizeChatId(clientId);
-    const shouldType = env.enableTyping;
+    const shouldType = env.enableTyping && !shouldSuppressTyping();
     const started = shouldType ? await startTypingCompat(channel.client, chatId) : false;
 
     try {

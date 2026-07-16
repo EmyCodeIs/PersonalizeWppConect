@@ -7,7 +7,6 @@ DATA_DIR="$ROOT_DIR/data"
 PID_DIR="$DATA_DIR/session-access"
 mkdir -p "$DATA_DIR" "$PID_DIR"
 
-# Carrega o .env sem executar espaços, ponto e vírgula ou & como comandos shell.
 # shellcheck disable=SC1091
 source "$ROOT_DIR/scripts/load-dotenv.sh"
 load_dotenv_file "$ENV_FILE"
@@ -22,6 +21,7 @@ SESSION_NOVNC_WEB="${SESSION_NOVNC_WEB:-/usr/share/novnc}"
 SESSION_VNC_PASSWORD_FILE="${SESSION_VNC_PASSWORD_FILE:-$DATA_DIR/session-access.vncpass}"
 SESSION_ACCESS_PUBLIC_URL="${SESSION_ACCESS_PUBLIC_URL:-}"
 SESSION_ACCESS_ALLOW_PUBLIC_BIND="${SESSION_ACCESS_ALLOW_PUBLIC_BIND:-false}"
+ALLOW_WEAK_SESSION_PASSWORD="${ALLOW_WEAK_SESSION_PASSWORD:-false}"
 
 XVFB_PID_FILE="$PID_DIR/xvfb.pid"
 OPENBOX_PID_FILE="$PID_DIR/openbox.pid"
@@ -35,7 +35,7 @@ NOVNC_LOG="$DATA_DIR/novnc.log"
 
 need_cmd() {
   if ! command -v "$1" >/dev/null 2>&1; then
-    echo "[session-access] comando obrigatório não encontrado: $1" >&2
+    echo "[session-access] comando obrigatorio nao encontrado: $1" >&2
     exit 1
   fi
 }
@@ -59,7 +59,7 @@ require_running() {
   local name="$1"
   local file="$2"
   if ! pid_is_running "$file"; then
-    echo "[session-access] $name não permaneceu ativo; consulte os logs em $DATA_DIR" >&2
+    echo "[session-access] $name nao permaneceu ativo; consulte os logs em $DATA_DIR" >&2
     exit 1
   fi
 }
@@ -75,32 +75,33 @@ need_cmd Xvfb
 need_cmd openbox-session
 need_cmd x11vnc
 need_cmd bash
+need_cmd node
 
 if [[ ! -d "$SESSION_NOVNC_WEB" ]]; then
-  echo "[session-access] diretório do noVNC não encontrado: $SESSION_NOVNC_WEB" >&2
-  echo "[session-access] execute npm run session:access:install:ubuntu" >&2
+  echo "[session-access] diretorio do noVNC nao encontrado: $SESSION_NOVNC_WEB" >&2
   exit 1
 fi
 
 if [[ "$SESSION_ACCESS_HOST" != "127.0.0.1" && "$SESSION_ACCESS_HOST" != "localhost" ]]; then
   if ! is_true "$SESSION_ACCESS_ALLOW_PUBLIC_BIND"; then
     echo "[session-access] SESSION_ACCESS_HOST deve ser 127.0.0.1 na VPS" >&2
-    echo "[session-access] publique o acesso somente pelo Nginx com HTTPS" >&2
     exit 1
   fi
-  echo "[session-access] AVISO: bind público autorizado explicitamente" >&2
 fi
 
 case "$SESSION_ACCESS_PASSWORD" in
-  ""|troque-esta-senha|COLOQUE_UMA_SENHA_FORTE_AQUI|2580)
-    echo "[session-access] defina uma senha VNC exclusiva em SESSION_ACCESS_PASSWORD" >&2
+  ""|troque-esta-senha|COLOQUE_UMA_SENHA_FORTE_AQUI)
+    echo "[session-access] defina SESSION_ACCESS_PASSWORD" >&2
     exit 1
     ;;
 esac
 
 if (( ${#SESSION_ACCESS_PASSWORD} < 8 )); then
-  echo "[session-access] SESSION_ACCESS_PASSWORD precisa ter pelo menos 8 caracteres" >&2
-  exit 1
+  if ! is_true "$ALLOW_WEAK_SESSION_PASSWORD"; then
+    echo "[session-access] senha curta bloqueada; use 8+ caracteres ou ALLOW_WEAK_SESSION_PASSWORD=true" >&2
+    exit 1
+  fi
+  echo "[session-access] AVISO: senha curta autorizada explicitamente; troque quando possivel" >&2
 fi
 
 for file in "$XVFB_PID_FILE" "$OPENBOX_PID_FILE" "$X11VNC_PID_FILE" "$NOVNC_PID_FILE"; do
@@ -119,7 +120,7 @@ if ! pid_is_running "$XVFB_PID_FILE"; then
   require_running "desktop virtual" "$XVFB_PID_FILE"
   echo "[session-access] desktop virtual iniciado em $DISPLAY_VALUE"
 else
-  echo "[session-access] desktop virtual já está ativo"
+  echo "[session-access] desktop virtual ja esta ativo"
 fi
 
 if ! pid_is_running "$OPENBOX_PID_FILE"; then
@@ -129,11 +130,11 @@ if ! pid_is_running "$OPENBOX_PID_FILE"; then
   require_running "Openbox" "$OPENBOX_PID_FILE"
   echo "[session-access] gerenciador de janelas iniciado"
 else
-  echo "[session-access] gerenciador de janelas já está ativo"
+  echo "[session-access] gerenciador de janelas ja esta ativo"
 fi
 
 if ! x11vnc -storepasswd "$SESSION_ACCESS_PASSWORD" "$SESSION_VNC_PASSWORD_FILE" >/dev/null 2>&1; then
-  echo "[session-access] não foi possível gravar a senha VNC" >&2
+  echo "[session-access] nao foi possivel gravar a senha VNC" >&2
   exit 1
 fi
 chmod 600 "$SESSION_VNC_PASSWORD_FILE"
@@ -154,36 +155,25 @@ if ! pid_is_running "$X11VNC_PID_FILE"; then
   require_running "x11vnc" "$X11VNC_PID_FILE"
   echo "[session-access] compartilhamento da tela iniciado"
 else
-  echo "[session-access] compartilhamento da tela já está ativo"
-fi
-
-if command -v novnc_proxy >/dev/null 2>&1; then
-  NOVNC_CMD=(novnc_proxy --listen "${SESSION_ACCESS_HOST}:${SESSION_ACCESS_PORT}" --vnc "127.0.0.1:${SESSION_VNC_PORT}" --web "$SESSION_NOVNC_WEB")
-elif [[ -x "$SESSION_NOVNC_WEB/utils/novnc_proxy" ]]; then
-  NOVNC_CMD=("$SESSION_NOVNC_WEB/utils/novnc_proxy" --listen "${SESSION_ACCESS_HOST}:${SESSION_ACCESS_PORT}" --vnc "127.0.0.1:${SESSION_VNC_PORT}" --web "$SESSION_NOVNC_WEB")
-elif command -v websockify >/dev/null 2>&1; then
-  NOVNC_CMD=(websockify --web "$SESSION_NOVNC_WEB" "${SESSION_ACCESS_HOST}:${SESSION_ACCESS_PORT}" "127.0.0.1:${SESSION_VNC_PORT}")
-else
-  echo "[session-access] novnc_proxy/websockify não encontrado" >&2
-  exit 1
+  echo "[session-access] compartilhamento da tela ja esta ativo"
 fi
 
 if ! pid_is_running "$NOVNC_PID_FILE"; then
-  nohup "${NOVNC_CMD[@]}" >"$NOVNC_LOG" 2>&1 &
+  nohup node "$ROOT_DIR/scripts/session-access-proxy.js" >"$NOVNC_LOG" 2>&1 &
   echo $! > "$NOVNC_PID_FILE"
   sleep 1
   require_running "noVNC" "$NOVNC_PID_FILE"
   echo "[session-access] acesso pelo navegador iniciado"
 else
-  echo "[session-access] acesso pelo navegador já está ativo"
+  echo "[session-access] acesso pelo navegador ja esta ativo"
 fi
 
-DEFAULT_URL="http://${SESSION_ACCESS_HOST}:${SESSION_ACCESS_PORT}/vnc.html?autoconnect=true&resize=scale"
+DEFAULT_URL="http://${SESSION_ACCESS_HOST}:${SESSION_ACCESS_PORT}/"
 ACCESS_URL="${SESSION_ACCESS_PUBLIC_URL:-$DEFAULT_URL}"
 
 echo
 echo "[session-access] pronto"
 echo "[session-access] desktop compartilhado: $DISPLAY_VALUE"
 echo "[session-access] link do vendedor: $ACCESS_URL"
-echo "[session-access] o Chrome iniciado com DISPLAY=$DISPLAY_VALUE aparecerá nesse link"
+echo "[session-access] o Chrome iniciado com DISPLAY=$DISPLAY_VALUE aparecera nesse link"
 echo

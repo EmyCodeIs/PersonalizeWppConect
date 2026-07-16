@@ -162,6 +162,37 @@ function candidateChatIds(clientId) {
   return [...new Set([direct, ...known].filter(Boolean))];
 }
 
+const historicalHumanGuardCache = new Map();
+
+function historyGuardCacheKey(clientId) {
+  return String(Identity.getSessionKey(clientId) || clientId || '').trim();
+}
+
+function readHistoryGuardCache(clientId) {
+  const key = historyGuardCacheKey(clientId);
+  if (!key) return null;
+  const entry = historicalHumanGuardCache.get(key);
+  if (!entry) return null;
+
+  const ttlMs = Math.max(15000, Number(env.runtimeCacheTtlMs || 120000));
+  if ((Date.now() - Number(entry.checkedAt || 0)) > ttlMs) {
+    historicalHumanGuardCache.delete(key);
+    return null;
+  }
+
+  return entry.value || null;
+}
+
+function writeHistoryGuardCache(clientId, value) {
+  const key = historyGuardCacheKey(clientId);
+  if (!key) return value;
+  historicalHumanGuardCache.set(key, {
+    checkedAt: Date.now(),
+    value,
+  });
+  return value;
+}
+
 async function readConversationHistory(client, clientId) {
   const candidates = candidateChatIds(clientId);
   const attempts = [];
@@ -198,6 +229,93 @@ async function readConversationHistory(client, clientId) {
   return { available, chatId: candidates[0] || null, messages: [] };
 }
 
+function normalizeHistoryMessages(messages = []) {
+  return [...(messages || [])].sort((a, b) => {
+    const at = extractTimestampMs(a);
+    const bt = extractTimestampMs(b);
+    if (at === null || bt === null) return 0;
+    return at - bt;
+  });
+}
+
+function findManualOutboundAfterCheckpoint(messages = [], checkpoint = null) {
+  const outgoing = messages.filter(isVisibleOutgoing);
+  if (!checkpoint) {
+    return outgoing.length
+      ? {
+          found: true,
+          reason: 'sem_checkpoint_com_saida_anterior',
+          messageId: extractMessageId(outgoing[0]),
+        }
+      : {
+          found: false,
+          reason: 'conversa_nova_sem_saida',
+          messageId: null,
+        };
+  }
+
+  const checkpointId = String(checkpoint.messageId || '').trim();
+  const checkpointIndex = checkpointId
+    ? messages.findIndex((message) => extractMessageId(message) === checkpointId)
+    : -1;
+
+  let manualAfterCheckpoint = [];
+  if (checkpointIndex >= 0) {
+    manualAfterCheckpoint = messages.slice(checkpointIndex + 1).filter(isVisibleOutgoing);
+  } else {
+    const checkpointAt = new Date(checkpoint.at).getTime();
+    if (!Number.isFinite(checkpointAt)) {
+      return {
+        found: false,
+        reason: 'checkpoint_invalido',
+        messageId: null,
+      };
+    }
+    manualAfterCheckpoint = outgoing.filter((message) => {
+      const timestamp = extractTimestampMs(message);
+      return timestamp !== null && timestamp > (checkpointAt + 1500);
+    });
+  }
+
+  return manualAfterCheckpoint.length
+    ? {
+        found: true,
+        reason: 'manual_outbound_history',
+        messageId: extractMessageId(manualAfterCheckpoint[0]),
+      }
+    : {
+        found: false,
+        reason: 'sem_atendimento_humano_apos_bot',
+        messageId: null,
+      };
+}
+
+async function inspectHistoricalHumanControl(client, clientId) {
+  const cached = readHistoryGuardCache(clientId);
+  if (cached) return cached;
+
+  const history = await readConversationHistory(client, clientId);
+  if (!history.available) {
+    return writeHistoryGuardCache(clientId, {
+      blocked: false,
+      available: false,
+      reason: 'historico_indisponivel',
+      messageId: null,
+    });
+  }
+
+  const messages = normalizeHistoryMessages(history.messages);
+  const checkpoint = BotActivity.getLastBotOutbound(clientId);
+  const inspection = findManualOutboundAfterCheckpoint(messages, checkpoint);
+
+  return writeHistoryGuardCache(clientId, {
+    blocked: inspection.found,
+    available: true,
+    reason: inspection.reason,
+    messageId: inspection.messageId,
+  });
+}
+
 async function inspectUnreadRecovery(client, clientId) {
   const currentBlock = await SellerHandoff.getAutomationBlock({ client }, clientId);
   if (currentBlock?.blocked) {
@@ -209,42 +327,11 @@ async function inspectUnreadRecovery(client, clientId) {
     return { eligible: false, reason: 'historico_indisponivel' };
   }
 
-  const messages = [...(history.messages || [])].sort((a, b) => {
-    const at = extractTimestampMs(a);
-    const bt = extractTimestampMs(b);
-    if (at === null || bt === null) return 0;
-    return at - bt;
-  });
-  const outgoing = messages.filter(isVisibleOutgoing);
+  const messages = normalizeHistoryMessages(history.messages);
   const checkpoint = BotActivity.getLastBotOutbound(clientId);
+  const inspection = findManualOutboundAfterCheckpoint(messages, checkpoint);
 
-  if (!checkpoint) {
-    if (outgoing.length) {
-      return { eligible: false, reason: 'sem_checkpoint_com_saida_anterior' };
-    }
-    return { eligible: true, reason: 'conversa_nova_sem_saida' };
-  }
-
-  let manualAfterCheckpoint = [];
-  const checkpointId = String(checkpoint.messageId || '').trim();
-  const checkpointIndex = checkpointId
-    ? messages.findIndex((message) => extractMessageId(message) === checkpointId)
-    : -1;
-
-  if (checkpointIndex >= 0) {
-    manualAfterCheckpoint = messages.slice(checkpointIndex + 1).filter(isVisibleOutgoing);
-  } else {
-    const checkpointAt = new Date(checkpoint.at).getTime();
-    if (!Number.isFinite(checkpointAt)) {
-      return { eligible: false, reason: 'checkpoint_invalido' };
-    }
-    manualAfterCheckpoint = outgoing.filter((message) => {
-      const timestamp = extractTimestampMs(message);
-      return timestamp !== null && timestamp > (checkpointAt + 1500);
-    });
-  }
-
-  if (manualAfterCheckpoint.length) {
+  if (inspection.found) {
     HumanControl.setBlock(clientId, {
       reason: 'manual_outbound_history',
       source: 'unread_recovery_history',
@@ -252,12 +339,14 @@ async function inspectUnreadRecovery(client, clientId) {
     });
     return {
       eligible: false,
-      reason: 'vendedor_encontrado_no_historico',
-      messageId: extractMessageId(manualAfterCheckpoint[0]),
+      reason: inspection.reason === 'sem_checkpoint_com_saida_anterior'
+        ? 'sem_checkpoint_com_saida_anterior'
+        : 'vendedor_encontrado_no_historico',
+      messageId: inspection.messageId,
     };
   }
 
-  return { eligible: true, reason: 'sem_atendimento_humano_apos_bot' };
+  return { eligible: true, reason: inspection.reason };
 }
 
 function installPersistentHumanHistory() {
@@ -383,6 +472,39 @@ function installUnreadRecoveryGuard() {
   WppClient.__safeUnreadRecoveryInstalled = true;
 }
 
+function installHistoricalHumanGuard() {
+  if (SellerHandoff.__historicalHumanGuardInstalled) return;
+
+  const originalGetAutomationBlock = SellerHandoff.getAutomationBlock.bind(SellerHandoff);
+  SellerHandoff.getAutomationBlock = async function getAutomationBlockWithHistory(channel, clientId) {
+    const current = await originalGetAutomationBlock(channel, clientId);
+    if (current?.blocked) return current;
+
+    const client = channel?.client;
+    if (!client) return current;
+
+    const inspection = await inspectHistoricalHumanControl(client, clientId);
+    if (!inspection?.blocked) return current;
+
+    HumanControl.setBlock(clientId, {
+      reason: 'manual_outbound_history',
+      source: 'history_guard',
+      persistent: true,
+    });
+
+    return {
+      blocked: true,
+      reason: 'manual_outbound_history',
+      seller: null,
+      labelName: null,
+      source: 'history_guard',
+      details: inspection,
+    };
+  };
+
+  SellerHandoff.__historicalHumanGuardInstalled = true;
+}
+
 function installResetCleanup() {
   if (Store.__botActivityResetInstalled || typeof Store.resetSystem !== 'function') return;
   const originalResetSystem = Store.resetSystem.bind(Store);
@@ -398,6 +520,7 @@ installPersistentHumanHistory();
 installBotActivityTracking();
 installGratitudeReply();
 installUnreadRecoveryGuard();
+installHistoricalHumanGuard();
 installResetCleanup();
 
 console.log('[CONFIABILIDADE] agradecimentos=👍 | arte=buffer ampliado | não lidas=histórico humano protegido | recuperação=fila ponderada');
