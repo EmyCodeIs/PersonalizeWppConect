@@ -67,6 +67,8 @@ require('./core/customerFlowFixPreload');
 require('./core/preferredSellerNotePreload');
 require('./core/completedFlowSilencePreload');
 require('./core/runtimeReliabilityPreload');
+// Reexecuta a recuperação segura quando o WhatsApp volta de uma desconexão.
+require('./core/unreadReconnectRecoveryPreload');
 require('./core/supportAndServicesPreload');
 // Aplica Suporte no momento da escolha, não apenas ao finalizar a coleta.
 require('./core/supportLabelSelectionPreload');
