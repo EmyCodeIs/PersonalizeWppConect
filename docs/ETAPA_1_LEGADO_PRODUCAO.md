@@ -153,8 +153,10 @@ Esses pontos serão tratados em etapas separadas. Nenhum deles foi "corrigido" s
 
 ## Comandos de validação
 
+O repositório de produção ainda não possui `package-lock.json`, portanto a validação usa `npm install` nesta etapa.
+
 ```bash
-npm ci
+npm install
 npm run verify:legacy
 ```
 
