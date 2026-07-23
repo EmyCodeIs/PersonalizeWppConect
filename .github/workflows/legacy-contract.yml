@@ -25,5 +25,14 @@ jobs:
       - name: Instalar dependências
         run: npm install --no-audit --no-fund
 
-      - name: Validar legado da produção
-        run: npm run verify:legacy
+      - name: Validar sintaxe
+        run: npm run check
+
+      - name: Validar etiquetas existentes
+        run: npm run test:labels
+
+      - name: Validar contrato estrutural
+        run: node scripts/test-production-contract.js
+
+      - name: Validar fluxo legado isolado
+        run: node scripts/test-legacy-flow.js
