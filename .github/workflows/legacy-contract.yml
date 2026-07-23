@@ -1,0 +1,38 @@
+name: Contrato do legado Personalize
+
+on:
+  push:
+    branches:
+      - agent/etapa-1-legado-producao
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  legacy-contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Baixar repositório
+        uses: actions/checkout@v4
+
+      - name: Preparar Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Instalar dependências
+        run: npm install --no-audit --no-fund
+
+      - name: Validar sintaxe
+        run: npm run check
+
+      - name: Validar etiquetas existentes
+        run: npm run test:labels
+
+      - name: Validar contrato estrutural
+        run: node scripts/test-production-contract.js
+
+      - name: Validar fluxo legado isolado
+        run: node scripts/test-legacy-flow.js
