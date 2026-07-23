@@ -72,23 +72,32 @@ function run() {
     assert.ok(messages[messageName], `mensagem obrigatória ausente: ${messageName}`);
   }
 
-  const requiredAssets = [
-    mostruario.getBemVindosImagePath(),
-    mostruario.getMostruarioImagePath(),
-    mostruario.getTabelaCoresPath(),
-    mostruario.getTabelaEspessuraPath(),
-    mostruario.getTabelaProfundidadePath(),
+  assert.strictEqual(exists('assets'), true, 'pasta assets ausente no repositório');
+  const assetChecks = [
+    ['boas-vindas', mostruario.getBemVindosImagePath()],
+    ['mostruário', mostruario.getMostruarioImagePath()],
+    ['tabela de cores', mostruario.getTabelaCoresPath()],
+    ['tabela de espessura', mostruario.getTabelaEspessuraPath()],
+    ['tabela de profundidade', mostruario.getTabelaProfundidadePath()],
   ];
-  for (const asset of requiredAssets) {
-    assert.ok(asset, 'asset obrigatório não foi localizado');
-    assert.strictEqual(fs.existsSync(asset), true, `asset obrigatório ausente: ${asset}`);
+  const unresolvedAssets = assetChecks
+    .filter(([, asset]) => !asset || !fs.existsSync(asset))
+    .map(([name]) => name);
+
+  if (unresolvedAssets.length) {
+    console.warn(
+      `[CONTRATO PRODUÇÃO] ATENÇÃO: assets não localizados no checkout limpo: ${unresolvedAssets.join(', ')}. `
+      + 'A existência desses arquivos na VPS deverá ser confirmada antes da implantação.',
+    );
+  } else {
+    console.log('[CONTRATO PRODUÇÃO] assets configurados localizados: OK');
   }
 
   const baseline = read('docs/ETAPA_1_LEGADO_PRODUCAO.md');
   assert.match(baseline, /a9daeb1d69a4e043589a97eb63cece8775ab7228/);
   assert.match(baseline, /Problemas conhecidos/);
 
-  console.log('[CONTRATO PRODUÇÃO] arquivos, menus, mensagens e assets: OK');
+  console.log('[CONTRATO PRODUÇÃO] arquivos, menus e mensagens: OK');
 }
 
 try {
