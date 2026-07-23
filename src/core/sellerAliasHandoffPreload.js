@@ -15,6 +15,19 @@ function uniqueIds(values = []) {
   return [...new Set(values.map(normalizeChatId).filter(Boolean))];
 }
 
+function findExistingHumanBlock(candidates = []) {
+  for (const candidate of uniqueIds(candidates)) {
+    const current = HumanControl.getBlock(candidate);
+    if (current?.blocked) {
+      return {
+        chatId: candidate,
+        control: current.control,
+      };
+    }
+  }
+  return null;
+}
+
 async function resolveSellerLabelCandidates(channel, clientId, options = {}) {
   const resolver = options.resolvePhoneJid || resolvePhoneJid;
   const direct = normalizeChatId(clientId);
@@ -115,6 +128,7 @@ function installSellerAliasHandoff() {
 
   SellerHandoff.getAutomationBlock = async function getAutomationBlockAcrossAliases(channel, clientId) {
     const assignment = await SellerHandoff.detectSellerLabelAssignment(channel, clientId);
+    const resolution = assignment?.identityResolution || await resolveSellerLabelCandidates(channel, clientId);
 
     if (assignment?.assigned) {
       HumanControl.setBlock(clientId, {
@@ -137,6 +151,27 @@ function installSellerAliasHandoff() {
 
     const current = HumanControl.getBlock(clientId);
     const reason = String(current?.control?.reason || '');
+    const inherited = current?.blocked ? null : findExistingHumanBlock(resolution.candidates);
+
+    if (inherited?.control) {
+      HumanControl.setBlock(clientId, {
+        ...inherited.control,
+        persistent: !inherited.control?.blockedUntil,
+      });
+
+      return {
+        blocked: true,
+        reason: inherited.control?.reason || 'human_block',
+        seller: inherited.control?.seller || null,
+        labelName: inherited.control?.labelName || null,
+        source: inherited.control?.source || 'human_control',
+        details: {
+          inheritedFrom: inherited.chatId,
+          identityResolution: resolution,
+          control: inherited.control,
+        },
+      };
+    }
 
     // Uma etiqueta removida só libera o bot após inspeção conclusiva de todos os
     // aliases necessários. Falha de resolução nunca é interpretada como remoção.

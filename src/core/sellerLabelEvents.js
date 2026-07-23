@@ -1,6 +1,7 @@
 'use strict';
 
 const SellerHandoff = require('./sellerHandoff');
+const HumanControl = require('../services/humanControlStore');
 const Store = require('../services/leadStore');
 const Identity = require('../services/contactIdentity');
 const { env } = require('../config/env');
@@ -56,6 +57,10 @@ function sellerFromEventNames(names = []) {
     if (seller) return { seller, labelName };
   }
   return null;
+}
+
+function firstManualLabelName(names = []) {
+  return names.map((name) => String(name || '').trim()).find(Boolean) || null;
 }
 
 function existingSessionFor(clientId) {
@@ -151,6 +156,54 @@ function createSellerLabelUpdateHandler(options = {}) {
           seller: sellerFromEvent.seller,
           labelName: sellerFromEvent.labelName,
           source: 'seller_label_event',
+        },
+      };
+    }
+
+    const manualLabelName = type === 'add' ? firstManualLabelName(names) : null;
+    if (manualLabelName) {
+      const key = `${chatId}:manual:${normalizeName(manualLabelName)}`;
+      const now = Date.now();
+      const duplicate = Number(seen.get(key) || 0) > (now - 15000);
+      seen.set(key, now);
+
+      HumanControl.setBlock(chatId, {
+        reason: 'manual_label',
+        source: 'manual_label_event',
+        seller: null,
+        labelName: manualLabelName,
+        persistent: true,
+        blockedHours: env.humanBlockHours,
+      });
+
+      persistSellerStatus(chatId, {
+        status: 'assigned',
+        seller: null,
+        labelName: manualLabelName,
+        assignedAt: new Date().toISOString(),
+        releasedAt: null,
+      });
+      clearBuffer(chatId);
+
+      if (!duplicate) {
+        const session = existingSessionFor(chatId);
+        const phase = session?.completed || session?.dados?.botDone ? 'concluído' : 'em_andamento';
+        console.log(
+          `[HANDOFF][MANUAL] cliente assumido por etiqueta manual | cliente=${chatId} `
+          + `| etiqueta="${manualLabelName}" | préAtendimento=${phase} | evento=${type}`,
+        );
+      }
+
+      return {
+        handled: true,
+        assigned: true,
+        chatId,
+        guard: {
+          blocked: true,
+          reason: 'manual_label',
+          seller: null,
+          labelName: manualLabelName,
+          source: 'manual_label_event',
         },
       };
     }

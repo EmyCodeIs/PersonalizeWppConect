@@ -154,7 +154,6 @@ async function inspectChatLabels(client, chatId) {
 function findSellerLabelMatch(items = []) {
   const managed = new Set(managedServiceLabelNames());
   const rules = Object.entries(env.sellerLabelRules || {});
-  if (!rules.length) return null;
 
   for (const item of items) {
     const labelName = String(item?.name || '').trim();
@@ -173,16 +172,29 @@ function findSellerLabelMatch(items = []) {
       if (byExactName) {
         return {
           assigned: true,
+          reason: 'seller_label',
           seller: sellerKey,
           sellerColor,
           labelName,
           labelId: String(item?.id || ''),
           labelHex: labelHex || null,
           labelColorIndex,
-          matchMode: 'exact_name',
+          matchMode: 'name',
         };
       }
     }
+
+    return {
+      assigned: true,
+      reason: 'manual_label',
+      seller: null,
+      sellerColor: null,
+      labelName,
+      labelId: String(item?.id || ''),
+      labelHex: String(item?.hexColor || '').trim().toLowerCase() || null,
+      labelColorIndex: Number.isFinite(Number(item?.colorIndex)) ? Number(item.colorIndex) : null,
+      matchMode: 'manual_label',
+    };
   }
 
   return null;
@@ -217,8 +229,8 @@ async function getAutomationBlock(channel, clientId) {
   const sellerAssignment = await detectSellerLabelAssignment(channel, clientId);
   if (sellerAssignment.assigned) {
     HumanControl.setBlock(clientId, {
-      reason: 'seller_label',
-      source: 'seller_label',
+      reason: sellerAssignment.reason || 'seller_label',
+      source: sellerAssignment.source || sellerAssignment.reason || 'seller_label',
       seller: sellerAssignment.seller,
       labelName: sellerAssignment.labelName,
       blockedHours: env.humanBlockHours,
@@ -226,7 +238,7 @@ async function getAutomationBlock(channel, clientId) {
 
     return {
       blocked: true,
-      reason: 'seller_label',
+      reason: sellerAssignment.reason || 'seller_label',
       seller: sellerAssignment.seller,
       labelName: sellerAssignment.labelName,
       source: sellerAssignment.source,
