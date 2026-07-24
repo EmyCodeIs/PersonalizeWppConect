@@ -1,0 +1,36 @@
+name: Validar legado da Personalize
+
+on:
+  push:
+    branches:
+      - agent/etapa-1-proteger-legado-prod
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  legacy:
+    name: Node ${{ matrix.node }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: [20, 22]
+
+    steps:
+      - name: Baixar código
+        uses: actions/checkout@v4
+
+      - name: Preparar Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+
+      - name: Instalar dependências
+        run: npm install --no-audit --no-fund
+
+      - name: Validar sintaxe e legado
+        run: npm run verify
