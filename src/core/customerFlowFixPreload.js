@@ -220,21 +220,6 @@ async function enterObservation(channel, clientId, session) {
   await MenuCatalog.sendMenu(channel, clientId, 'observacao');
 }
 
-// A arte não usa mais lista. Mantemos o nome do menu apenas como compatibilidade
-// com o fluxo antigo, mas transformamos a chamada em coleta livre por texto/mídia.
-const originalSendMenu = MenuCatalog.sendMenu.bind(MenuCatalog);
-MenuCatalog.sendMenu = async function sendMenuWithoutArtList(channel, clientId, menuOrName) {
-  if (menuOrName === 'arte') {
-    await channel.sendText(clientId, messages.askArtQuestion);
-    await channel.sendText(clientId, messages.askArtExplanation);
-    await channel.sendText(clientId, messages.askArtFree);
-    return true;
-  }
-  return originalSendMenu(channel, clientId, menuOrName);
-};
-
-// Carrega o fluxo somente depois de substituir sendMenu, para que a referência
-// desestruturada dentro de customerFlow já seja a versão corrigida.
 const CustomerFlow = require('../flow/customerFlow');
 const originalProcessCustomerMessage = CustomerFlow.processCustomerMessage;
 
@@ -251,16 +236,6 @@ CustomerFlow.processCustomerMessage = async function processCustomerMessageFixed
   // Impede que o corpo base64 de imagens/arquivos seja salvo como descrição.
   if (session.etapa === 'arte_coleta' || session.etapa === 'pantone') {
     text = sanitizeMediaCollectionInput(text, args.messages);
-  }
-
-  // Sessões novas e antigas entram diretamente na coleta livre da arte.
-  if (session.etapa === 'arte_menu') {
-    session.etapa = 'arte_coleta';
-    data.arteModo = 'livre';
-    data.arteTexto = null;
-    data.arteMedias = [];
-    data.arte = null;
-    Store.saveSession(session);
   }
 
   if (session.etapa === 'envio') {
