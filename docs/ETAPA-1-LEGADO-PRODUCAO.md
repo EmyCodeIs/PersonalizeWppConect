@@ -152,7 +152,7 @@ Também não foram criados:
 ## Comandos de validação
 
 ```bash
-npm ci
+npm install --no-audit --no-fund
 npm run verify
 ```
 
