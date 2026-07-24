@@ -3,6 +3,7 @@
 const { env } = require('../config/env');
 const Identity = require('../services/contactIdentity');
 const Store = require('../services/leadStore');
+const DecisionLog = require('./decisionLogger');
 
 const resolvedLists = new Map();
 const creationLocks = new Map();
@@ -571,21 +572,32 @@ async function applyListToCandidates(client, clientId, item) {
 async function applyNamedLabel(channel, clientId, target) {
   if (!env.enableContactLabels || !channel?.client || !target?.name) return false;
 
+  DecisionLog.log('ETIQUETA', 'alvo_definido', { chat: clientId, alvo: target.name });
   const client = channel.client;
   let item = await resolveExistingList(client, target);
   if (!item) item = await ensureServiceList(client, target);
 
   if (!item) {
+    DecisionLog.log('ETIQUETA', 'não_localizada', { chat: clientId, alvo: target.name }, 'warn');
     console.warn(`[LISTAS] não foi possível criar ou localizar "${target.name}".`);
     return false;
   }
 
+  DecisionLog.log('ETIQUETA', 'localizada', { chat: clientId, alvo: target.name, id: listId(item) });
   const result = await applyListToCandidates(client, clientId, item);
   if (!result?.applied) {
+    DecisionLog.log('ETIQUETA', 'aplicação_falhou', { chat: clientId, alvo: target.name, id: listId(item) }, 'warn');
     console.warn(`[LISTAS] não foi possível incluir o contato em "${target.name}".`);
     return false;
   }
 
+  DecisionLog.log('ETIQUETA', result.alreadyAttached ? 'já_vinculada' : 'aplicada', {
+    chat: result.chatId || clientId,
+    alvo: listName(item),
+    id: listId(item),
+    modo: result.mode,
+    confirmação: result.verified === true ? 'OK' : result.verified === false ? 'FALHOU' : 'INCONCLUSIVA',
+  });
   console.log(
     `[LISTAS] aplicada sem remover outras: ${listName(item)} | ID ${listId(item)} `
     + `| ${result.chatId} | modo=${result.mode} | verificada=${String(result.verified)}`,
