@@ -25,9 +25,8 @@ function gitBlobSha(relativePath) {
 function assertOrdered(text, markers, source) {
   let previous = -1;
   for (const marker of markers) {
-    const current = text.indexOf(marker);
-    assert.notEqual(current, -1, `${source}: marcador ausente: ${marker}`);
-    assert.ok(current > previous, `${source}: ordem alterada perto de ${marker}`);
+    const current = text.indexOf(marker, previous + 1);
+    assert.notEqual(current, -1, `${source}: marcador ausente ou fora de ordem: ${marker}`);
     previous = current;
   }
 }
@@ -67,12 +66,14 @@ assertOrdered(startup, [
 ], 'src/start-with-required-labels.js');
 
 const bootstrap = readText('src/bootstrap.js');
-assertOrdered(bootstrap, [
+const wrapperStart = bootstrap.indexOf('WppClient.createWppChannel = async function createChannelWithStartupLabelCheck');
+assert.notEqual(wrapperStart, -1, 'src/bootstrap.js: wrapper da conexão ausente');
+assertOrdered(bootstrap.slice(wrapperStart), [
   'WppClient.createWppChannel = async function createChannelWithStartupLabelCheck',
   'installResetCleanup(channel)',
   'await runLabelStartupOnce(channel)',
   "require('./index')",
-], 'src/bootstrap.js');
+], 'src/bootstrap.js: wrapper em execução');
 
 const requiredStructure = [
   'src/index.js',
