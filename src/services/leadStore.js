@@ -99,6 +99,13 @@ function migrateSession(session, id, chatId) {
   next.contactIdentity = identity || next.contactIdentity || null;
   next.etapa = next.etapa || next.step || 'inicio';
   next.dados = next.dados || next.data || {};
+  if (['arte_menu', 'arte_arquivo', 'arte_imagem', 'arte_ideia'].includes(next.etapa)) {
+    next.etapa = 'arte_coleta';
+    next.dados.arteModo = 'livre';
+    next.dados.arteTexto = next.dados.arteTexto || null;
+    next.dados.arteMedias = Array.isArray(next.dados.arteMedias) ? next.dados.arteMedias : [];
+    next.dados.arte = null;
+  }
   next.createdAt = next.createdAt || nowIso();
   next.updatedAt = next.updatedAt || next.lastInteractionAt || next.createdAt || nowIso();
   next.lastInteractionAt = next.lastInteractionAt || next.updatedAt || next.createdAt || nowIso();
