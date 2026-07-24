@@ -7,6 +7,7 @@ const { OutboundTracker } = require('../core/outboundTracker');
 const { resolveBrowserArgs } = require('../core/vpsBrowserPreload');
 const { publishConnected, publishQrCode, publishState } = require('./qrAccess');
 const { setQrAdminClient } = require('./qrAdminServer');
+const DecisionLog = require('../core/decisionLogger');
 
 function wait(ms) {
   return new Promise((resolve) => setTimeout(resolve, Math.max(0, Number(ms || 0))));
@@ -255,12 +256,15 @@ async function createWppChannel({ onMessage, onOutgoingMessage, onQr } = {}) {
       const chatId = normalizeChatId(clientId);
       if (!options.noDelay) await wait(randomDelay());
       const pending = registerOutbound(channel, chatId, { type: 'text', text });
+      DecisionLog.log('ENVIO', 'transporte_iniciado', { chat: chatId, tipo: 'texto', registrado_na_outbox: Boolean(pending) });
       try {
         const result = await client.sendText(chatId, String(text || ''));
         confirmOutbound(channel, pending, result);
+        DecisionLog.log('ENVIO', 'confirmado', { chat: chatId, tipo: 'texto' });
         return result;
       } catch (err) {
         failOutbound(channel, pending);
+        DecisionLog.log('ERRO', 'falha_no_envio', { chat: chatId, tipo: 'texto', motivo: err?.message || err }, 'warn');
         throw err;
       }
     },
@@ -274,12 +278,15 @@ async function createWppChannel({ onMessage, onOutgoingMessage, onQr } = {}) {
         text: caption,
         filename: path.basename(fullPath),
       });
+      DecisionLog.log('ENVIO', 'transporte_iniciado', { chat: chatId, tipo: 'imagem', registrado_na_outbox: Boolean(pending) });
       try {
         const result = await client.sendImage(chatId, fullPath, path.basename(fullPath), String(caption || ''));
         confirmOutbound(channel, pending, result);
+        DecisionLog.log('ENVIO', 'confirmado', { chat: chatId, tipo: 'imagem' });
         return result;
       } catch (err) {
         failOutbound(channel, pending);
+        DecisionLog.log('ERRO', 'falha_no_envio', { chat: chatId, tipo: 'imagem', motivo: err?.message || err }, 'warn');
         throw err;
       }
     },
@@ -293,25 +300,35 @@ async function createWppChannel({ onMessage, onOutgoingMessage, onQr } = {}) {
         text: caption,
         filename: fileName || path.basename(fullPath),
       });
+      DecisionLog.log('ENVIO', 'transporte_iniciado', { chat: chatId, tipo: 'documento', registrado_na_outbox: Boolean(pending) });
       try {
         const result = await client.sendFile(chatId, fullPath, fileName || path.basename(fullPath), String(caption || ''));
         confirmOutbound(channel, pending, result);
+        DecisionLog.log('ENVIO', 'confirmado', { chat: chatId, tipo: 'documento' });
         return result;
       } catch (err) {
         failOutbound(channel, pending);
+        DecisionLog.log('ERRO', 'falha_no_envio', { chat: chatId, tipo: 'documento', motivo: err?.message || err }, 'warn');
         throw err;
       }
     },
     async setContactNote(clientId, note) {
       const chatId = normalizeChatId(clientId);
+      DecisionLog.log('NOTA', 'salvamento_iniciado', { chat: chatId });
       try {
-        if (!client?.page?.evaluate) return false;
-        return await client.page.evaluate(async ({ chatId, note }) => {
+        if (!client?.page?.evaluate) {
+          DecisionLog.log('NOTA', 'indisponível', { chat: chatId }, 'warn');
+          return false;
+        }
+        const result = await client.page.evaluate(async ({ chatId, note }) => {
           if (window.WPP?.chat?.setNotes) return window.WPP.chat.setNotes(chatId, note);
           if (window.WPP?.contact?.setNotes) return window.WPP.contact.setNotes(chatId, note);
           return false;
         }, { chatId, note });
+        DecisionLog.log('NOTA', result === false ? 'não_confirmada' : 'salva', { chat: chatId });
+        return result;
       } catch (err) {
+        DecisionLog.log('NOTA', 'falhou', { chat: chatId, motivo: err?.message || err }, 'warn');
         console.warn('[WPPConnect] não foi possível salvar nota:', err?.message || err);
         return false;
       }
@@ -338,6 +355,7 @@ async function createWppChannel({ onMessage, onOutgoingMessage, onQr } = {}) {
   };
 
   client.onStateChange((state) => {
+    DecisionLog.log('CONEXÃO', 'estado_alterado', { status: state });
     console.log('[WPPConnect] estado:', state);
     const normalized = String(state || '').trim().toUpperCase();
     if (normalized.includes('CONNECTED') || normalized.includes('SYNCING') || normalized.includes('RESUMING')) {

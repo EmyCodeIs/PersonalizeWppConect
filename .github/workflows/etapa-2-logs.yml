@@ -1,0 +1,45 @@
+name: Etapa 2 - Logs de decisão
+
+on:
+  push:
+    branches:
+      - agent/etapa-2-logs-decisao
+  pull_request:
+    branches:
+      - agent/limpeza-fluxos-paralelos
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: etapa-2-logs-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  decision-logs:
+    name: Logs e suíte completa (Node 22)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Baixar código
+        uses: actions/checkout@v4
+
+      - name: Preparar Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Instalar dependências bloqueadas
+        run: npm ci --no-audit --no-fund
+
+      - name: Validar sintaxe
+        run: npm run check
+
+      - name: Validar contrato dos logs
+        run: npm run test:decision-logs
+
+      - name: Executar suíte completa
+        run: npm test

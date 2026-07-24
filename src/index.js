@@ -27,6 +27,7 @@ const BotActivity = require('./services/botActivityStore');
 const Store = require('./services/leadStore');
 const Identity = require('./services/contactIdentity');
 const { env } = require('./config/env');
+const DecisionLog = require('./core/decisionLogger');
 
 const BUILD_ID = 'real-whatsapp-business-lists-create-and-recover-2026-07-10-07';
 const ACTIVE_SERVICE_FLOWS = new Set(['letreiro', 'plotagem', 'outros']);
@@ -141,6 +142,7 @@ function isImmediateTestCommand(text) {
 async function runImmediateTestCommand(channel, clientId, text) {
   const command = firstLine(text).toLowerCase();
   if (!env.enableTestCommands || !IMMEDIATE_TEST_COMMANDS.has(command)) return false;
+  DecisionLog.log('ADMIN', 'comando_recebido', { chat: clientId, comando: command });
 
   if (command === '/resetarsys') {
     const result = Store.resetSystem();
@@ -150,6 +152,12 @@ async function runImmediateTestCommand(channel, clientId, text) {
       { noDelay: true, noTyping: true }
     );
     Store.resetSession(clientId);
+    DecisionLog.log('ADMIN', 'reset_sistema_concluído', {
+      chat: clientId,
+      sessões: result.previousSessionCount,
+      perfis: result.previousProfileCount,
+      leads: result.previousLeadCount,
+    });
     return true;
   }
 
@@ -160,6 +168,7 @@ async function runImmediateTestCommand(channel, clientId, text) {
       'Atendimento reiniciado para teste. Envie uma nova mensagem para começar.',
       { noDelay: true, noTyping: true }
     );
+    DecisionLog.log('ADMIN', 'sessão_reiniciada', { chat: clientId, comando: command });
     return true;
   }
 
@@ -181,7 +190,11 @@ function prepareBufferedInput(clientId, text, bufferedMessages) {
     session.dados.nome = chosenName;
     session.dados.nomeOrigem = explicitName ? 'mensagem' : 'perfil_whatsapp';
     Store.saveSession(session);
-    console.log(`[CLIENTE ${clientId}] nome identificado (${session.dados.nomeOrigem}): ${chosenName}`);
+    DecisionLog.log('IDENTIDADE', 'nome_identificado', {
+      chat: clientId,
+      origem: session.dados.nomeOrigem,
+      nome: chosenName,
+    });
   }
 
   return text;
@@ -404,6 +417,7 @@ async function recoverPendingActiveSessions(channel, onMessage) {
 
   const sessions = activeRecoverySessions().slice(0, Math.max(1, Number(env.unreadBootstrapMaxChats || 30)));
   let recovered = 0;
+  DecisionLog.log('RECUPERAÇÃO', 'iniciada', { candidatos: sessions.length });
 
   for (const session of sessions) {
     const clientId = session?.chatId || session?.clientId || session?.id;
@@ -411,13 +425,21 @@ async function recoverPendingActiveSessions(channel, onMessage) {
 
     const guard = await getAutomationBlock(channel, clientId);
     if (guard?.blocked) {
-      console.log(`[RETOMADA] sessão ignorada por handoff | cliente=${clientId} | motivo=${guard.reason}`);
+      DecisionLog.log('RECUPERAÇÃO', 'bloqueada_por_handoff', {
+        chat: clientId,
+        etapa: session.etapa,
+        motivo: guard.reason,
+      });
       continue;
     }
 
     const history = await readRecoveryConversationHistory(channel.client, clientId);
     if (!history.available) {
-      console.log(`[RETOMADA] histórico indisponível | cliente=${clientId}`);
+      DecisionLog.log('RECUPERAÇÃO', 'histórico_indisponível', {
+        chat: clientId,
+        etapa: session.etapa,
+        resultado: 'inconclusivo',
+      }, 'warn');
       continue;
     }
 
@@ -425,10 +447,13 @@ async function recoverPendingActiveSessions(channel, onMessage) {
     if (!pending?.message) continue;
 
     recovered += 1;
-    console.log(
-      `[RETOMADA] resposta pendente recuperada | cliente=${clientId} | etapa=${session.etapa} `
-      + `| motivo=${pending.reason} | texto=${String(pending.text || '[sem texto]').slice(0, 120)}`,
-    );
+    DecisionLog.log('RECUPERAÇÃO', 'resposta_pendente_encontrada', {
+      chat: clientId,
+      msg: DecisionLog.shortMessageId(pending.message),
+      etapa: session.etapa,
+      motivo: pending.reason,
+      texto: pending.text || '[sem texto]',
+    });
     await onMessage({
       from: clientId,
       text: pending.text,
@@ -437,7 +462,7 @@ async function recoverPendingActiveSessions(channel, onMessage) {
     });
   }
 
-  console.log(`[RETOMADA] varredura concluída | sessões=${sessions.length} | recuperadas=${recovered}`);
+  DecisionLog.log('RECUPERAÇÃO', 'concluída', { processadas: recovered, candidatas: sessions.length });
   return { scanned: sessions.length, recovered };
 }
 
@@ -524,6 +549,7 @@ function blockPdfSending(channel) {
 }
 
 async function main() {
+  DecisionLog.log('CONEXÃO', 'inicialização', { build: BUILD_ID });
   console.log('[PersonalizeWppConect] iniciando...');
   console.log(`[PersonalizeWppConect] BUILD: ${BUILD_ID}`);
   console.log(`[PersonalizeWppConect] buffer comum: ${env.bufferMs}ms`);
@@ -554,9 +580,22 @@ async function main() {
   const buffer = new BufferManager({
     delayMs: env.bufferMs,
     onFlush: async (clientId, bufferedMessages) => {
+      const correlationId = bufferedMessages.map((item) => item?.correlationId).find(Boolean) || '----';
+      const currentStage = Store.getSession(clientId)?.etapa || 'inicio';
+      DecisionLog.log('BUFFER', 'liberado', {
+        chat: clientId,
+        msg: correlationId,
+        etapa: currentStage,
+        mensagens: bufferedMessages.length,
+      });
       const guardBeforeQueue = await getAutomationBlock(channel, clientId);
       if (guardBeforeQueue.blocked) {
-        console.log(`[HANDOFF] bloqueado antes da fila: ${clientId} | motivo=${guardBeforeQueue.reason} | vendedor=${guardBeforeQueue.seller || '-'} | etiqueta=${guardBeforeQueue.labelName || '-'}`);
+        DecisionLog.log('HANDOFF', 'bloqueado_antes_da_fila', {
+          chat: clientId, msg: correlationId, etapa: currentStage,
+          motivo: guardBeforeQueue.reason,
+          vendedor: guardBeforeQueue.seller,
+          etiqueta: guardBeforeQueue.labelName,
+        });
         buffer.clear(clientId);
         return;
       }
@@ -569,25 +608,49 @@ async function main() {
       const units = estimateTaskUnits({ clientId, preparedText, bufferedMessages });
       const queuedAt = Date.now();
       evaluateRuntimePressure(taskQueue);
-      console.log(`[QUEUE] agendado chat=${clientId} units=${units} ${formatQueueStats(taskQueue.stats())}`);
+      DecisionLog.log('FILA', 'agendada', {
+        chat: clientId, msg: correlationId, etapa: currentStage,
+        unidades: units, posição: taskQueue.stats().queued + 1,
+      });
 
       try {
         await taskQueue.enqueue(clientId, async () => {
           evaluateRuntimePressure(taskQueue);
           const guardBeforeRun = await getAutomationBlock(channel, clientId);
           if (guardBeforeRun.blocked) {
-            console.log(`[HANDOFF] bloqueado antes do processamento: ${clientId} | motivo=${guardBeforeRun.reason} | vendedor=${guardBeforeRun.seller || '-'} | etiqueta=${guardBeforeRun.labelName || '-'}`);
+            DecisionLog.log('HANDOFF', 'bloqueado_antes_do_processamento', {
+              chat: clientId, msg: correlationId, etapa: Store.getSession(clientId)?.etapa,
+              motivo: guardBeforeRun.reason,
+              vendedor: guardBeforeRun.seller,
+              etiqueta: guardBeforeRun.labelName,
+            });
             return;
           }
 
           const waitMs = Date.now() - queuedAt;
-          console.log(`[QUEUE] iniciado chat=${clientId} units=${units} espera=${waitMs}ms ${formatQueueStats(taskQueue.stats())}`);
+          DecisionLog.log('FILA', 'iniciada', {
+            chat: clientId, msg: correlationId, etapa: Store.getSession(clientId)?.etapa,
+            unidades: units, espera: `${waitMs}ms`,
+          });
 
-          const action = () => processCustomerMessage({
-            clientId,
-            text: preparedText,
-            channel,
-            messages: bufferedMessages,
+          const action = () => DecisionLog.run({
+            chat: clientId,
+            msg: correlationId,
+            etapa: Store.getSession(clientId)?.etapa || 'inicio',
+          }, async () => {
+            const before = Store.getSession(clientId)?.etapa || 'inicio';
+            const result = await processCustomerMessage({
+              clientId,
+              text: preparedText,
+              channel,
+              messages: bufferedMessages,
+            });
+            const after = Store.getSession(clientId)?.etapa || before;
+            DecisionLog.log('FLUXO', before === after ? 'etapa_mantida' : 'transição', {
+              de: before,
+              para: after,
+            });
+            return result;
           });
 
           if (typeof channel?.runResponseGroup === 'function') {
@@ -599,11 +662,17 @@ async function main() {
         }, { units });
 
         evaluateRuntimePressure(taskQueue);
-        console.log(`[QUEUE] concluído chat=${clientId} ${formatQueueStats(taskQueue.stats())}`);
+        DecisionLog.log('FILA', 'concluída', {
+          chat: clientId, msg: correlationId, etapa: Store.getSession(clientId)?.etapa,
+        });
       } catch (err) {
         evaluateRuntimePressure(taskQueue);
         const reason = err?.code || 'QUEUE_ERROR';
-        console.warn(`[QUEUE] falha no chat ${clientId}: ${reason} - ${err?.message || err}`);
+        DecisionLog.log('ERRO', 'falha_na_fila', {
+          chat: clientId, msg: correlationId, etapa: Store.getSession(clientId)?.etapa,
+          código: reason, motivo: err?.message || err,
+        }, 'warn');
+        DecisionLog.log('FILA', 'falhou', { chat: clientId, msg: correlationId, código: reason }, 'warn');
         await channel?.markUnread?.(clientId).catch(() => false);
       }
     },
@@ -620,7 +689,11 @@ async function main() {
 
     const matchedBotMessage = channel?.outboundTracker?.consumeIfBot?.(canonicalChatId, raw);
     if (matchedBotMessage) {
-      console.log(`[HANDOFF] saída do bot reconhecida: ${canonicalChatId} | tipo=${matchedBotMessage.type}`);
+      DecisionLog.log('HANDOFF', 'saída_do_bot_reconhecida', {
+        chat: canonicalChatId,
+        msg: DecisionLog.shortMessageId(raw),
+        tipo: matchedBotMessage.type,
+      });
       return;
     }
 
@@ -632,7 +705,13 @@ async function main() {
     buffer.clear(canonicalChatId);
 
     const preview = String(effectiveText || '[sem texto]').slice(0, 120);
-    console.log(`[HANDOFF] mensagem manual detectada em ${canonicalChatId} | origem=${source} | texto=${preview}`);
+    DecisionLog.log('HANDOFF', 'mensagem_humana_detectada', {
+      chat: canonicalChatId,
+      msg: DecisionLog.shortMessageId(raw),
+      origem: source,
+      texto: preview,
+      status: 'bloqueado',
+    });
   };
 
   const onMessage = async ({ from, text, raw, source = 'event' }) => {
@@ -640,33 +719,66 @@ async function main() {
     const effectiveText = interactiveId || String(text || '').trim() || mediaMarker(raw);
     if (!effectiveText) return;
 
+    const correlationId = DecisionLog.shortMessageId(raw || `${from}:${effectiveText}`);
+    const stageBeforeIdentity = Store.getSession(from)?.etapa || 'inicio';
+    DecisionLog.log('ENTRADA', 'recebida', {
+      chat: from, msg: correlationId, etapa: stageBeforeIdentity,
+      origem: source, texto: effectiveText,
+    });
+
     const profileName = extractProfileName(raw);
     const identity = Identity.registerContact({ chatId: from, raw });
     const canonicalChatId = identity?.primaryChatId || from;
+    DecisionLog.log('IDENTIDADE', 'resolvida', {
+      chat: canonicalChatId, msg: correlationId,
+      etapa: Store.getSession(canonicalChatId)?.etapa || stageBeforeIdentity,
+      origem: source,
+      canonical: canonicalChatId,
+      aliases: identity?.aliases?.length || 1,
+    });
 
     const allowed = isAllowedClient({ from: canonicalChatId, raw });
     if (!allowed.allowed) {
-      console.log(`[PersonalizeWppConect] ignorado (${source}) fora da whitelist: ${canonicalChatId}`);
+      DecisionLog.log('FLUXO', 'mensagem_não_processada', {
+        chat: canonicalChatId, msg: correlationId, motivo: 'fora_da_whitelist', origem: source,
+      });
       return;
     }
 
     if (await runImmediateTestCommand(channel, canonicalChatId, effectiveText)) {
-      console.log(`[PersonalizeWppConect] comando imediato executado (${source}) em ${canonicalChatId}`);
+      DecisionLog.log('ADMIN', 'comando_imediato_executado', {
+        chat: canonicalChatId, msg: correlationId, origem: source,
+      });
       buffer.clear(canonicalChatId);
       return;
     }
 
     const guardBeforeBuffer = await getAutomationBlock(channel, canonicalChatId);
     if (guardBeforeBuffer.blocked) {
-      console.log(`[HANDOFF] mensagem ignorada (${source}) em ${canonicalChatId} | motivo=${guardBeforeBuffer.reason} | vendedor=${guardBeforeBuffer.seller || '-'} | etiqueta=${guardBeforeBuffer.labelName || '-'}`);
+      DecisionLog.log('HANDOFF', 'mensagem_bloqueada', {
+        chat: canonicalChatId, msg: correlationId,
+        etapa: Store.getSession(canonicalChatId)?.etapa,
+        origem: source, status: 'bloqueado', motivo: guardBeforeBuffer.reason,
+        vendedor: guardBeforeBuffer.seller, etiqueta: guardBeforeBuffer.labelName,
+      });
+      DecisionLog.log('FLUXO', 'mensagem_não_processada', {
+        chat: canonicalChatId, msg: correlationId, motivo: 'human_handoff',
+      });
       buffer.clear(canonicalChatId);
       return;
     }
 
+    DecisionLog.log('HANDOFF', 'livre', {
+      chat: canonicalChatId, msg: correlationId,
+      etapa: Store.getSession(canonicalChatId)?.etapa || 'inicio', status: 'livre',
+    });
     await repairSessionServiceLabel(channel, canonicalChatId, repairedServiceLabels, 'primeira mensagem');
 
     const key = messageKey(raw || { from: canonicalChatId, text: effectiveText });
-    if (processedMessageIds.has(key)) return;
+    if (processedMessageIds.has(key)) {
+      DecisionLog.log('ENTRADA', 'duplicada_ignorada', { chat: canonicalChatId, msg: correlationId });
+      return;
+    }
     processedMessageIds.add(key);
     if (processedMessageIds.size > 5000) {
       const first = processedMessageIds.values().next().value;
@@ -675,11 +787,13 @@ async function main() {
 
     const delayMs = resolveBufferDelay(canonicalChatId, raw, interactiveId);
     const runtimeProtection = getRuntimeProtectionState();
-    console.log(
-      `[PersonalizeWppConect] mensagem enfileirada (${source}) de ${canonicalChatId}; espera=${delayMs}ms`
-      + `${interactiveId ? `; ação=${interactiveId}` : ''}`
-      + `${runtimeProtection.active ? `; autoproteção=${runtimeProtection.level}` : ''}`,
-    );
+    DecisionLog.log('BUFFER', 'aguardando', {
+      chat: canonicalChatId, msg: correlationId,
+      etapa: Store.getSession(canonicalChatId)?.etapa || 'inicio',
+      espera: `${delayMs}ms`,
+      ação: interactiveId || undefined,
+      autoproteção: runtimeProtection.active ? runtimeProtection.level : undefined,
+    });
     buffer.push(canonicalChatId, {
       text: effectiveText,
       raw,
@@ -687,6 +801,7 @@ async function main() {
       identity,
       profileName,
       interactiveId,
+      correlationId,
     }, { delayMs });
   };
 
@@ -709,6 +824,7 @@ async function main() {
   await recoverPendingActiveSessions(channel, onMessage).catch((err) => {
     console.warn('[RETOMADA] recuperação de respostas pendentes falhou:', err?.message || err);
   });
+  DecisionLog.log('CONEXÃO', 'pronta', { status: 'READY' });
   console.log('[PersonalizeWppConect] conectado. Aguardando mensagens...');
 
   if (env.enableUnreadBootstrap) {
@@ -728,6 +844,7 @@ async function main() {
 }
 
 main().catch((err) => {
+  DecisionLog.log('ERRO', 'falha_fatal', { motivo: err?.stack || err?.message || err }, 'error');
   console.error('[PersonalizeWppConect] erro fatal:', err?.stack || err?.message || err);
   process.exitCode = 1;
 });
