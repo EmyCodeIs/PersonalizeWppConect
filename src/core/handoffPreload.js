@@ -151,6 +151,7 @@ SellerHandoff.getAutomationBlock = async function getAutomationBlockExactSeller(
       seller: assignment.seller,
       labelName: assignment.labelName,
       blockedHours: env.humanBlockHours,
+      persistent: true,
     });
     return {
       blocked: true,
