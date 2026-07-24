@@ -71,18 +71,6 @@ const menus = {
       { id: 'esp_voltar', title: 'Quero voltar', description: 'Corrigir minha medida' },
     ],
   },
-  arte: {
-    title: 'Arte do letreiro',
-    description: '🖼️\nAgora preciso da arte do seu letreiro:',
-    buttonText: 'Escolher opção',
-    interactiveOnly: true,
-    rows: [
-      { id: 'art_arquivo', title: 'Tenho arquivo', description: 'PDF, AI, EPS ou SVG' },
-      { id: 'art_imagem', title: 'Enviar imagem', description: 'Imagem de referência' },
-      { id: 'art_ideia', title: 'Descrever ideia', description: 'Explique como imagina o letreiro' },
-      { id: 'art_voltar', title: 'Voltar', description: 'Retornar à espessura' },
-    ],
-  },
   observacao: {
     title: 'Observação do pedido',
     description: 'Deseja fazer uma observação sobre o pedido?',
