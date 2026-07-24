@@ -137,6 +137,7 @@ function installSellerAliasHandoff() {
         seller: assignment.seller,
         labelName: assignment.labelName,
         blockedHours: env.humanBlockHours,
+        persistent: true,
       });
 
       return {
@@ -150,7 +151,6 @@ function installSellerAliasHandoff() {
     }
 
     const current = HumanControl.getBlock(clientId);
-    const reason = String(current?.control?.reason || '');
     const inherited = current?.blocked ? null : findExistingHumanBlock(resolution.candidates);
 
     if (inherited?.control) {
@@ -173,14 +173,7 @@ function installSellerAliasHandoff() {
       };
     }
 
-    // Uma etiqueta removida só libera o bot após inspeção conclusiva de todos os
-    // aliases necessários. Falha de resolução nunca é interpretada como remoção.
-    if (current?.blocked && reason === 'seller_label' && assignment?.conclusive) {
-      HumanControl.clearBlock(clientId);
-      console.log(`[HANDOFF] etiqueta de vendedor removida em todos os aliases; automação liberada | cliente=${clientId}`);
-      return { blocked: false, reason: null, source: 'seller_label_removed' };
-    }
-
+    // Remover a etiqueta não desfaz o handoff persistido.
     if (current?.blocked) {
       return {
         blocked: true,
