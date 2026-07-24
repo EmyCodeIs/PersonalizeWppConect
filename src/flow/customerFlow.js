@@ -83,21 +83,6 @@ function depthOf(v) {
   if (x === 'esp3_align' || /ainda nao sei|definir depois/.test(x)) return ['align', null];
   return null;
 }
-function artOf(v) {
-  const x = norm(v);
-  if (x === 'art_arquivo' || /tenho arquivo|pdf|ai|eps|svg/.test(x)) return 'arquivo';
-  if (x === 'art_imagem' || /enviar imagem|imagem de referencia/.test(x)) return 'imagem';
-  if (x === 'art_ideia' || /descrever ideia|descrever/.test(x)) return 'descrever';
-  return null;
-}
-function deliveryOf(v) {
-  const x = norm(v);
-  if (x === 'envio_correios' || /correio|transportadora/.test(x)) return 'Correios';
-  if (x === 'envio_instalacao' || /instala/.test(x)) return 'Instalação';
-  if (x === 'envio_retirada_cliente' || /retir/.test(x)) return 'Retirada';
-  return null;
-}
-
 function isGrandeBH(city) {
   const x = normalizeText(city);
   if (!x) return false;
@@ -191,16 +176,22 @@ async function toThickness(channel, id, s) {
     await sendTabelaEspessura(channel, id); await sendMenu(channel, id, 'espessuraPersonalizada');
   }
 }
-async function startArt(channel, id, s) { s.etapa = 'arte_menu'; Store.saveSession(s); await sendMenu(channel, id, 'arte'); }
+async function startArt(channel, id, s) {
+  s.etapa = 'arte_coleta';
+  s.dados.arteModo = 'livre';
+  s.dados.arteTexto = null;
+  s.dados.arteMedias = [];
+  s.dados.arte = null;
+  Store.saveSession(s);
+  await channel.sendText(id, messages.askArtQuestion);
+  await channel.sendText(id, messages.askArtExplanation);
+  await channel.sendText(id, messages.askArtFree);
+}
 async function startCity(channel, id, s) { s.etapa = 'cidade'; Store.saveSession(s); await channel.sendText(id, messages.askCity); }
 async function startDelivery(channel, id, s) {
   s.etapa = 'envio'; Store.saveSession(s);
   await channel.sendText(id, 'Qual a melhor forma pra te enviarmos seu pedido?');
   await sendMenu(channel, id, buildDeliveryMenu(isGrandeBH(s.dados.cidade)));
-}
-async function askObservation(channel, id, s) {
-  s.etapa = 'observacao_pedido_menu'; Store.saveSession(s);
-  await channel.sendText(id, messages.askObservation); await sendMenu(channel, id, 'observacao');
 }
 async function finishColor(channel, id, s, color) {
   const d = s.dados;
@@ -287,14 +278,6 @@ async function processCustomerMessage({ clientId, text, channel, messages: inbou
     return s;
   }
 
-  if (s.etapa === 'plotagem_descricao') { d.demanda.descricao = input; s.etapa = 'plotagem_medida'; Store.saveSession(s); await channel.sendText(clientId, messages.askPlotagemMedida); return s; }
-  if (s.etapa === 'plotagem_medida') { d.demanda.medida = input; s.etapa = 'plotagem_local'; Store.saveSession(s); await channel.sendText(clientId, messages.askPlotagemLocal); return s; }
-  if (s.etapa === 'plotagem_local') { d.demanda.local = input; s.etapa = 'plotagem_prazo'; Store.saveSession(s); await channel.sendText(clientId, messages.askPlotagemPrazo); return s; }
-  if (s.etapa === 'plotagem_prazo') { d.demanda.prazo = input; return finish(channel, clientId, s, 'plotagem_coleta_completa'); }
-  if (s.etapa === 'outros_descricao') { d.demanda.descricao = input; s.etapa = 'outros_referencia'; Store.saveSession(s); await channel.sendText(clientId, messages.askOtherReferencia); return s; }
-  if (s.etapa === 'outros_referencia') { d.demanda.referencia = input; s.etapa = 'outros_prazo'; Store.saveSession(s); await channel.sendText(clientId, messages.askOtherPrazo); return s; }
-  if (s.etapa === 'outros_prazo') { d.demanda.prazo = input; return finish(channel, clientId, s, 'outros_coleta_completa'); }
-
   if (s.etapa === 'tipo_acrilico') {
     const type = acrylicOf(input);
     if (!type) { await sendMenu(channel, clientId, 'tipoAcrilico'); return s; }
@@ -367,32 +350,16 @@ async function processCustomerMessage({ clientId, text, channel, messages: inbou
     await startArt(channel, clientId, s); return s;
   }
 
-  if (s.etapa === 'arte_menu') {
-    if (isBack(input, 'art_voltar')) { await toThickness(channel, clientId, s); return s; }
-    const mode = artOf(input);
-    if (!mode) { await sendMenu(channel, clientId, 'arte'); return s; }
-    d.arteModo = mode; d.arteTexto = null; d.arteMedias = []; s.etapa = 'arte_coleta'; Store.saveSession(s);
-    await channel.sendText(clientId, mode === 'arquivo' ? messages.askArtFile : mode === 'imagem' ? messages.askArtImage : messages.askArtDescription);
-    await channel.sendText(clientId, messages.askArtFree); return s;
-  }
   if (s.etapa === 'arte_coleta') {
     const medias = mediaSummary(inbound);
     const description = input.split(/\r?\n/).map((x) => x.trim()).filter(Boolean)
       .filter((x) => !/^\[(imagem|arquivo|documento|video) enviado/i.test(x)).join(' | ').trim();
     if (!description && !medias.length) { await channel.sendText(clientId, messages.askArtFree); return s; }
-    d.arteTexto = description || null; d.arteMedias = medias; d.arte = { modo: d.arteModo, texto: d.arteTexto, medias }; Store.saveSession(s);
+    d.arteModo = 'livre'; d.arteTexto = description || null; d.arteMedias = medias;
+    d.arte = { modo: 'livre', texto: d.arteTexto, medias }; Store.saveSession(s);
     await channel.sendText(clientId, 'Arte e referências anotadas!'); await startCity(channel, clientId, s); return s;
   }
   if (s.etapa === 'cidade') { d.cidade = input.replace(/\s{2,}/g, ' ').replace(/\s*\/\s*/g, '/').trim(); Store.saveSession(s); await startDelivery(channel, clientId, s); return s; }
-  if (s.etapa === 'envio') {
-    if (isBack(input, 'envio_voltar')) { await startCity(channel, clientId, s); return s; }
-    const envio = deliveryOf(input);
-    if (!envio) { await sendMenu(channel, clientId, buildDeliveryMenu(isGrandeBH(d.cidade))); return s; }
-    d.envio = envio; Store.saveSession(s);
-    if (envio === 'Retirada') { await askObservation(channel, clientId, s); return s; }
-    s.etapa = 'endereco'; Store.saveSession(s); await channel.sendText(clientId, messages.askAddress); return s;
-  }
-  if (s.etapa === 'endereco') { d.endereco = input; Store.saveSession(s); await askObservation(channel, clientId, s); return s; }
   if (s.etapa === 'observacao_pedido_menu') {
     if (norm(input) === 'obs_nao') { d.observacaoPedido = null; Store.saveSession(s); return finish(channel, clientId, s, 'letreiro_coleta_completa'); }
     if (norm(input) === 'obs_sim') { s.etapa = 'observacao_pedido_coleta'; Store.saveSession(s); await channel.sendText(clientId, messages.askObservationWrite); return s; }
