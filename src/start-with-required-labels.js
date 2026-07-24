@@ -81,6 +81,8 @@ require('./core/vpsReadinessPreload');
 require('./core/sellerAliasHandoffPreload');
 // Escuta a inclusão/remoção de etiqueta de vendedor mesmo após o fluxo concluído.
 require('./core/sellerLabelEventsPreload');
+// Qualquer etiqueta fora do grupo operacional ativa handoff permanente.
+require('./core/permanentLabelHandoffPreload');
 
 // As limpezas acontecem antes de o Chrome abrir. Durante a execução há apenas monitoramento.
 const TokenCache = require('./core/tokenCacheMaintenance');
