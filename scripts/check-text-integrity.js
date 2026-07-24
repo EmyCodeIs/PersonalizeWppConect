@@ -73,7 +73,7 @@ function collectRecursively(directory, output = []) {
 }
 
 function trackedTextFiles() {
-  const git = spawnSync('git', ['ls-files', '-z'], {
+  const git = spawnSync('git', ['ls-files', '--cached', '--others', '--exclude-standard', '-z'], {
     cwd: root,
     encoding: 'utf8',
   });
