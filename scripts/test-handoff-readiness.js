@@ -19,8 +19,14 @@ async function run() {
 
   // A regra-base também precisa ser segura sem depender da ordem dos preloads.
   assert.equal(SellerHandoff._test.findSellerLabelMatch([{ name: 'Ana' }]).seller, 'ana');
-  assert.equal(SellerHandoff._test.findSellerLabelMatch([{ name: 'Aninha', hexColor: '#00a4f2' }]), null);
-  assert.equal(SellerHandoff._test.findSellerLabelMatch([{ name: 'Adriano Silva', hexColor: '#8fd0a8' }]), null);
+  assert.equal(
+    SellerHandoff._test.findSellerLabelMatch([{ name: 'Aninha', hexColor: '#00a4f2' }]).reason,
+    'manual_label',
+  );
+  assert.equal(
+    SellerHandoff._test.findSellerLabelMatch([{ name: 'Adriano Silva', hexColor: '#8fd0a8' }]).reason,
+    'manual_label',
+  );
   assert.equal(
     SellerHandoff._test.findSellerLabelMatch([{ name: 'Fornecedor', hexColor: '#feb100' }]).reason,
     'manual_label',
