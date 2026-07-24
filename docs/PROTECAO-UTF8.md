@@ -25,8 +25,8 @@ Essa verificação aceita normalmente:
 Ela reprova:
 
 - arquivo que não possa ser decodificado como UTF-8;
-- caractere substituto `�`;
-- sequências corrompidas como `FranÃ§a`, `Â·`, `â†’` e `ðŸ...`;
+- caractere substituto `U+FFFD`;
+- sequências de mojibake produzidas quando bytes UTF-8 são lidos como Latin-1 ou Windows-1252;
 - caracteres de controle ou direcionamento invisíveis;
 - BOM no meio do arquivo;
 - texto fora da normalização NFC.
@@ -35,6 +35,6 @@ Não adicione exceções para fazer o CI passar. A correção deve acontecer no 
 
 ## Escopo auditado
 
-O verificador usa os arquivos versionados pelo Git. Dados de clientes, tokens, caches e arquivos binários não entram na auditoria.
+O verificador usa os arquivos versionados pelo Git e os novos arquivos ainda não adicionados. Dados de clientes, tokens, caches e arquivos binários não entram na auditoria.
 
 Na ausência do Git, ele percorre o projeto e ignora explicitamente diretórios de execução e ativos binários.
