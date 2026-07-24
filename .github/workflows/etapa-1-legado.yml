@@ -1,0 +1,44 @@
+name: Etapa 1 - Legado da produção
+
+on:
+  push:
+    branches:
+      - agent/etapa-1-legado-b1ef42d
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: etapa-1-legado-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  legacy-contract:
+    name: Contrato e testes atuais (Node 22)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Baixar código
+        uses: actions/checkout@v4
+
+      - name: Preparar Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Instalar dependências bloqueadas
+        run: npm ci --no-audit --no-fund
+
+      - name: Validar sintaxe do sistema atual
+        run: npm run check
+
+      - name: Validar contrato do legado da produção
+        run: node scripts/test-production-legacy-contract.js
+
+      - name: Executar suíte já existente
+        run: npm test
