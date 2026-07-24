@@ -5,6 +5,7 @@ const {
   buildKeepBaseTitle,
   buildKeepBaseDescription,
 } = require('../domain/acrilicoThickness');
+const DecisionLog = require('./decisionLogger');
 
 function wait(ms) {
   return new Promise((resolve) => setTimeout(resolve, Math.max(0, Number(ms || 0))));
@@ -214,24 +215,30 @@ async function trySendWppList(channel, clientId, menu) {
     async () => {
       if (typeof client.sendListMessage !== 'function') return false;
       const pending = registerOutboundList(channel, clientId, menu);
+      DecisionLog.log('ENVIO', 'transporte_iniciado', { chat: chatId, tipo: 'lista', menu: menu.title, registrado_na_outbox: Boolean(pending) });
       try {
         const result = await client.sendListMessage(chatId, payload);
         confirmOutboundList(channel, pending, result);
+        DecisionLog.log('ENVIO', 'confirmado', { chat: chatId, tipo: 'lista', menu: menu.title });
         return true;
       } catch (err) {
         failOutboundList(channel, pending);
+        DecisionLog.log('ERRO', 'falha_no_envio', { chat: chatId, tipo: 'lista', menu: menu.title, motivo: err?.message || err }, 'warn');
         throw err;
       }
     },
     async () => {
       if (typeof client.sendList !== 'function') return false;
       const pending = registerOutboundList(channel, clientId, menu);
+      DecisionLog.log('ENVIO', 'transporte_iniciado', { chat: chatId, tipo: 'lista', menu: menu.title, registrado_na_outbox: Boolean(pending), modo: 'fallback' });
       try {
         const result = await client.sendList(chatId, menu.description, menu.buttonText || 'Escolher', payload.sections, 'Selecione uma opção');
         confirmOutboundList(channel, pending, result);
+        DecisionLog.log('ENVIO', 'confirmado', { chat: chatId, tipo: 'lista', menu: menu.title, modo: 'fallback' });
         return true;
       } catch (err) {
         failOutboundList(channel, pending);
+        DecisionLog.log('ERRO', 'falha_no_envio', { chat: chatId, tipo: 'lista', menu: menu.title, motivo: err?.message || err }, 'warn');
         throw err;
       }
     },
