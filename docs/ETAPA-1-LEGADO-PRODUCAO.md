@@ -156,7 +156,9 @@ npm ci
 npm run verify
 ```
 
-O comando deverá validar sintaxe, fluxo legado e testes atuais de etiquetas, sem iniciar o WhatsApp.
+O comando valida sintaxe, fluxo legado e testes atuais de etiquetas, sem iniciar o WhatsApp.
+
+A mesma validação é executada no GitHub Actions com Node 20 e Node 22. Assim, toda mudança futura precisará preservar o legado nas duas versões antes de seguir para homologação.
 
 ## Próxima etapa
 
