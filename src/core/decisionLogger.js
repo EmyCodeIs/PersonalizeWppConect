@@ -54,11 +54,14 @@ function shortMessageId(value) {
 }
 
 function normalizeContext(input = {}) {
-  return {
-    chat: cleanText(input.chat || input.clientId || '', 80) || undefined,
-    msg: cleanText(input.msg || input.messageId || '', 16) || undefined,
-    etapa: cleanText(input.etapa || input.stage || '', 80) || undefined,
-  };
+  const normalized = {};
+  const chat = cleanText(input.chat || input.clientId || '', 80);
+  const msg = cleanText(input.msg || input.messageId || '', 16);
+  const etapa = cleanText(input.etapa || input.stage || '', 80);
+  if (chat) normalized.chat = chat;
+  if (msg) normalized.msg = msg;
+  if (etapa) normalized.etapa = etapa;
+  return normalized;
 }
 
 function run(input, fn) {
