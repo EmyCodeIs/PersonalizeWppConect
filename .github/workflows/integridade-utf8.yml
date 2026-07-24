@@ -1,0 +1,39 @@
+name: Integridade UTF-8
+
+on:
+  pull_request:
+  push:
+    branches:
+      - agent/protecao-integridade-utf8
+
+permissions:
+  contents: read
+
+concurrency:
+  group: integridade-utf8-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  text-integrity:
+    name: Textos e suíte completa (Node 22)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Baixar código
+        uses: actions/checkout@v4
+
+      - name: Preparar Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Instalar dependências bloqueadas
+        run: npm ci --no-audit --no-fund
+
+      - name: Auditar integridade UTF-8
+        run: npm run check:text
+
+      - name: Executar suíte completa
+        run: npm test
