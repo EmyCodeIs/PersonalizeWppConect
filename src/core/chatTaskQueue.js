@@ -73,6 +73,32 @@ class ChatTaskQueue {
     });
   }
 
+
+  cancel(chatId, reason = 'human_handoff') {
+    const normalizedChatId = String(chatId || '').trim();
+    if (!normalizedChatId) return { cancelled: 0 };
+
+    const cancelled = [];
+    this.queue = this.queue.filter((item) => {
+      if (item.chatId !== normalizedChatId) return true;
+      cancelled.push(item);
+      return false;
+    });
+
+    for (const item of cancelled) {
+      if (item.publicSettled) continue;
+      item.publicSettled = true;
+      const error = new Error(`Tarefa cancelada para o chat ${normalizedChatId}: ${reason}`);
+      error.code = 'QUEUE_CANCELLED';
+      error.chatId = normalizedChatId;
+      error.reason = reason;
+      item.reject(error);
+    }
+
+    if (cancelled.length) this.processNext();
+    return { cancelled: cancelled.length };
+  }
+
   processNext() {
     while (this.runningChats.size < this.maxConcurrentChats) {
       const index = this.queue.findIndex((item) => (

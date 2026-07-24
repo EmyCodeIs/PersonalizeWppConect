@@ -73,6 +73,7 @@ function managedServiceLabelNames() {
     env.serviceLabelLetreiro,
     env.serviceLabelPlotagem,
     env.serviceLabelOutros,
+    env.supportLabelName,
     ...(Array.isArray(env.serviceLabelReplaceGroup) ? env.serviceLabelReplaceGroup : []),
   ]
     .map((item) => normalizeName(item))
@@ -222,6 +223,7 @@ function registerManualTakeover(clientId, payload = {}) {
     seller: payload.seller || null,
     labelName: payload.labelName || null,
     blockedHours: payload.blockedHours || env.humanBlockHours,
+    persistent: payload.persistent !== false,
   });
 }
 
@@ -234,6 +236,7 @@ async function getAutomationBlock(channel, clientId) {
       seller: sellerAssignment.seller,
       labelName: sellerAssignment.labelName,
       blockedHours: env.humanBlockHours,
+      persistent: true,
     });
 
     return {

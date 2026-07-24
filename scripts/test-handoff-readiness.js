@@ -19,9 +19,18 @@ async function run() {
 
   // A regra-base também precisa ser segura sem depender da ordem dos preloads.
   assert.equal(SellerHandoff._test.findSellerLabelMatch([{ name: 'Ana' }]).seller, 'ana');
-  assert.equal(SellerHandoff._test.findSellerLabelMatch([{ name: 'Aninha', hexColor: '#00a4f2' }]), null);
-  assert.equal(SellerHandoff._test.findSellerLabelMatch([{ name: 'Adriano Silva', hexColor: '#8fd0a8' }]), null);
-  assert.equal(SellerHandoff._test.findSellerLabelMatch([{ name: 'Fornecedor', hexColor: '#feb100' }]), null);
+  assert.equal(
+    SellerHandoff._test.findSellerLabelMatch([{ name: 'Aninha', hexColor: '#00a4f2' }]).reason,
+    'manual_label',
+  );
+  assert.equal(
+    SellerHandoff._test.findSellerLabelMatch([{ name: 'Adriano Silva', hexColor: '#8fd0a8' }]).reason,
+    'manual_label',
+  );
+  assert.equal(
+    SellerHandoff._test.findSellerLabelMatch([{ name: 'Fornecedor', hexColor: '#feb100' }]).reason,
+    'manual_label',
+  );
 
   let attachedLabels = [{ id: 'seller-ana', name: 'Ana', hexColor: '#00a4f2' }];
   SellerHandoff._test.inspectChatLabels = async () => ({
@@ -43,10 +52,11 @@ async function run() {
   assert.equal(HumanControl.getBlock(clientId).blocked, true);
 
   attachedLabels = [];
-  const released = await SellerHandoff.getAutomationBlock(channel, clientId);
-  assert.equal(released.blocked, false);
-  assert.equal(released.source, 'seller_label_removed');
-  assert.equal(HumanControl.getBlock(clientId).blocked, false);
+  const retained = await SellerHandoff.getAutomationBlock(channel, clientId);
+  assert.equal(retained.blocked, true);
+  assert.equal(retained.reason, 'seller_label');
+  assert.equal(HumanControl.getBlock(clientId).blocked, true);
+  assert.equal(HumanControl.getBlock(clientId).control.blockedUntil, null);
 
   HumanControl.setBlock(clientId, {
     reason: 'manual_outbound_message',
@@ -85,7 +95,7 @@ async function run() {
   assert.equal(unresolved.conclusiveIdentity, false);
   assert.deepEqual(unresolved.candidates, ['98765432109876@lid']);
 
-  console.log('✅ Handoff verificado: vendedor exato, aliases, liberação segura e atendimento manual.');
+  console.log('✅ Handoff verificado: vendedor exato, aliases, bloqueio permanente e atendimento manual.');
 }
 
 run()

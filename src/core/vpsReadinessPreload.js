@@ -133,6 +133,7 @@ function installExactSellerHandoff() {
         seller: assignment.seller,
         labelName: assignment.labelName,
         blockedHours: env.humanBlockHours,
+        persistent: true,
       });
 
       return {
@@ -146,19 +147,9 @@ function installExactSellerHandoff() {
     }
 
     const current = HumanControl.getBlock(clientId);
-    const reason = String(current?.control?.reason || '');
 
-    // Etiqueta é a fonte de verdade para o responsável. Quando a leitura foi
-    // conclusiva e a etiqueta não está mais no contato, libera o fluxo.
-    if (current?.blocked
-      && reason === 'seller_label'
-      && assignment?.inspectionAvailable
-      && assignment?.chatFound) {
-      HumanControl.clearBlock(clientId);
-      console.log(`[HANDOFF] etiqueta de vendedor removida; automação liberada | cliente=${clientId}`);
-      return { blocked: false, reason: null, source: 'seller_label_removed' };
-    }
-
+    // A etiqueta é somente o evento que ativa o handoff. Sua remoção posterior
+    // nunca libera a automação; apenas uma ação administrativa explícita pode fazê-lo.
     if (current?.blocked) {
       return {
         blocked: true,

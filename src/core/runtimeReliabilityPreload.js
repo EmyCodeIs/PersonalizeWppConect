@@ -359,6 +359,7 @@ function installPersistentHumanHistory() {
       'manual_outbound_message',
       'manual_outbound_history',
       'seller_label',
+      'manual_label',
     ].includes(reason);
     return originalSetBlock(clientId, {
       ...payload,
@@ -371,7 +372,7 @@ function installPersistentHumanHistory() {
     const result = originalGetBlock(clientId);
     const control = result?.control;
     if (result?.blocked
-      && ['manual_outbound_message', 'manual_outbound_history', 'seller_label'].includes(String(control?.reason || ''))
+      && ['manual_outbound_message', 'manual_outbound_history', 'seller_label', 'manual_label'].includes(String(control?.reason || ''))
       && control?.blockedUntil) {
       const migrated = originalSetBlock(clientId, { ...control, persistent: true });
       return { blocked: true, control: migrated };

@@ -72,11 +72,13 @@ async function main() {
         type: 'remove',
       },
     });
-    assert.equal(released.released, true);
+    assert.equal(released.released, false);
+    assert.equal(released.retained, true);
+    assert.equal(released.assigned, true);
     const releasedSession = Store.listSessions().find((item) => item.id === session.id);
-    assert.equal(releasedSession.dados.sellerHandoff.status, 'released');
+    assert.equal(releasedSession.dados.sellerHandoff.status, 'assigned');
 
-    console.log('✅ Evento de etiqueta identifica vendedor mesmo após o pré-atendimento concluído.');
+    console.log('✅ Evento de etiqueta ativa handoff permanente mesmo após o pré-atendimento concluído.');
   } finally {
     SellerHandoff.getAutomationBlock = originalGetAutomationBlock;
   }
